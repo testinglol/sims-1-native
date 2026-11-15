@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <OutputType Condition="'$(RuntimeIdentifier)' == 'win-x64'">WinExe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <AssemblyName>SimsSDL</AssemblyName>
+    <RootNamespace>SimsSDL</RootNamespace>
+    <ApplicationIcon>..\..\dist\sims1-icon.ico</ApplicationIcon>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="NLayer" Version="3.0.1" />
+    <PackageReference Include="StbImageSharp" Version="2.30.16" />
+    <PackageReference Include="StbImageWriteSharp" Version="1.16.7" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SimsEngine\SimsEngine.csproj" />
+    <ProjectReference Include="..\SimsPluginApi\SimsPluginApi.csproj" />
+    <ProjectReference Include="..\SimsSimulation\SimsSimulation.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="SimsEngine.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="Shaders\*.msl;Shaders\*.spv">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <Link>Shaders\%(Filename)%(Extension)</Link>
+    </Content>
+  </ItemGroup>
+</Project>

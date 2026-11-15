@@ -1,0 +1,13 @@
+global using System.Buffers.Binary;
+global using System.Globalization;
+global using System.Numerics;
+global using System.Runtime.CompilerServices;
+global using System.Runtime.InteropServices;
+global using System.Text;
+global using System.Text.Json;
+global using SimsSDL;
+global using SimsSDL.Core;
+global using SimsSDL.Client;
+global using SimsSDL.Interop;
+global using SimsSDL.UI;
+global using static SimsSDL.Interop.Sdl3Native;

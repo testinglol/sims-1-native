@@ -1,0 +1,204 @@
+name: Build & Package Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version string (e.g. 0.1.0)
+        required: false
+        default: '0.1.0'
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  macos-arm64:
+    runs-on: macos-15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 9
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Install SDL3
+        run: brew install sdl3
+
+      - name: Run C# tests
+        run: dotnet test native/SimsEngine.Tests/SimsEngine.Tests.csproj -c Release -p:EnableWindowsTargeting=true -p:NuGetAudit=false --nologo
+
+      - name: Determine release version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "RELEASE_VERSION=${GITHUB_REF_NAME#v}" >> "${GITHUB_ENV}"
+          elif [[ -n "${{ inputs.version }}" ]]; then
+            echo "RELEASE_VERSION=${{ inputs.version }}" >> "${GITHUB_ENV}"
+          else
+            echo "RELEASE_VERSION=0.1.0" >> "${GITHUB_ENV}"
+          fi
+
+      - name: Package macOS arm64 bundle
+        run: ./tools/package_release.command "${RELEASE_VERSION}"
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: The-Sims-Native-macOS-arm64
+          path: dist/The-Sims-Native-macOS-arm64.zip
+          if-no-files-found: error
+
+  windows-x64:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 9
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Download SDL3 runtime zip
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $headers = @{ "User-Agent" = "sims-native-ci" }
+          if ($env:GH_TOKEN) { $headers["Authorization"] = "Bearer $($env:GH_TOKEN)" }
+          $release = Invoke-RestMethod -Uri "https://api.github.com/repos/libsdl-org/SDL/releases/latest" -Headers $headers
+          $asset = $release.assets | Where-Object { $_.name -match '^SDL3-\d+\.\d+\.\d+-win32-x64\.zip$' } | Select-Object -First 1
+          if (-not $asset) {
+            $asset = $release.assets | Where-Object { $_.name -match '^SDL3-devel-.*-VC\.zip$' } | Select-Object -First 1
+          }
+          if (-not $asset) { throw "Could not find SDL3 x64 zip in latest SDL release" }
+          $zipPath = Join-Path $env:RUNNER_TEMP $asset.name
+          $extractDir = Join-Path $env:RUNNER_TEMP "sdl3"
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zipPath -Headers $headers
+          if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
+          Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
+          $sdlNested = Get-ChildItem -Path $extractDir -Directory -Filter "SDL3-*" | Select-Object -First 1
+          $sdlRoot = if ($sdlNested) { $sdlNested.FullName } else { $extractDir }
+          "SDL3_DIR=$sdlRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Determine release version
+        shell: pwsh
+        run: |
+          $version = if ("${{ github.ref }}" -like "refs/tags/v*") {
+            "${{ github.ref_name }}".TrimStart('v')
+          } elseif ("${{ inputs.version }}") {
+            "${{ inputs.version }}"
+          } else {
+            "0.1.0"
+          }
+          "RELEASE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Run C# tests
+        run: dotnet test native/SimsEngine.Tests/SimsEngine.Tests.csproj -c Release -p:EnableWindowsTargeting=true -p:NuGetAudit=false --nologo
+
+      - name: Package Windows x64 bundle
+        shell: pwsh
+        run: pwsh -File tools/package_windows.ps1 -Version "$env:RELEASE_VERSION"
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: The-Sims-Native-Windows-x64
+          path: dist/The-Sims-Native-Windows-x64.zip
+          if-no-files-found: error
+
+  linux-x64:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 9
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Build SDL3 shared library
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config cmake ninja-build curl python3 \
+            libasound2-dev libpulse-dev libaudio-dev libsndio-dev libpipewire-0.3-dev \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev \
+            libxi-dev libxinerama-dev libxss-dev libxtst-dev libxxf86vm-dev \
+            libwayland-dev wayland-protocols libdecor-0-dev libxkbcommon-dev \
+            libdrm-dev libgbm-dev libgl1-mesa-dev libgles2-mesa-dev libegl1-mesa-dev \
+            libdbus-1-dev libibus-1.0-dev libudev-dev libthai-dev libfribidi-dev \
+            libusb-1.0-0-dev liburing-dev
+          tarball_url="$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" https://api.github.com/repos/libsdl-org/SDL/releases/latest \
+            | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(a["browser_download_url"] for a in d["assets"] if a["name"].endswith(".tar.gz") and a["name"].startswith("SDL3-")))')"
+          src_archive="${RUNNER_TEMP}/sdl3.tar.gz"
+          src_extract="${RUNNER_TEMP}/sdl3-src"
+          sdl_install="${RUNNER_TEMP}/sdl3-install"
+          curl -fsSL -o "$src_archive" "$tarball_url"
+          mkdir -p "$src_extract"
+          tar -xzf "$src_archive" -C "$src_extract"
+          sdl_root="$(find "$src_extract" -maxdepth 1 -mindepth 1 -type d | head -n 1)"
+          cmake -S "$sdl_root" -B "${RUNNER_TEMP}/sdl3-build" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DSDL_SHARED=ON \
+            -DSDL_STATIC=OFF \
+            -DSDL_TESTS=OFF \
+            -DSDL_EXAMPLES=OFF \
+            -DSDL_JACK=OFF \
+            -DCMAKE_INSTALL_PREFIX="$sdl_install"
+          cmake --build "${RUNNER_TEMP}/sdl3-build"
+          cmake --install "${RUNNER_TEMP}/sdl3-build"
+          echo "SDL3_DIR=$sdl_install" >> "${GITHUB_ENV}"
+
+      - name: Run C# tests
+        run: dotnet test native/SimsEngine.Tests/SimsEngine.Tests.csproj -c Release -p:EnableWindowsTargeting=true -p:NuGetAudit=false --nologo
+
+      - name: Determine release version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "RELEASE_VERSION=${GITHUB_REF_NAME#v}" >> "${GITHUB_ENV}"
+          elif [[ -n "${{ inputs.version }}" ]]; then
+            echo "RELEASE_VERSION=${{ inputs.version }}" >> "${GITHUB_ENV}"
+          else
+            echo "RELEASE_VERSION=0.1.0" >> "${GITHUB_ENV}"
+          fi
+
+      - name: Package Linux x64 bundle
+        run: chmod +x tools/package_linux.sh && ./tools/package_linux.sh "${RELEASE_VERSION}"
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: The-Sims-Native-Linux-x64
+          path: dist/The-Sims-Native-Linux-x64.zip
+          if-no-files-found: error
+
+  publish-release:
+    needs: [macos-arm64, windows-x64, linux-x64]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            The-Sims-Native-macOS-arm64.zip
+            The-Sims-Native-Windows-x64.zip
+            The-Sims-Native-Linux-x64.zip

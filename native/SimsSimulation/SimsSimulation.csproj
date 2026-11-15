@@ -1,0 +1,70 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="SimsEngine.Tests" />
+    <InternalsVisibleTo Include="SimsSDL" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Keep the runnable native shell explicit; historical experiments stay outside its compile graph. -->
+    <Compile Include="Program.cs" />
+    <Compile Include="AnimationAuthor.cs" />
+    <Compile Include="AutonomyHost.cs" />
+    <Compile Include="AvatarAnimations.cs" />
+    <Compile Include="AvatarCoordinates.cs" />
+    <Compile Include="AvatarSceneGeometry.cs" />
+    <Compile Include="BitmapCodec.cs" />
+    <Compile Include="SimCareerCatalog.cs" />
+    <Compile Include="SceneDepth.cs" />
+    <Compile Include="SimOutfits.cs" />
+    <Compile Include="PluginWorld.cs" />
+    <Compile Include="EntityTransform.cs" />
+    <Compile Include="FamilyBudget.cs" />
+    <Compile Include="FloorArtworkChecks.cs" />
+    <Compile Include="FloorCatalogPage.cs" />
+    <Compile Include="FrontendAudioServer.cs" />
+    <Compile Include="HouseholdAppearance.cs" />
+    <Compile Include="HouseholdAppearancePreview.cs" />
+    <Compile Include="InMemorySessionAssets.cs" />
+    <Compile Include="InstalledFiles.cs" />
+    <Compile Include="LotCamera.cs" />
+    <Compile Include="MenuTextSources.cs" />
+    <Compile Include="NeighborhoodEdits.cs" />
+    <Compile Include="NeighborhoodExport.cs" />
+    <Compile Include="NeighborhoodFamilies.cs" />
+    <Compile Include="Neighborhoods.cs" />
+    <Compile Include="ObjectAuthor.cs" />
+    <Compile Include="ObjectCatalog.cs" />
+    <Compile Include="OutfitAuthor.cs" />
+    <Compile Include="OutfitMesh.cs" />
+    <Compile Include="PanelImages.cs" />
+    <Compile Include="PluginChecks.cs" />
+    <Compile Include="PluginHost.cs" />
+    <Compile Include="ProfileBootstrap.cs" />
+    <Compile Include="RuntimeAdapters.cs" />
+    <Compile Include="SaveCompatibility.cs" />
+    <Compile Include="SceneExporter.cs" />
+    <Compile Include="SceneLighting.cs" />
+    <Compile Include="ServingEntry.cs" />
+    <Compile Include="SimPortrait.cs" />
+    <Compile Include="SimulationServer.cs" />
+    <Compile Include="SpecialBuildCatalogPage.cs" />
+    <Compile Include="SpriteArt.cs" />
+    <Compile Include="TerrainColors.cs" />
+    <Compile Include="TravelFilter.cs" />
+    <Compile Include="TsoInventory.cs" />
+    <Compile Include="WallCatalogPage.cs" />
+    <Compile Include="WorldBootstrap.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="MonoGame.Framework.DesktopGL" Version="3.8.4" />
+    <ProjectReference Include="../SimsPluginApi/SimsPluginApi.csproj" />
+    <ProjectReference Include="../SimsEngine/SimsEngine.csproj" />
+  </ItemGroup>
+</Project>

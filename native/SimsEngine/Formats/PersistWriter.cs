@@ -1,0 +1,224 @@
+using System.Buffers.Binary;
+using System.Text;
+
+namespace SimsEngine.Formats;
+
+/// <summary>Writes the resource stream of <see cref="PersistReader"/> (Sims.exe FUN_00464faf writes it with the same
+/// FUN_00464a5e, FUN_00464973, FUN_00464895 and FUN_00464d2c that read it): the 12-byte header, values, field coding
+/// (FUN_004645e3) and blocks (FUN_00464c0a). A value is coded as one bit for zero, then a two-bit width selector and
+/// the value in that width; the writer picks the smallest width whose signed range holds the value, which is what the
+/// reader's sign extension expects. A string flushes to the next byte and is padded so it ends on an even stream
+/// offset, as FUN_0046494e reads it.</summary>
+public sealed class PersistWriter
+{
+    private static ReadOnlySpan<byte> ByteWidths => [2, 4, 6, 8];
+    private static ReadOnlySpan<byte> Int16Widths => [5, 8, 13, 16];
+    private static ReadOnlySpan<byte> Int32Widths => [6, 11, 21, 32];
+
+    private readonly MemoryStream _output = new();
+    private readonly bool _swap;
+    private readonly int _positionOffset;
+    private bool _coded;
+    private int _bitMask;
+    private byte _bits;
+
+    /// <summary>Size of the header; stored stream offsets count from its end.</summary>
+    public const int HeaderSize = 12;
+
+    private PersistWriter(bool swap, int positionOffset)
+    {
+        _swap = swap;
+        _positionOffset = positionOffset;
+    }
+
+    /// <summary>Starts a stream with the header: the byte-order flag, three unused bytes, the little-endian version and
+    /// the stored type tag.</summary>
+    /// <param name="positionOffset">Added to <see cref="Position"/> when a string decides its even padding, so a stream
+    /// written out of place can reproduce the stored parity.</param>
+    public static PersistWriter Start(bool swap, int version, string tag, int positionOffset = 0)
+    {
+        if (tag.Length != 4) throw new ArgumentException("The stored tag is four characters.", nameof(tag));
+        var writer = new PersistWriter(swap, positionOffset);
+        writer._output.WriteByte(swap ? (byte)1 : (byte)0);
+        writer._output.Write([0, 0, 0]);
+        writer.WriteRawInt32(version, false);
+        writer._output.Write(Encoding.ASCII.GetBytes(tag));
+        return writer;
+    }
+
+    public int Position => (int)_output.Position;
+
+    /// <summary>Writes the coding flag byte and switches the following values to field coding when it is set
+    /// (<see cref="PersistReader.ReadCodingFlag"/>).</summary>
+    public void WriteCodingFlag(bool coded)
+    {
+        WriteRawByte(coded ? (byte)1 : (byte)0);
+        _coded = coded;
+    }
+
+    public bool FieldCoded => _coded;
+
+    /// <summary>One byte. The reader sign-extends a coded field before its byte cast, so a value up to 127 uses the
+    /// smallest width whose signed range holds it and 128 and above use the 8-bit width, whose sign extension casts
+    /// back to the value.</summary>
+    public void Byte(byte value)
+    {
+        if (!_coded)
+        {
+            WriteRawByte(value);
+            return;
+        }
+        if (value == 0)
+        {
+            Bits(0, 1);
+            return;
+        }
+        Bits(1, 1);
+        if (value >= 0x80)
+        {
+            Bits(3, 2);
+            Bits(value, 8);
+            return;
+        }
+        for (var index = 0; index < ByteWidths.Length; index++)
+        {
+            var width = ByteWidths[index];
+            if (value > (1 << (width - 1)) - 1) continue;
+            Bits((uint)index, 2);
+            Bits(value, width);
+            return;
+        }
+    }
+
+    public void Bool(bool value) => Byte(value ? (byte)1 : (byte)0);
+
+    public void Int16(short value)
+    {
+        if (_coded) Field(Int16Widths, value, 16);
+        else WriteRawInt16(value);
+    }
+
+    public void Int16s(ReadOnlySpan<short> values)
+    {
+        foreach (var value in values) Int16(value);
+    }
+
+    public void Int32(int value)
+    {
+        if (_coded) Field(Int32Widths, value, 32);
+        else WriteRawInt32(value, _swap);
+    }
+
+    public void UInt32(uint value) => Int32(unchecked((int)value));
+
+    public void Single(float value) => Int32(BitConverter.SingleToInt32Bits(value));
+
+    public void String(string value)
+    {
+        FlushBits();
+        var bytes = Encoding.Latin1.GetBytes(value);
+        _output.Write(bytes);
+        _output.WriteByte(0);
+        // Sims.exe pads an odd string with 0xA3 (the even-string convention of the resource readers).
+        if (((Position + _positionOffset) & 1) != 0) _output.WriteByte(0xA3);
+    }
+
+    /// <summary>Copies already-encoded bytes (a block from a source that is not re-encoded) after flushing any bits.</summary>
+    public void Raw(ReadOnlySpan<byte> bytes)
+    {
+        FlushBits();
+        _output.Write(bytes);
+    }
+
+    private int _blockStart;
+
+    /// <summary>Starts a block: a u32 offset, swapped but never coded, is patched by <see cref="EndBlock"/> to the
+    /// position where the following block starts (the offset field itself).</summary>
+    public void BeginBlock()
+    {
+        FlushBits();
+        _blockStart = (int)_output.Position;
+        WriteRawInt32(0, _swap);
+    }
+
+    /// <summary>Patches the block's stored offset to the current position, then the next block starts there.</summary>
+    public void EndBlock()
+    {
+        FlushBits();
+        var end = Position - HeaderSize;
+        var at = _blockStart;
+        var bytes = _output.GetBuffer();
+        if (_swap) BinaryPrimitives.WriteInt32BigEndian(bytes.AsSpan(at, 4), end);
+        else BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(at, 4), end);
+    }
+
+    public byte[] ToArray()
+    {
+        FlushBits();
+        return _output.ToArray();
+    }
+
+    /// <summary>Codes one value: a zero bit for zero, otherwise the marker, a two-bit width selector and the value's
+    /// bits in the smallest width whose signed range holds it.</summary>
+    private void Field(ReadOnlySpan<byte> widths, long value, int size)
+    {
+        if (value == 0)
+        {
+            Bits(0, 1);
+            return;
+        }
+        Bits(1, 1);
+        for (var index = 0; index < widths.Length; index++)
+        {
+            var width = widths[index];
+            var minimum = width == 32 ? int.MinValue : -(1L << (width - 1));
+            var maximum = width == 32 ? int.MaxValue : (1L << (width - 1)) - 1;
+            if (value < minimum || value > maximum) continue;
+            Bits((uint)index, 2);
+            var mask = width == 32 ? uint.MaxValue : (1u << width) - 1;
+            Bits((uint)value & mask, width);
+            return;
+        }
+        throw new ArgumentOutOfRangeException(nameof(value), $"{value} does not fit a {size}-bit field.");
+    }
+
+    private void Bits(uint value, int count)
+    {
+        for (var bit = count - 1; bit >= 0; bit--)
+        {
+            if (_bitMask == 0)
+            {
+                _bits = 0;
+                _bitMask = 0x80;
+            }
+            if ((value & (1u << bit)) != 0) _bits |= (byte)_bitMask;
+            _bitMask >>= 1;
+            if (_bitMask == 0) _output.WriteByte(_bits);
+        }
+    }
+
+    private void FlushBits()
+    {
+        if (_bitMask != 0 && _bitMask != 0x80) _output.WriteByte(_bits);
+        _bitMask = 0;
+        _bits = 0;
+    }
+
+    private void WriteRawByte(byte value) => _output.WriteByte(value);
+
+    private void WriteRawInt16(short value)
+    {
+        Span<byte> bytes = stackalloc byte[2];
+        if (_swap) BinaryPrimitives.WriteInt16BigEndian(bytes, value);
+        else BinaryPrimitives.WriteInt16LittleEndian(bytes, value);
+        _output.Write(bytes);
+    }
+
+    private void WriteRawInt32(int value, bool swap)
+    {
+        Span<byte> bytes = stackalloc byte[4];
+        if (swap) BinaryPrimitives.WriteInt32BigEndian(bytes, value);
+        else BinaryPrimitives.WriteInt32LittleEndian(bytes, value);
+        _output.Write(bytes);
+    }
+}

@@ -1,0 +1,27 @@
+#include <metal_stdlib>
+#include <simd/simd.h>
+
+using namespace metal;
+
+struct main0_out
+{
+    float4 color [[color(0)]];
+};
+
+struct main0_in
+{
+    float2 inUV [[user(locn0)]];
+    float4 inTint [[user(locn1), flat]];
+};
+
+fragment main0_out main0(main0_in in [[stage_in]], texture2d<float> art [[texture(0)]], sampler artSmplr [[sampler(0)]])
+{
+    main0_out out = {};
+    float4 sampled = art.sample(artSmplr, in.inUV);
+    if (sampled.w < 0.00999999977648258209228515625)
+    {
+        discard_fragment();
+    }
+    out.color = sampled * in.inTint;
+    return out;
+}

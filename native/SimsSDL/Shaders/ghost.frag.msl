@@ -1,0 +1,44 @@
+#include <metal_stdlib>
+#include <simd/simd.h>
+
+using namespace metal;
+
+struct main0_out
+{
+    float4 color [[color(0)]];
+};
+
+struct main0_in
+{
+    float2 inUV [[user(locn0)]];
+    float4 inDepthInterval [[user(locn2), flat]];
+    float inOpacity [[user(locn3), flat]];
+};
+
+fragment main0_out main0(main0_in in [[stage_in]], texture2d<float> art [[texture(0)]], sampler artSmplr [[sampler(0)]])
+{
+    main0_out out = {};
+    float4 sampled = art.sample(artSmplr, in.inUV);
+    bool _29 = in.inDepthInterval.w < 0.5;
+    bool _37;
+    if (_29)
+    {
+        _37 = sampled.w > 0.0;
+    }
+    else
+    {
+        _37 = _29;
+    }
+    if (_37)
+    {
+        float _41 = sampled.w;
+        float4 _43 = sampled;
+        float3 _46 = _43.xyz / float3(_41);
+        sampled.x = _46.x;
+        sampled.y = _46.y;
+        sampled.z = _46.z;
+        sampled.w = 1.0;
+    }
+    out.color = sampled * in.inOpacity;
+    return out;
+}

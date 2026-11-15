@@ -1,0 +1,319 @@
+#pragma clang diagnostic ignored "-Wmissing-prototypes"
+
+#include <metal_stdlib>
+#include <simd/simd.h>
+
+using namespace metal;
+
+struct main0_out
+{
+    float4 color [[color(0)]];
+};
+
+struct main0_in
+{
+    float2 inUV [[user(locn0)]];
+    float4 inTint [[user(locn1), flat]];
+    float4 inDepthInterval [[user(locn2), flat]];
+    float4 inUVRect [[user(locn4), flat]];
+};
+
+static inline __attribute__((always_inline))
+float4 fetchArtClamped(thread const int2& minTexel, thread const int2& maxTexel, thread const int2& c, texture2d<float> art, sampler artSmplr)
+{
+    return art.read(uint2(clamp(c, minTexel, maxTexel)), 0);
+}
+
+static inline __attribute__((always_inline))
+float semiTap(thread const float& a)
+{
+    return float((a > 0.02999999932944774627685546875) && (a < 0.949999988079071044921875));
+}
+
+static inline __attribute__((always_inline))
+float colorDist(thread const float4& a, thread const float4& b)
+{
+    float3 pa = sqrt(fast::max(a.xyz, float3(0.0)));
+    float3 pb = sqrt(fast::max(b.xyz, float3(0.0)));
+    float3 d = pa - pb;
+    float da = a.w - b.w;
+    return sqrt((dot(d, d) * 0.64999997615814208984375) + ((da * da) * 1.35000002384185791015625));
+}
+
+static inline __attribute__((always_inline))
+bool shouldBevelCorner(thread const float4& K, thread const float4& A, thread const float4& B, thread const float4& O, thread const int2& minTexel, thread const int2& maxTexel, thread const int2& i0, thread const int2& s1Off, thread const int2& s2Off, texture2d<float> art, sampler artSmplr)
+{
+    float4 M = (A + B) * 0.5;
+    float4 param = A;
+    float4 param_1 = B;
+    float dAB = colorDist(param, param_1);
+    float4 param_2 = K;
+    float4 param_3 = A;
+    float dKA = colorDist(param_2, param_3);
+    float4 param_4 = K;
+    float4 param_5 = B;
+    float dKB = colorDist(param_4, param_5);
+    float minDK = fast::min(dKA, dKB);
+    bool _136 = dAB >= 0.2199999988079071044921875;
+    bool _145;
+    if (!_136)
+    {
+        _145 = (dAB * 2.0) >= minDK;
+    }
+    else
+    {
+        _145 = _136;
+    }
+    if (_145 || (minDK <= 0.07999999821186065673828125))
+    {
+        return false;
+    }
+    float4 param_6 = O;
+    float4 param_7 = M;
+    float dOM = colorDist(param_6, param_7);
+    float4 param_8 = K;
+    float4 param_9 = M;
+    float dKM = colorDist(param_8, param_9);
+    if (dOM < (dKM * 0.64999997615814208984375))
+    {
+        return true;
+    }
+    bool _180 = M.w > (K.w + 0.25);
+    bool _189;
+    if (_180)
+    {
+        _189 = O.w < (M.w - 0.25);
+    }
+    else
+    {
+        _189 = _180;
+    }
+    if (_189)
+    {
+        return true;
+    }
+    if (dOM < 0.2199999988079071044921875)
+    {
+        int2 param_10 = minTexel;
+        int2 param_11 = maxTexel;
+        int2 param_12 = i0 + s1Off;
+        float4 S1 = fetchArtClamped(param_10, param_11, param_12, art, artSmplr);
+        int2 param_13 = minTexel;
+        int2 param_14 = maxTexel;
+        int2 param_15 = i0 + s2Off;
+        float4 S2 = fetchArtClamped(param_13, param_14, param_15, art, artSmplr);
+        float4 param_16 = K;
+        float4 param_17 = S1;
+        float4 param_18 = K;
+        float4 param_19 = S2;
+        float dKS = fast::min(colorDist(param_16, param_17), colorDist(param_18, param_19));
+        bool _231 = dKS < 0.23999999463558197021484375;
+        bool _239;
+        if (_231)
+        {
+            _239 = (dKS * 1.7999999523162841796875) < minDK;
+        }
+        else
+        {
+            _239 = _231;
+        }
+        return _239;
+    }
+    return false;
+}
+
+fragment main0_out main0(main0_in in [[stage_in]], texture2d<float> art [[texture(0)]], sampler artSmplr [[sampler(0)]])
+{
+    main0_out out = {};
+    int2 artDims = int2(art.get_width(), art.get_height());
+    float2 texSize = float2(artDims);
+    float2 halfTexel = float2(0.5) / texSize;
+    float2 minUV = in.inUVRect.xy + halfTexel;
+    float2 maxUV = fast::max(minUV, (in.inUVRect.xy + in.inUVRect.zw) - halfTexel);
+    float2 clampedUV = fast::clamp(in.inUV, minUV, maxUV);
+    float2 texel = clampedUV * texSize;
+    float2 fw = fast::max(fwidth(texel), float2(9.9999997473787516355514526367188e-05));
+    if (in.inDepthInterval.z > 0.5)
+    {
+        float2 i = floor(texel + float2(0.5));
+        float2 f = texel - i;
+        float2 sharp = (i + fast::clamp(f / fw, float2(-0.5), float2(0.5))) / texSize;
+        float _324;
+        if (fw.x <= 1.0)
+        {
+            _324 = sharp.x;
+        }
+        else
+        {
+            _324 = in.inUV.x;
+        }
+        float _337;
+        if (fw.y <= 1.0)
+        {
+            _337 = sharp.y;
+        }
+        else
+        {
+            _337 = in.inUV.y;
+        }
+        float2 uv = fast::clamp(float2(_324, _337), minUV, maxUV);
+        out.color = art.sample(artSmplr, uv) * in.inTint;
+        return out;
+    }
+    if (in.inDepthInterval.w < 0.5)
+    {
+        int2 minTexel = clamp(int2(floor(in.inUVRect.xy * texSize)), int2(0), artDims - int2(1));
+        int2 maxTexel = clamp(int2(ceil((in.inUVRect.xy + in.inUVRect.zw) * texSize)) - int2(1), minTexel, artDims - int2(1));
+        int2 nearest = clamp(int2(clampedUV * texSize), minTexel, maxTexel);
+        float4 raw = art.read(uint2(nearest), 0);
+        if (raw.w > 0.0)
+        {
+            float _413 = raw.w;
+            float4 _414 = raw;
+            float3 _417 = _414.xyz / float3(_413);
+            raw.x = _417.x;
+            raw.y = _417.y;
+            raw.z = _417.z;
+            raw.w = 1.0;
+        }
+        out.color = raw * in.inTint;
+        return out;
+    }
+    if (fast::max(fw.x, fw.y) > 1.25)
+    {
+        out.color = art.sample(artSmplr, clampedUV) * in.inTint;
+        return out;
+    }
+    int2 minTexel_1 = clamp(int2(floor(in.inUVRect.xy * texSize)), int2(0), artDims - int2(1));
+    int2 maxTexel_1 = clamp(int2(ceil((in.inUVRect.xy + in.inUVRect.zw) * texSize)) - int2(1), minTexel_1, artDims - int2(1));
+    float2 p = texel - float2(0.5);
+    int2 i0 = int2(floor(p));
+    float2 f_1 = p - float2(i0);
+    int2 param = minTexel_1;
+    int2 param_1 = maxTexel_1;
+    int2 param_2 = i0;
+    float4 c00 = fetchArtClamped(param, param_1, param_2, art, artSmplr);
+    int2 param_3 = minTexel_1;
+    int2 param_4 = maxTexel_1;
+    int2 param_5 = i0 + int2(1, 0);
+    float4 c10 = fetchArtClamped(param_3, param_4, param_5, art, artSmplr);
+    int2 param_6 = minTexel_1;
+    int2 param_7 = maxTexel_1;
+    int2 param_8 = i0 + int2(0, 1);
+    float4 c01 = fetchArtClamped(param_6, param_7, param_8, art, artSmplr);
+    int2 param_9 = minTexel_1;
+    int2 param_10 = maxTexel_1;
+    int2 param_11 = i0 + int2(1);
+    float4 c11 = fetchArtClamped(param_9, param_10, param_11, art, artSmplr);
+    float param_12 = c00.w;
+    float param_13 = c10.w;
+    float param_14 = c01.w;
+    float param_15 = c11.w;
+    float semiX = mix(fast::max(semiTap(param_12), semiTap(param_13)), fast::max(semiTap(param_14), semiTap(param_15)), f_1.y);
+    float param_16 = c00.w;
+    float param_17 = c01.w;
+    float param_18 = c10.w;
+    float param_19 = c11.w;
+    float semiY = mix(fast::max(semiTap(param_16), semiTap(param_17)), fast::max(semiTap(param_18), semiTap(param_19)), f_1.x);
+    float2 baseFw = fast::min(fw, float2(1.0));
+    float2 effFw = float2(mix(baseFw.x, fast::max(baseFw.x, 0.85000002384185791015625), semiX), mix(baseFw.y, fast::max(baseFw.y, 0.85000002384185791015625), semiY));
+    float2 ws = fast::clamp(((f_1 - float2(0.5)) / effFw) + float2(0.5), float2(0.0), float2(1.0));
+    ws = (ws * ws) * (float2(3.0) - (ws * 2.0));
+    float w00 = (1.0 - ws.x) * (1.0 - ws.y);
+    float w10 = ws.x * (1.0 - ws.y);
+    float w01 = (1.0 - ws.x) * ws.y;
+    float w11 = ws.x * ws.y;
+    float aaWidth = fast::clamp(0.5 * fast::max(effFw.x, effFw.y), 0.0599999986588954925537109375, 0.5);
+    if ((f_1.x + f_1.y) < (0.5 + aaWidth))
+    {
+        float4 param_20 = c00;
+        float4 param_21 = c10;
+        float4 param_22 = c01;
+        float4 param_23 = c11;
+        int2 param_24 = minTexel_1;
+        int2 param_25 = maxTexel_1;
+        int2 param_26 = i0;
+        int2 param_27 = int2(-1, 1);
+        int2 param_28 = int2(1, -1);
+        if (shouldBevelCorner(param_20, param_21, param_22, param_23, param_24, param_25, param_26, param_27, param_28, art, artSmplr))
+        {
+            float bevel = 1.0 - smoothstep(0.5 - aaWidth, 0.5 + aaWidth, f_1.x + f_1.y);
+            float cut = fast::max(0.0, w00 - bevel);
+            w00 -= cut;
+            w10 += (0.5 * cut);
+            w01 += (0.5 * cut);
+        }
+    }
+    else
+    {
+        if (((1.0 - f_1.x) + (1.0 - f_1.y)) < (0.5 + aaWidth))
+        {
+            float4 param_29 = c11;
+            float4 param_30 = c10;
+            float4 param_31 = c01;
+            float4 param_32 = c00;
+            int2 param_33 = minTexel_1;
+            int2 param_34 = maxTexel_1;
+            int2 param_35 = i0;
+            int2 param_36 = int2(2, 0);
+            int2 param_37 = int2(0, 2);
+            if (shouldBevelCorner(param_29, param_30, param_31, param_32, param_33, param_34, param_35, param_36, param_37, art, artSmplr))
+            {
+                float bevel_1 = 1.0 - smoothstep(0.5 - aaWidth, 0.5 + aaWidth, (1.0 - f_1.x) + (1.0 - f_1.y));
+                float cut_1 = fast::max(0.0, w11 - bevel_1);
+                w11 -= cut_1;
+                w10 += (0.5 * cut_1);
+                w01 += (0.5 * cut_1);
+            }
+        }
+        else
+        {
+            if (((1.0 - f_1.x) + f_1.y) < (0.5 + aaWidth))
+            {
+                float4 param_38 = c10;
+                float4 param_39 = c00;
+                float4 param_40 = c11;
+                float4 param_41 = c01;
+                int2 param_42 = minTexel_1;
+                int2 param_43 = maxTexel_1;
+                int2 param_44 = i0;
+                int2 param_45 = int2(2, 1);
+                int2 param_46 = int2(0, -1);
+                if (shouldBevelCorner(param_38, param_39, param_40, param_41, param_42, param_43, param_44, param_45, param_46, art, artSmplr))
+                {
+                    float bevel_2 = 1.0 - smoothstep(0.5 - aaWidth, 0.5 + aaWidth, (1.0 - f_1.x) + f_1.y);
+                    float cut_2 = fast::max(0.0, w10 - bevel_2);
+                    w10 -= cut_2;
+                    w00 += (0.5 * cut_2);
+                    w11 += (0.5 * cut_2);
+                }
+            }
+            else
+            {
+                if ((f_1.x + (1.0 - f_1.y)) < (0.5 + aaWidth))
+                {
+                    float4 param_47 = c01;
+                    float4 param_48 = c00;
+                    float4 param_49 = c11;
+                    float4 param_50 = c10;
+                    int2 param_51 = minTexel_1;
+                    int2 param_52 = maxTexel_1;
+                    int2 param_53 = i0;
+                    int2 param_54 = int2(-1, 0);
+                    int2 param_55 = int2(1, 2);
+                    if (shouldBevelCorner(param_47, param_48, param_49, param_50, param_51, param_52, param_53, param_54, param_55, art, artSmplr))
+                    {
+                        float bevel_3 = 1.0 - smoothstep(0.5 - aaWidth, 0.5 + aaWidth, f_1.x + (1.0 - f_1.y));
+                        float cut_3 = fast::max(0.0, w01 - bevel_3);
+                        w01 -= cut_3;
+                        w00 += (0.5 * cut_3);
+                        w11 += (0.5 * cut_3);
+                    }
+                }
+            }
+        }
+    }
+    float4 sampled = (((c00 * w00) + (c10 * w10)) + (c01 * w01)) + (c11 * w11);
+    out.color = sampled * in.inTint;
+    return out;
+}

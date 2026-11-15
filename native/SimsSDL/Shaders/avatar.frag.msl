@@ -1,0 +1,35 @@
+#include <metal_stdlib>
+#include <simd/simd.h>
+
+using namespace metal;
+
+struct main0_out
+{
+    float4 color [[color(0)]];
+};
+
+struct main0_in
+{
+    float2 inUV [[user(locn0)]];
+    float4 inTint [[user(locn1), flat]];
+    float3 inNormal [[user(locn2)]];
+    float inTextureOnly [[user(locn3), flat]];
+};
+
+fragment main0_out main0(main0_in in [[stage_in]], texture2d<float> art [[texture(0)]], sampler artSmplr [[sampler(0)]])
+{
+    main0_out out = {};
+    float4 sampled = art.sample(artSmplr, in.inUV);
+    if (sampled.w < 0.00999999977648258209228515625)
+    {
+        discard_fragment();
+    }
+    if (in.inTextureOnly > 0.5)
+    {
+        out.color = sampled;
+        return out;
+    }
+    float light = 0.64999997615814208984375 + (0.3499999940395355224609375 * fast::max(0.0, dot(fast::normalize(in.inNormal), float3(-0.3244428336620330810546875, 0.811107099056243896484375, -0.4866642653942108154296875))));
+    out.color = float4((sampled.xyz * light) * in.inTint.xyz, sampled.w);
+    return out;
+}

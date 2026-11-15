@@ -1,0 +1,39 @@
+#include <metal_stdlib>
+#include <simd/simd.h>
+
+using namespace metal;
+
+struct main0_out
+{
+    float4 color [[color(0)]];
+};
+
+struct main0_in
+{
+    float4 inDepthInterval [[user(locn2), flat]];
+};
+
+fragment main0_out main0(main0_in in [[stage_in]], texture2d<float> lotColor [[texture(0)]], texture2d<float> depthMap [[texture(1)]], sampler lotColorSmplr [[sampler(0)]], sampler depthMapSmplr [[sampler(1)]], float4 gl_FragCoord [[position]])
+{
+    main0_out out = {};
+    int2 dims = int2(lotColor.get_width(), lotColor.get_height());
+    int2 fragCoord = clamp(int2(gl_FragCoord.xy), int2(0), dims - int2(1));
+    float fragDepth = depthMap.read(uint2(fragCoord), 0).x;
+    if (fragDepth < in.inDepthInterval.x)
+    {
+        discard_fragment();
+    }
+    float block = fast::max(2.0, in.inDepthInterval.y);
+    int2 cell = int2(floor(gl_FragCoord.xy / float2(block)));
+    int2 sampleCoord = clamp(int2((float2(cell) + float2(0.5)) * block), int2(0), dims - int2(1));
+    if (depthMap.read(uint2(sampleCoord), 0).x < in.inDepthInterval.x)
+    {
+        sampleCoord = fragCoord;
+    }
+    float4 sampled = lotColor.read(uint2(sampleCoord), 0);
+    uint h = uint((cell.x * 73856093) ^ (cell.y * 19349663));
+    h = (h ^ (h >> 13u)) * 1274126177u;
+    float dither = (float(h & 15u) - 8.0) / 255.0;
+    out.color = float4(fast::clamp(sampled.xyz + float3(dither), float3(0.0), float3(1.0)), 1.0);
+    return out;
+}

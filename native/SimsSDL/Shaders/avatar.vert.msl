@@ -1,0 +1,70 @@
+#pragma clang diagnostic ignored "-Wmissing-prototypes"
+
+#include <metal_stdlib>
+#include <simd/simd.h>
+
+using namespace metal;
+
+struct Quad
+{
+    float4 rect;
+    float4 canvasPadding;
+    float4 uvRect;
+    float4 depthInterval;
+    float4 tint;
+};
+
+struct AvatarVertex
+{
+    float4 position;
+    float2 uv;
+    float2 padding;
+    float4 normal;
+};
+
+struct AvatarVertex_1
+{
+    float4 position;
+    float2 uv;
+    float2 padding;
+    float4 normal;
+};
+
+struct Vertices
+{
+    AvatarVertex_1 vertices[1];
+};
+
+struct main0_out
+{
+    float2 outUV [[user(locn0)]];
+    float4 outTint [[user(locn1)]];
+    float3 outNormal [[user(locn2)]];
+    float outTextureOnly [[user(locn3)]];
+    float4 gl_Position [[position]];
+};
+
+static inline __attribute__((always_inline))
+float4 canvasPosition(thread const float2& pixel, thread const float& z, constant Quad& quad)
+{
+    float2 canvas = quad.canvasPadding.xy;
+    return float4(((pixel.x / canvas.x) * 2.0) - 1.0, 1.0 - ((pixel.y / canvas.y) * 2.0), z, 1.0);
+}
+
+vertex main0_out main0(constant Quad& quad [[buffer(0)]], const device Vertices& _56 [[buffer(1)]], uint gl_VertexIndex [[vertex_id]])
+{
+    main0_out out = {};
+    AvatarVertex vertex0;
+    vertex0.position = _56.vertices[int(gl_VertexIndex)].position;
+    vertex0.uv = _56.vertices[int(gl_VertexIndex)].uv;
+    vertex0.padding = _56.vertices[int(gl_VertexIndex)].padding;
+    vertex0.normal = _56.vertices[int(gl_VertexIndex)].normal;
+    float2 param = quad.rect.xy + (vertex0.position.xy * quad.rect.zw);
+    float param_1 = vertex0.position.z;
+    out.gl_Position = canvasPosition(param, param_1, quad);
+    out.outUV = vertex0.uv;
+    out.outTint = quad.tint;
+    out.outNormal = vertex0.normal.xyz;
+    out.outTextureOnly = quad.uvRect.x;
+    return out;
+}

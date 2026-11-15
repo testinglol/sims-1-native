@@ -1,0 +1,672 @@
+using System.Buffers.Binary;
+using System.Numerics;
+using System.Security.Cryptography;
+using SimsEngine.Content;
+using SimsEngine.Formats;
+
+namespace SimsSimulation;
+
+internal sealed record ObjectCatalogEntry(ObjectEntry Source, uint Guid, int Categories, int Price,
+    string Name, string Description, int RoomSort = 0, int FunctionSubsort = 0);
+
+/// <summary>
+/// The native protocol's residential catalog projection. Sims.exe's FUN_004fe37e catalog report reads
+/// the OBJD catalog name, FunctionFlags, RoomFlags and lot-type subsorts; it explicitly admits linked group roots
+/// (MasterId nonzero, SubIndex -1), so a native cXMTObject root is catalogable even though its physical children are not.
+/// The House05 chair (25B82D98) confirms
+/// category flag 1, room flags 16, zero FunctionSubsort and price $150 in the installed DiningChairs resource;
+/// zero remains a valid residential entry.
+/// </summary>
+internal static class ObjectCatalog
+{
+    public static bool TryGetEntry(ObjectEntry source, byte language, out ObjectCatalogEntry? item)
+    {
+        var definition = source.Definition;
+        var flags = definition[ObjdField.FunctionFlags];
+        var master = definition[ObjdField.MasterId];
+        var subIndex = definition[ObjdField.SubIndex];
+        var objectClass = LotObjects.ClassOf(definition);
+        var buildMode = definition[ObjdField.RoomSort] == 0 ? definition[ObjdField.BuildModeType] : 0;
+        // Build-mode tools list portals, multi-tile roots, columns, and pool accessories by BuildModeType
+        // (1 door, 2 window, 3 stairs, 4 plants, 5 fireplace, 6 column, 7 pool accessory) when RoomSort is 0; catalog category is BuildModeType + 7 (8 through 14).
+        var buildTool = buildMode is >= 1 and <= 7;
+        if (definition[ObjdField.Disabled] != 0 ||
+            objectClass is not (ObjectClass.Object or ObjectClass.MultiTileObject or ObjectClass.Portal) ||
+            objectClass == ObjectClass.Portal && !buildTool ||
+            (master != 0 && subIndex != ushort.MaxValue) || (master == 0 && subIndex != 0) ||
+            (definition[ObjdField.RoomSort] == 0 && definition[ObjdField.BuildModeType] != 0 && !buildTool) || !buildTool && definition[ObjdField.NumGraphics] == 0 ||
+            !buildTool && (definition[ObjdField.RoomSort] == 0 || (flags & 0xff) == 0))
+        {
+            item = null;
+            return false;
+        }
+
+        item = new ObjectCatalogEntry(source, source.Guid, buildTool ? 1 << (buildMode + 7) : (int)(flags & 0xff),
+            definition[ObjdField.Price], source.CatalogString(0, language) ?? source.Chunk.Label,
+            source.CatalogString(1, language) ?? "", buildTool ? 0 : definition[ObjdField.RoomSort], definition[ObjdField.FunctionSubsort]);
+        return true;
+    }
+
+    public static object[] All(ObjectRegistry registry, byte language)
+    {
+        return registry.ByGuid.Values
+            .Select(entry => TryGetEntry(entry, language, out var item) ? item : null)
+            .Where(item => item is not null)
+            .Cast<ObjectCatalogEntry>()
+            .OrderBy(item => item.Guid)
+            .Select(item =>
+            {
+                var category = BitOperations.TrailingZeroCount((uint)item.Categories);
+                return (object)new
+                {
+                    guid = item.Guid,
+                    name = item.Source.Chunk.Label,
+                    catalogName = item.Name,
+                    price = item.Price,
+                    category,
+                    soldHere = true,
+                };
+            })
+            .ToArray();
+    }
+
+    /// <summary>FUN_005072f5's room mode: button 0 to 7 in Res_CPanel.h order (Living 158, Dining, Bedroom, Study,
+    /// Kitchen, Bathroom, Outside, Misc 165) selects this RoomSort bit. The installed catalog confirms it: bit 1 lists
+    /// coffee makers and toasters, 2 alarm clocks and nightstands, 4 toilets, 8 end tables, 0x10 garden items,
+    /// 0x20 holiday dinners, 0x40 plants and trash cans, 0x80 desks and bookcases.</summary>
+    private static readonly int[] RoomMasks = [0x08, 0x20, 0x02, 0x80, 0x01, 0x04, 0x10, 0x40];
+    // FUN_005072f5 mode 1 translates the eight sub-sort buttons (its second switch, on the field at +0xb4) to these OBJD
+    // FunctionSubsort masks; the first switch, on +0xb0, holds the category masks instead.
+    // The final two are the original Other (0x90) and All (0xff) filters; All also includes objects with no subsort.
+    private static readonly int[] FunctionSubsortMasks = [0x01, 0x02, 0x04, 0x08, 0x20, 0x40, 0x90, 0xff];
+
+    /// <summary><paramref name="room"/> null browses by function (<paramref name="category"/> is the function category).
+    /// Otherwise it is the room button index and <paramref name="category"/> the function category within that room, or -1 for every function.</summary>
+    public static object Page(ObjectRegistry registry, byte language, int category, int offset, int count, string session,
+        int? room = null, int? subsort = null, string? game = null)
+    {
+        if (category is < -1 or > 12 || category == -1 && room is null || room is < 0 or > 7 ||
+            subsort is < 0 or > 7 || subsort is not null && (room is not null || category is < 0 or > 7) ||
+            category > 7 && room is not null ||
+            offset is < 0 or > 1_000_000 || count is < 1 or > 64)
+            throw new ArgumentException("Invalid native residential catalog page");
+        var roomMask = room is { } roomIndex ? RoomMasks[roomIndex] : 0;
+        var subsortMask = subsort is { } subsortIndex ? FunctionSubsortMasks[subsortIndex] : 0;
+        static bool MatchesSubsort(ObjectCatalogEntry item, int mask) =>
+            (item.FunctionSubsort & mask) != 0 || mask == 0xff && item.FunctionSubsort == 0;
+
+        var items = registry.ByGuid.Values
+            .Select(entry => TryGetEntry(entry, language, out var item) ? item : null)
+            .Where(item => item is not null && (room is null
+                ? (item.Categories & (1 << category)) != 0 && (subsort is null || MatchesSubsort(item, subsortMask))
+                : (item.RoomSort & roomMask) != 0 && (category == -1 || (item.Categories & (1 << category)) != 0)))
+            .Cast<ObjectCatalogEntry>()
+            .OrderBy(item => item.Price)
+            // Mac CatalogSortPred compares Product::price first and Product::name on ties.
+            .ThenBy(item => item.Name, StringComparer.Ordinal)
+            .ThenBy(item => item.Guid)
+            .ToArray();
+        // FUN_00505151 enables a sub-sort button only when the room has an item of that function.
+        var functionCounts = room is null ? null : new int[8];
+        var functionSubsortCounts = room is not null || category is < 0 or > 7 ? null : new int[8];
+        if (functionCounts is not null)
+        {
+            var inRoom = registry.ByGuid.Values
+                .Select(entry => TryGetEntry(entry, language, out var item) ? item : null)
+                .Where(item => item is not null && (item.RoomSort & roomMask) != 0);
+            foreach (var item in inRoom)
+                for (var function = 0; function < 8; function++)
+                    if ((item!.Categories & (1 << function)) != 0) functionCounts[function]++;
+        }
+        if (functionSubsortCounts is not null)
+        {
+            var inFunction = registry.ByGuid.Values
+                .Select(entry => TryGetEntry(entry, language, out var item) ? item : null)
+                .Where(item => item is not null && (item.Categories & (1 << category)) != 0)
+                .Cast<ObjectCatalogEntry>()
+                .ToArray();
+            for (var index = 0; index < FunctionSubsortMasks.Length; index++)
+                functionSubsortCounts[index] = inFunction.Count(item => MatchesSubsort(item, FunctionSubsortMasks[index]));
+        }
+        var ratingStrings = LoadCatalogRatingStrings(game, language);
+        var globals = string.IsNullOrEmpty(game) ? null : GlobalLibrary.Open(game);
+        return new
+        {
+            schemaVersion = 1,
+            category,
+            room,
+            functionCounts,
+            subsort,
+            functionSubsortCounts,
+            offset,
+            total = items.Length,
+            items = items.Skip(offset).Take(count).Select(item => new
+            {
+                guid = item.Guid,
+                name = item.Name,
+                description = item.Description,
+                price = item.Price,
+                category = category == -1 ? BitOperations.TrailingZeroCount((uint)item.Categories) : category,
+                icon = CatalogIcon(item.Source, session),
+                preview = CatalogPreview(item.Source, session),
+                ratings = CatalogRatings(item.Source, ratingStrings, language, globals?.ScopeOf(item.Source),
+                    registry.FindAlternativeType(item.Source)),
+            }).ToArray(),
+        };
+    }
+
+    private static IReadOnlyList<string>? LoadCatalogRatingStrings(string? game, byte language)
+    {
+        if (string.IsNullOrEmpty(game)) return null;
+        foreach (var folder in new[] { Path.Combine(game, "GameData"), game })
+        {
+            if (folder is null || !Directory.Exists(folder)) continue;
+            var path = Directory.EnumerateFiles(folder).FirstOrDefault(file =>
+                string.Equals(Path.GetFileName(file), "UIText.iff", StringComparison.OrdinalIgnoreCase));
+            if (path is null) continue;
+            try
+            {
+                var iff = IffFile.Open(path);
+                var chunk = iff.Find(ResourceType.Str, 0xa0);
+                if (chunk is not null) return StringTable.Read(iff, chunk).ForLanguage(language);
+            }
+            catch (Exception error) when (error is IOException or ResourceFormatException) { }
+        }
+        return null;
+    }
+
+    /// <summary>FUN_005084ca / FUN_00457ba2 / FUN_004578c8..FUN_00457b46: builds the catalog rating lines from
+    /// UIText.iff STR# 160 (0xa0) for OBJD words 0x52..0x58 (Hunger..Room), word 0x59 (Skill bits 0..6), and TTAB flags.</summary>
+    internal static string[] CatalogRatings(ObjectEntry item, IReadOnlyList<string>? strings, byte language = 1,
+        BehaviorScope? scope = null, ObjectEntry? masterFallback = null)
+    {
+        if (strings is null || strings.Count < 14) return [];
+        var fields = item.Definition.Fields;
+        var lines = new List<string>();
+        for (var i = 0; i < 7; i++)
+        {
+            var wordIndex = 0x52 + i;
+            var rating = wordIndex < fields.Count ? unchecked((short)fields[wordIndex]) : (short)0;
+            if (rating != 0 && i < strings.Count && strings[i].Length > 0)
+                lines.Add(strings[i].Replace("%d", rating.ToString(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal));
+        }
+        var skillFlags = 0x59 < fields.Count ? (fields[0x59] & 0xff) : 0;
+        for (var bit = 0; bit < 7; bit++)
+        {
+            var stringIndex = 7 + bit;
+            if ((skillFlags & (1 << bit)) != 0 && stringIndex < strings.Count && strings[stringIndex].Length > 0)
+                lines.Add(strings[stringIndex]);
+        }
+        try
+        {
+            if (!item.HasNoMasterInteractionTable &&
+                item.FindInteractionTable(scope, language, masterFallback) is { } table)
+            {
+                var nonDebug = table.Interactions.Where(entry => (entry.Flags & 0x80) == 0).ToArray();
+                if (nonDebug.Length > 0 && strings.Count >= 20)
+                {
+                    // FUN_005084ca / FUN_005081d5 (0x004751a6..0x00475215, 0x004761a1..0x00476210):
+                    // STR# 160 0-based [14]=adults (0xf), [15]=kids (0x10), [16]=Group Activity (0x11),
+                    // [17]=pets (0x12, FUN_00457a80), [18]=dogs (0x13, FUN_004579a2), [19]=cats (0x14, FUN_00457a11).
+                    if (nonDebug.All(e => (e.Flags & 0x10) != 0 && (e.Flags & 0x200) == 0 && (e.Flags & 0x400) == 0))
+                        lines.Add(strings[14]);
+                    else if (nonDebug.All(e => (e.Flags & 0x40) != 0 && (e.Flags & 0x200) == 0 && (e.Flags & 0x400) == 0))
+                        lines.Add(strings[15]);
+                    else if (nonDebug.All(e => (e.Flags & 0x40) != 0 && (e.Flags & 0x10) != 0 && (e.Flags & 0x200) == 0))
+                        lines.Add(strings[18]);
+                    else if (nonDebug.All(e => (e.Flags & 0x40) != 0 && (e.Flags & 0x10) != 0 && (e.Flags & 0x400) == 0))
+                        lines.Add(strings[19]);
+                    else if (nonDebug.All(e => (e.Flags & 0x40) != 0 && (e.Flags & 0x10) != 0))
+                        lines.Add(strings[17]);
+                }
+                if (strings.Count > 16 && nonDebug.Any(e => e.JoiningIndex >= 0 && table.Interactions.Any(c => c.TtaIndex == e.JoiningIndex)))
+                    lines.Add(strings[16]);
+            }
+        }
+        catch (Exception error) when (error is NotSupportedException or ResourceFormatException) { }
+        return lines.Where(line => line.Length > 0).ToArray();
+    }
+
+    /// <summary>Sims.exe's catalog report resolves the item's CatalogStringsID from its OBJD and the original object
+    /// package stores that catalog bitmap as BMP_ with the same ID. Export the installed bitmap into the native
+    /// session; the SDL catalog already consumes this optional protocol image and applies the game's magenta key.</summary>
+    internal static object? CatalogIcon(ObjectEntry item, string session)
+    {
+        var masterDef = ResolveMasterDefinition(item.File, item.Definition);
+        var masterCatalogId = (ushort)masterDef[ObjdField.CatalogStringsId];
+        var itemCatalogId = (ushort)item.Definition[ObjdField.CatalogStringsId];
+        var candidates = new List<ushort>(3);
+        if (masterCatalogId != 0) candidates.Add(masterCatalogId);
+        if (itemCatalogId != 0 && itemCatalogId != masterCatalogId) candidates.Add(itemCatalogId);
+        if (candidates.Count == 0) candidates.Add(2000);
+        foreach (var candidateId in candidates)
+        {
+            var bytes = item.File.Find(ResourceType.Parse("BMP_"), candidateId)?.Data;
+            if (bytes is { Length: >= 54 and <= 4 * 1024 * 1024 } && bytes.Value.Span[0] == (byte)'B' && bytes.Value.Span[1] == (byte)'M')
+            {
+                var data = bytes.Value.Span;
+                var width = BinaryPrimitives.ReadInt32LittleEndian(data[18..]);
+                var height = Math.Abs((long)BinaryPrimitives.ReadInt32LittleEndian(data[22..]));
+                if (width is > 0 and <= 512 && height is > 0 and <= 512)
+                    return StoreImage(data, width == height * 2 ? 2 : 1, session);
+            }
+        }
+        var catalogBmps = item.File.OfType(ResourceType.Parse("BMP_"))
+            .Where(chunk => chunk.Id is >= 2000 and < 3000)
+            .ToArray();
+        if (catalogBmps.Length == 1)
+        {
+            var rootObjds = item.File.OfType(ResourceType.Objd)
+                .Select(chunk => { try { return Objd.Read(item.File, chunk); } catch (ResourceFormatException) { return null; } })
+                .Count(def => def is not null && ((def[ObjdField.MasterId] == 0 && def[ObjdField.SubIndex] == 0) ||
+                    (def[ObjdField.MasterId] != 0 && def[ObjdField.SubIndex] == ushort.MaxValue)));
+            if (rootObjds <= 1 && catalogBmps[0].Data is { Length: >= 54 and <= 4 * 1024 * 1024 } singleBytes &&
+                singleBytes.Span[0] == (byte)'B' && singleBytes.Span[1] == (byte)'M')
+            {
+                var data = singleBytes.Span;
+                var width = BinaryPrimitives.ReadInt32LittleEndian(data[18..]);
+                var height = Math.Abs((long)BinaryPrimitives.ReadInt32LittleEndian(data[22..]));
+                if (width is > 0 and <= 512 && height is > 0 and <= 512)
+                    return StoreImage(data, width == height * 2 ? 2 : 1, session);
+            }
+        }
+        var rendered = RenderedCatalogIcon(item);
+        return rendered is null ? null : StoreImage(rendered, 2, session);
+    }
+
+    private static Objd ResolveMasterDefinition(IffFile file, Objd definition)
+    {
+        var master = definition[ObjdField.MasterId];
+        if (master != 0 && definition[ObjdField.SubIndex] != ushort.MaxValue)
+        {
+            foreach (var chunk in file.OfType(ResourceType.Objd))
+            {
+                try
+                {
+                    var candidate = Objd.Read(file, chunk);
+                    if (candidate[ObjdField.MasterId] == master && candidate[ObjdField.SubIndex] == ushort.MaxValue)
+                        return candidate;
+                }
+                catch (ResourceFormatException) { }
+            }
+        }
+        return definition;
+    }
+
+    /// <summary>FUN_005084ca / FUN_004cbd1c / FUN_0043856d: renders the catalog popup's 168x127 preview box image
+    /// by choosing the largest zoom (3, 2, or 1) whose DGRP bounds fit inside the 160x119 inner box.</summary>
+    internal static object? CatalogPreview(ObjectEntry item, string session)
+    {
+        var rendered = RenderedPreview(item);
+        return rendered is null ? CatalogIcon(item, session) : StoreImage(rendered, 1, session);
+    }
+
+    /// <summary>
+    /// Product::GenerateSpeechIcons calls RenderSpeechShot when its BMP_ cache and the two standard UI backgrounds
+    /// are available. The source screenshot selects the same signed OBJD thumbnail graphic and front-direction + 4
+    /// used by RenderedIcon. This partial fallback fits those DGRP layers over the source's white speech background
+    /// at the medium buffer size consumed by DrawSpriteSlot. It does not reproduce DrawIconic's XViewer-derived
+    /// RenderParam, viewport-based scale selection, or DoIconic render, and it does not modify the object package.
+    /// </summary>
+    internal static (int Width, int Height, byte[] Rgba)? GenerateProductSpeechIcon(ObjectEntry item, int size = 16)
+    {
+        if (item.Definition[ObjdField.Type] != 1 || size is < 1 or > 128) return null;
+        var bitmap = RenderedIcon(item);
+        if (bitmap is null) return null;
+        try
+        {
+            var (width, height, rgba) = BitmapCodec.Read(bitmap);
+            return FitSpeechImage(width, height, rgba, size);
+        }
+        catch (InvalidDataException)
+        {
+            return null;
+        }
+    }
+
+    internal static (int Width, int Height, byte[] Rgba) FitSpeechImage(int width, int height, byte[] rgba, int size)
+    {
+        if (width <= 0 || height <= 0 || size is < 1 or > 128 || rgba.Length != checked(width * height * 4))
+            throw new ArgumentException("Invalid speech image dimensions or pixels");
+
+        // SquareOffAndShrink expands the shorter side of the DrawIconic crop before scaling it to the square
+        // speech buffer, and 0049bafe.c:106 blits speech icons with color-key transparency so padding and source
+        // magenta/transparent pixels stay alpha == 0 instead of an opaque white square.
+        var scale = Math.Min(size / (float)width, size / (float)height);
+        var fittedWidth = Math.Clamp((int)MathF.Round(width * scale), 1, size);
+        var fittedHeight = Math.Clamp((int)MathF.Round(height * scale), 1, size);
+        var left = (size - fittedWidth) / 2;
+        var top = (size - fittedHeight) / 2;
+        var output = new byte[size * size * 4];
+
+        for (var y = 0; y < fittedHeight; y++)
+        for (var x = 0; x < fittedWidth; x++)
+        {
+            var sourceX = (x + 0.5f) * width / fittedWidth - 0.5f;
+            var sourceY = (y + 0.5f) * height / fittedHeight - 0.5f;
+            var x0 = Math.Clamp((int)MathF.Floor(sourceX), 0, width - 1);
+            var y0 = Math.Clamp((int)MathF.Floor(sourceY), 0, height - 1);
+            var x1 = Math.Min(x0 + 1, width - 1);
+            var y1 = Math.Min(y0 + 1, height - 1);
+            var fx = Math.Clamp(sourceX - MathF.Floor(sourceX), 0, 1);
+            var fy = Math.Clamp(sourceY - MathF.Floor(sourceY), 0, 1);
+            static (float Pr, float Pg, float Pb, float A) Read(byte[] pixels, int at)
+            {
+                // Native catalog BMPs mark transparent DrawIconic pixels with the game's magenta key or alpha == 0.
+                var alphaByte = pixels[at + 3];
+                if (alphaByte == 0 || (pixels[at] == 255 && pixels[at + 1] == 0 && pixels[at + 2] == 255))
+                    return (0f, 0f, 0f, 0f);
+                var alpha = alphaByte / 255f;
+                return (pixels[at] * alpha, pixels[at + 1] * alpha, pixels[at + 2] * alpha, alphaByte);
+            }
+            var a = Read(rgba, (y0 * width + x0) * 4);
+            var b = Read(rgba, (y0 * width + x1) * 4);
+            var c = Read(rgba, (y1 * width + x0) * 4);
+            var d = Read(rgba, (y1 * width + x1) * 4);
+            static float Lerp2(float p, float q, float r, float s, float fx, float fy) =>
+                (p + (q - p) * fx) * (1 - fy) + (r + (s - r) * fx) * fy;
+            var blendedA = Lerp2(a.A, b.A, c.A, d.A, fx, fy);
+            var outA = Math.Clamp((int)MathF.Round(blendedA), 0, 255);
+            if (outA <= 0) continue;
+            var alphaNorm = blendedA / 255f;
+            var target = ((top + y) * size + left + x) * 4;
+            output[target] = (byte)Math.Clamp((int)MathF.Round(Lerp2(a.Pr, b.Pr, c.Pr, d.Pr, fx, fy) / alphaNorm), 0, 255);
+            output[target + 1] = (byte)Math.Clamp((int)MathF.Round(Lerp2(a.Pg, b.Pg, c.Pg, d.Pg, fx, fy) / alphaNorm), 0, 255);
+            output[target + 2] = (byte)Math.Clamp((int)MathF.Round(Lerp2(a.Pb, b.Pb, c.Pb, d.Pb, fx, fy) / alphaNorm), 0, 255);
+            output[target + 3] = (byte)outA;
+        }
+        return (size, size, output);
+    }
+
+    private sealed record IconLayer(int X, int Y, int Width, int Height, bool Flip, float Order, int Index, byte[] Rgba);
+
+    /// <summary>EA's FUN_0043856d draws query art by rendering a DGRP object. Mac RenderSpeechShot selects it through
+    /// ObjSelector::GetThumbnailGraphicIndex, whose signed OBJD field indexes the selector's BaseGraphic run.</summary>
+    internal static byte[]? RenderedIcon(ObjectEntry item) => RenderObjectFitting(item, 37, 37, fixedZoom: 3);
+
+    /// <summary>FUN_004cbf52 / FUN_004e58e7 / FUN_004e5c2f: renders a 74x37 two-frame catalog thumbnail (normal + highlighted)
+    /// at zoom 3 and box-filters it into the 37x37 inner area of ThumbTemplate.bmp.</summary>
+    private static byte[]? RenderedCatalogIcon(ObjectEntry item) => RenderObjectFitting(item, 37, 37, fixedZoom: 3, twoStateCatalogSheet: true);
+
+    /// <summary>FUN_0043856d: tries zoom 3, 2, 1 and chooses the largest zoom whose rendered bounds fit inside the
+    /// 160x119 inner preview box (width <= 154 and height <= 113, i.e. 3px margin on each side).</summary>
+    private static byte[]? RenderedPreview(ObjectEntry item) => RenderObjectFitting(item, 160, 119, fixedZoom: null);
+
+    /// <summary>004360c1.c:230-285 + FUN_004cbd1c: renders an object preview fitting inside the 120x120 dialog icon box.</summary>
+    internal static byte[]? RenderedDialogPreview(ObjectEntry item) => RenderObjectFitting(item, 118, 118, fixedZoom: null);
+
+    private static byte[]? RenderObjectFitting(ObjectEntry item, int maxWidth, int maxHeight, int? fixedZoom, bool twoStateCatalogSheet = false)
+    {
+        var masterDef = ResolveMasterDefinition(item.File, item.Definition);
+        var directionIndex = masterDef.ThumbnailDirectionIndex;
+        var masterGraphicIndex = masterDef.ThumbnailGraphicIndex;
+        var parts = new List<(Objd Def, int Rx, int Ry)>();
+        var master = masterDef[ObjdField.MasterId];
+        if (master != 0)
+        {
+            // FUN_00438c61 / FUN_004318eb: gather all physical sub-object OBJD chunks with the same MasterId in this IFF
+            // and rotate their signed-high-byte / unsigned-low-byte tile coordinates by directionIndex.
+            foreach (var chunk in item.File.OfType(ResourceType.Objd))
+            {
+                Objd subDef;
+                try { subDef = Objd.Read(item.File, chunk); }
+                catch (ResourceFormatException) { continue; }
+                var sub = subDef[ObjdField.SubIndex];
+                if (subDef[ObjdField.MasterId] != master || sub == ushort.MaxValue) continue;
+                int subX = unchecked((short)sub) >> 8;
+                int subY = sub & 0xff;
+                var (rx, ry) = (directionIndex & 7) switch
+                {
+                    0 => (subX, subY),
+                    2 => (-subY, subX),
+                    4 => (-subX, -subY),
+                    6 => (subY, -subX),
+                    _ => (subX, subY),
+                };
+                parts.Add((subDef, rx, ry));
+            }
+            parts.Sort((a, b) => (a.Rx + a.Ry).CompareTo(b.Rx + b.Ry));
+        }
+        if (parts.Count == 0)
+        {
+            parts.Add((masterDef, 0, 0));
+        }
+
+        (int Width, int Height, byte[] Canvas)? chosen = null;
+        if (fixedZoom is { } z)
+        {
+            chosen = RenderObjectZoom(item.File, parts, directionIndex, masterGraphicIndex, z);
+        }
+        if (chosen is null)
+        {
+            for (var zoom = 3; zoom >= 1; zoom--)
+            {
+                var candidate = RenderObjectZoom(item.File, parts, directionIndex, masterGraphicIndex, zoom);
+                if (candidate is null) continue;
+                chosen = candidate;
+                if ((maxWidth - candidate.Value.Width) / 2 > 2 && (maxHeight - candidate.Value.Height) / 2 > 2) break;
+            }
+        }
+        if (chosen is not { } result) return null;
+        var (widthOut, heightOut, canvas) = result;
+        var scale = Math.Min(1f, Math.Min(maxWidth / (float)widthOut, maxHeight / (float)heightOut));
+        var outWidth = Math.Max(1, (int)Math.Round(widthOut * scale));
+        var outHeight = Math.Max(1, (int)Math.Round(heightOut * scale));
+        if (twoStateCatalogSheet)
+        {
+            var padX = (maxWidth - outWidth) / 2;
+            var padY = (maxHeight - outHeight) / 2;
+            return WriteIconBitmap(maxWidth * 2, maxHeight, (x, y) =>
+            {
+                var highlighted = x >= maxWidth;
+                var localX = (highlighted ? x - maxWidth : x) - padX;
+                var localY = y - padY;
+                if (localX < 0 || localX >= outWidth || localY < 0 || localY >= outHeight)
+                    return ((byte)255, (byte)0, (byte)255, (byte)255);
+                var bg = highlighted ? ((byte)152, (byte)196, (byte)208) : ((byte)104, (byte)164, (byte)184);
+                return DownsampleBlended(canvas, widthOut, heightOut,
+                    localX / (float)outWidth, localY / (float)outHeight, 1f / outWidth, 1f / outHeight, bg);
+            });
+        }
+        return WriteIconBitmap(outWidth, outHeight, (x, y) => Downsample(canvas, widthOut, heightOut,
+            x / (float)outWidth, y / (float)outHeight, 1f / outWidth, 1f / outHeight));
+    }
+
+    private static (int Width, int Height, byte[] Canvas)? RenderObjectZoom(
+        IffFile file, IReadOnlyList<(Objd Def, int Rx, int Ry)> parts, int directionIndex, short masterGraphicIndex, int zoom)
+    {
+        var thumbnailDirectionMask = 1 << directionIndex;
+        var layers = new List<IconLayer>();
+        var tileHalfW = 8 << zoom;
+        var tileHalfH = 4 << zoom;
+        var layerSequence = 0;
+
+        foreach (var (def, rx, ry) in parts)
+        {
+            // FUN_004e58e7 (004e58e7.c:67) & FUN_00438834 (00438834.c:88-90): ThumbnailGraphicIndex comes from the
+            // master OBJD, and if out of range for a tile's NumGraphics it resets to 0 instead of skipping the tile.
+            int graphicIndex = masterGraphicIndex != 0 ? masterGraphicIndex : def.ThumbnailGraphicIndex;
+            var graphicCount = def[ObjdField.NumGraphics];
+            if (graphicIndex < 0 || graphicIndex >= graphicCount) graphicIndex = 0;
+            IffChunk? groupChunk = null;
+            if (graphicCount > 0)
+            {
+                var groupId = def[ObjdField.BaseGraphic] + graphicIndex;
+                if (groupId is >= 0 and <= ushort.MaxValue)
+                    groupChunk = file.Find(ResourceType.Dgrp, (ushort)groupId);
+                if (groupChunk is null && graphicIndex != 0)
+                    groupChunk = file.Find(ResourceType.Dgrp, def[ObjdField.BaseGraphic]);
+            }
+            else if (parts.Count == 1)
+            {
+                var baseId = def[ObjdField.BaseGraphic] > 0 ? (ushort)def[ObjdField.BaseGraphic] : (ushort)100;
+                groupChunk = file.Find(ResourceType.Dgrp, baseId) ?? file.Find(ResourceType.Dgrp, 100) ?? file.Find(ResourceType.Dgrp, 200);
+            }
+            if (groupChunk is null) continue;
+            DrawGroup group;
+            try { group = DrawGroup.Read(file, groupChunk); }
+            catch (ResourceFormatException) { continue; }
+            var image = group.Images.FirstOrDefault(candidate => (candidate.Direction & thumbnailDirectionMask) != 0 && candidate.Zoom == zoom)
+                ?? group.Images.FirstOrDefault(candidate => candidate.Zoom == zoom);
+            if (image is null) continue;
+
+            var tilePixelX = (rx - ry) * tileHalfW;
+            var tilePixelY = (rx + ry) * tileHalfH;
+            for (var index = 0; index < image.Sprites.Count; index++)
+            {
+                var sprite = image.Sprites[index];
+                int width, height;
+                byte[] rgba;
+                int paletteId;
+                int boundsX = 0;
+                bool flip = (sprite.Flags & 1) != 0;
+                try
+                {
+                    if (file.Find(ResourceType.Spr2, (ushort)sprite.SpriteId) is { } depthChunk)
+                    {
+                        var art = DepthSprite.Read(file, depthChunk);
+                        if ((uint)sprite.Frame >= art.Frames.Count) continue;
+                        var frame = art.Frames[sprite.Frame];
+                        width = frame.Width; height = frame.Height; paletteId = art.PaletteId;
+                        rgba = Colorize(file, paletteId, frame.Width, frame.Height, pixel =>
+                        {
+                            var alpha = frame.Alpha[pixel];
+                            return alpha == 0 ? (byte)0 : (byte)Math.Clamp((alpha * 255 + 15) / 31, 0, 255);
+                        }, pixel => frame.Indices[pixel]);
+                    }
+                    else if (file.Find(ResourceType.Spr1, (ushort)sprite.SpriteId) is { } legacyChunk)
+                    {
+                        var art = Sprite.Read(file, legacyChunk);
+                        if ((uint)sprite.Frame >= art.Frames.Count) continue;
+                        var frame = art.Frames[sprite.Frame];
+                        width = frame.Width; height = frame.Height; boundsX = frame.BoundsTop; paletteId = art.PaletteId;
+                        rgba = Colorize(file, paletteId, width, height, pixel => frame.Opaque[pixel] ? (byte)255 : (byte)0,
+                            pixel => frame.Indices[pixel]);
+                    }
+                    else continue;
+                }
+                catch (ResourceFormatException) { continue; }
+                if (width is < 1 or > 2048 || height is < 1 or > 2048 || rgba.Length != width * height * 4) continue;
+                var x = -sprite.Offset2 / 16f;
+                var y = -sprite.Offset3 / 16f;
+                // FUN_00438834 (00438834.c:146-153) & FUN_004c8ec9 / FUN_004c1bfd: SPR2 frames blit at
+                // (tilePixelX + sprite.X, tilePixelY + sprite.Y - height - (int)(sprite.Offset1 * (1 << (zoom + 1))))
+                // without adding SPR2 frame.X/frame.Y (which are world-space depth/anchor values).
+                var left = tilePixelX + sprite.X + boundsX;
+                var top = tilePixelY + sprite.Y - height - (sprite.Offset1 != 0f ? (int)(sprite.Offset1 * (1 << (zoom + 1))) : 0);
+                layers.Add(new IconLayer(left, top, width, height, flip, (rx + ry) * 16f + x + y, layerSequence++, rgba));
+            }
+        }
+        if (layers.Count == 0) return null;
+        var minX = layers.Min(layer => layer.X); var minY = layers.Min(layer => layer.Y);
+        var widthOut = layers.Max(layer => layer.X + layer.Width) - minX;
+        var heightOut = layers.Max(layer => layer.Y + layer.Height) - minY;
+        if (widthOut is < 1 or > 4096 || heightOut is < 1 or > 4096 || (long)widthOut * heightOut > 8_000_000) return null;
+        var canvas = new byte[widthOut * heightOut * 4];
+        foreach (var layer in layers.OrderBy(layer => layer.Order).ThenBy(layer => layer.Index))
+        for (var sy = 0; sy < layer.Height; sy++)
+        for (var sx = 0; sx < layer.Width; sx++)
+        {
+            var source = (sy * layer.Width + (layer.Flip ? layer.Width - 1 - sx : sx)) * 4;
+            var alpha = layer.Rgba[source + 3]; if (alpha == 0) continue;
+            var target = ((layer.Y - minY + sy) * widthOut + layer.X - minX + sx) * 4;
+            if (alpha == 255) layer.Rgba.AsSpan(source, 4).CopyTo(canvas.AsSpan(target, 4));
+            else
+            {
+                var oldAlpha = canvas[target + 3] / 255f;
+                var nextAlpha = alpha / 255f;
+                var outputAlpha = nextAlpha + oldAlpha * (1 - nextAlpha);
+                for (var channel = 0; channel < 3; channel++)
+                    canvas[target + channel] = (byte)((layer.Rgba[source + channel] * nextAlpha + canvas[target + channel] * oldAlpha * (1 - nextAlpha)) / outputAlpha);
+                canvas[target + 3] = (byte)(outputAlpha * 255);
+            }
+        }
+        return (widthOut, heightOut, canvas);
+    }
+
+    private static byte[] Colorize(IffFile file, int paletteId, int width, int height,
+        Func<int, byte> alpha, Func<int, byte> colorIndex)
+    {
+        var id = paletteId is > 0 and < 1000 ? (ushort)paletteId : (ushort)0;
+        var paletteChunk = file.Find(ResourceType.Palt, id) ?? file.OfType(ResourceType.Palt).FirstOrDefault();
+        if (paletteChunk is null) return [];
+        var colors = Palette.Read(file, paletteChunk).Colors;
+        var output = new byte[width * height * 4];
+        for (var pixel = 0; pixel < width * height; pixel++)
+        {
+            var a = alpha(pixel); var index = colorIndex(pixel);
+            if (a == 0 || index >= colors.Count) continue;
+            var color = colors[index]; var at = pixel * 4;
+            output[at] = color.Red; output[at + 1] = color.Green; output[at + 2] = color.Blue; output[at + 3] = a;
+        }
+        return output;
+    }
+
+    private static (byte Red, byte Green, byte Blue, byte Alpha) Downsample(byte[] canvas, int width, int height,
+        float u, float v, float du, float dv)
+    {
+        var x0 = (int)(u * width); var y0 = (int)(v * height);
+        var x1 = Math.Max(x0 + 1, (int)((u + du) * width)); var y1 = Math.Max(y0 + 1, (int)((v + dv) * height));
+        int r = 0, g = 0, b = 0, opaque = 0, total = 0;
+        for (var y = y0; y < Math.Min(y1, height); y++)
+        for (var x = x0; x < Math.Min(x1, width); x++)
+        {
+            total++; var at = (y * width + x) * 4; if (canvas[at + 3] == 0) continue;
+            r += canvas[at]; g += canvas[at + 1]; b += canvas[at + 2]; opaque++;
+        }
+        return opaque * 2 < total || opaque == 0 ? ((byte)255, (byte)0, (byte)255, (byte)255) : ((byte)(r / opaque), (byte)(g / opaque), (byte)(b / opaque), (byte)255);
+    }
+
+    private static (byte Red, byte Green, byte Blue, byte Alpha) DownsampleBlended(byte[] canvas, int width, int height,
+        float u, float v, float du, float dv, (byte R, byte G, byte B) bg)
+    {
+        var x0 = (int)(u * width); var y0 = (int)(v * height);
+        var x1 = Math.Max(x0 + 1, (int)((u + du) * width)); var y1 = Math.Max(y0 + 1, (int)((v + dv) * height));
+        int r = 0, g = 0, b = 0, alphaSum = 0, total = 0;
+        for (var y = y0; y < Math.Min(y1, height); y++)
+        for (var x = x0; x < Math.Min(x1, width); x++)
+        {
+            total++;
+            var at = (y * width + x) * 4;
+            var a = canvas[at + 3];
+            if (a == 0) continue;
+            r += canvas[at] * a;
+            g += canvas[at + 1] * a;
+            b += canvas[at + 2] * a;
+            alphaSum += a;
+        }
+        if (alphaSum == 0 || total == 0) return ((byte)255, (byte)0, (byte)255, (byte)255);
+        var maxAlpha = total * 255;
+        var bgAlpha = maxAlpha - alphaSum;
+        return (
+            (byte)Math.Clamp((r + bg.R * bgAlpha + maxAlpha / 2) / maxAlpha, 0, 255),
+            (byte)Math.Clamp((g + bg.G * bgAlpha + maxAlpha / 2) / maxAlpha, 0, 255),
+            (byte)Math.Clamp((b + bg.B * bgAlpha + maxAlpha / 2) / maxAlpha, 0, 255),
+            (byte)255
+        );
+    }
+
+    private static byte[] WriteIconBitmap(int width, int height, Func<int, int, (byte Red, byte Green, byte Blue, byte Alpha)> pixelAt)
+    {
+        using var data = new MemoryStream(); using var writer = new BinaryWriter(data);
+        writer.Write((ushort)0x4d42); writer.Write(54 + width * height * 4); writer.Write(0); writer.Write(54); writer.Write(40);
+        writer.Write(width); writer.Write(-height); writer.Write((ushort)1); writer.Write((ushort)32); writer.Write(0);
+        writer.Write(width * height * 4); writer.Write(0); writer.Write(0); writer.Write(0); writer.Write(0);
+        for (var y = 0; y < height; y++) for (var x = 0; x < width; x++)
+        {
+            var pixel = pixelAt(x, y);
+            writer.Write(pixel.Alpha == 0 ? (byte)255 : pixel.Blue); writer.Write(pixel.Alpha == 0 ? (byte)0 : pixel.Green);
+            writer.Write(pixel.Alpha == 0 ? (byte)255 : pixel.Red); writer.Write((byte)255);
+        }
+        writer.Flush(); return data.ToArray();
+    }
+
+    private static object StoreImage(ReadOnlySpan<byte> data, int columns, string session)
+    {
+        var file = "ui-" + Convert.ToHexString(SHA256.HashData(data)).ToLowerInvariant() + ".bmp";
+        Directory.CreateDirectory(session);
+        var path = Path.Combine(session, file);
+        if (!File.Exists(path)) File.WriteAllBytes(path, data.ToArray());
+        return new { file, columns, rows = 1 };
+    }
+}
