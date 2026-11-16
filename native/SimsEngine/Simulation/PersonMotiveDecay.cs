@@ -4,7 +4,8 @@ using System.Text.RegularExpressions;
 
 namespace SimsEngine.Simulation;
 
-/// <summary>One Sims.exe FUN_00420c69 tuning table, read from Global.iff FCNS 1 (adult), 5 (dog) or 6 (cat).</summary>
+/// <summary>Represents a motive decay profile loaded from Global.iff FCNS resource 1 for adults, 5 for
+/// dogs, or 6 for cats.</summary>
 public sealed record PersonMotiveDecayProfile(
     float EnergySpan,
     float WakeHours,
@@ -43,12 +44,11 @@ public sealed record PersonMotiveDecayProfile(
     }
 }
 
-/// <summary>One original STR# mood curve: motive value and its weight at each breakpoint.</summary>
+/// <summary>Represents a piecewise linear mood weight curve defining motive value breakpoints and weights.</summary>
 public sealed record PersonMoodWeightCurve(IReadOnlyList<(float Motive, float Weight)> Points)
 {
     public float Evaluate(float motive)
     {
-        // FUN_004167d4 returns its zero-valued default when the curve has no points.
         if (Points.Count == 0) return 0f;
         if (Points.Count == 1 || motive >= Points[^1].Motive) return Points[^1].Weight;
         if (motive <= Points[0].Motive) return Points[0].Weight;
@@ -86,7 +86,6 @@ public sealed record PersonMoodWeightCurve(IReadOnlyList<(float Motive, float We
     }
 }
 
-/// <summary>The three FCNS tables initialized by Sims.exe FUN_00420c69.</summary>
 public sealed record PersonMotiveDecayTuning(
     PersonMotiveDecayProfile Adult,
     PersonMotiveDecayProfile Dog,
@@ -98,8 +97,6 @@ public sealed record PersonMotiveDecayTuning(
     public IReadOnlyList<PersonMoodWeightCurve> AdultScoreCurves { get; init; } = [];
     public IReadOnlyList<PersonMoodWeightCurve> ChildScoreCurves { get; init; } = [];
 
-    /// <summary>The MotiveEffects curve of score row <paramref name="row"/> for this person's age, or null before the
-    /// curves are loaded.</summary>
     public PersonMoodWeightCurve? ScoreCurve(XPerson person, int row)
     {
         var curves = person[PersonData.PersonAge] is > 0 and <= 17 ? ChildScoreCurves : AdultScoreCurves;
@@ -115,9 +112,8 @@ public sealed record PersonMotiveDecayTuning(
             PersonMotiveDecayProfile.Read(global, 6, isPet: true));
         return tuning with
         {
-            // cXPerson::CalcHappy consumes the static adult/child MotiveCurveArray<7> sets,
-            // initialized from Global STR# 0x1f6 and 0x1f8. STR# 0x1f5 and 0x1f7 are
-            // separate per-person MotiveEffects resources and contain ten effect curves.
+            // Adult and child happiness use string tables 0x1f6 and 0x1f8, while interaction score effects
+            // load from 0x1f5 and 0x1f7.
             AdultMoodCurves = ReadMoodCurves(global, 0x1f6),
             ChildMoodCurves = ReadMoodCurves(global, 0x1f8),
             AdultScoreCurves = ReadScoreCurves(global, 0x1f5),
@@ -125,10 +121,8 @@ public sealed record PersonMotiveDecayTuning(
         };
     }
 
-    /// <summary>cXPerson MotiveEffects (Mac person.s 0x10108640: MotiveCurveSet::LoadFromFile on person +0xa9c with STR#
-    /// 0x1f5, or 0x1f7 for a child; Windows FUN_00459e8f) replaces the identity curves FUN_004213c0 builds. String n is
-    /// the curve of score row n-1, and GetInteractionScore/GetCurrentScore read those rows. Points are added in
-    /// ascending order of motive value, so the text order does not matter.</summary>
+    /// <summary>Loads motive score curves from string tables where each entry corresponds to a score row,
+    /// sorting breakpoints in ascending motive order.</summary>
     private static IReadOnlyList<PersonMoodWeightCurve> ReadScoreCurves(IffFile global, ushort id)
     {
         var chunk = global.Find(ResourceType.Str, id)
@@ -152,8 +146,7 @@ public sealed record PersonMotiveDecayTuning(
             $"{global.Source}: STR# {id} mood curve {index} (motive {MoodMotiveIndices[index]})", entry.Value)).ToArray();
     }
 
-    /// <summary>One FUN_00420fe9 update, called by the PERS wrapper after a successful object update when its
-    /// 60-tick interval expires, then performs the age-appropriate mood weighting pass in FUN_0045d2d1.</summary>
+    /// <summary>Applies motive decay and calculates age-appropriate mood weighting on a 60-tick interval.</summary>
     public void Apply(XPerson person, int gameHour)
     {
         ArgumentNullException.ThrowIfNull(person);
@@ -223,7 +216,7 @@ public sealed record PersonMotiveDecayTuning(
         for (var curveIndex = 0; curveIndex < MoodMotiveIndices.Length; curveIndex++)
         {
             var value = person.Motives[MoodMotiveIndices[curveIndex]];
-            // Sims.exe excludes the default Room value (13) for pet gender codes, but includes it for people.
+            // Excludes the default Room motive (13) for pets, but includes it for Sims.
             if (gender >= 2 && value == 13f) continue;
             var weight = curves[curveIndex].Evaluate(value);
             numerator += weight * value;

@@ -4,9 +4,8 @@ using SimsEngine.World;
 
 namespace SimsEngine.Simulation;
 
-/// <summary>Builds the native VM's object model from a saved lot's object-type table and ObjM states. Sims.exe
-/// FUN_0043fe4a first creates each class with FUN_004409db/FUN_0044350d, then restores its state through vtable
-/// +0x7c; this loader preserves the ObjM walk order and applies each decoded state to its native instance.</summary>
+/// <summary>Builds the simulation object model from a saved lot's object type table and ObjM state records,
+/// preserving the serialized object walk order.</summary>
 public static class SavedLotObjectLoader
 {
     private static readonly ResourceType ObjectTypesType = ResourceType.Parse("objt");
@@ -15,8 +14,8 @@ public static class SavedLotObjectLoader
     private static readonly ResourceType SlotsType = ResourceType.Parse("SLOT");
     private static readonly HashSet<short> GenericSimsCallPersonRecordTypes = [2, 0x200, 0x400, 0x800, 0x1000];
 
-    /// <summary>Reads the saved object structures from <paramref name="lot"/> and restores every object whose
-    /// definition is installed or can be replaced by one of Sims.exe's type-specific missing-definition placeholders.</summary>
+    /// <summary>Loads saved object structures from a lot file, substituting type-specific placeholder
+    /// definitions when installed definitions are missing.</summary>
     public static SimulationWorld Load(IffFile lot, ObjectRegistry registry, GlobalLibrary library, byte language = 1,
         IffFile? neighborhood = null)
     {
@@ -38,9 +37,7 @@ public static class SavedLotObjectLoader
         var attributes = ReadMergedTypeAttributes(lot, neighborhood);
         var neighbors = ReadAdjacentNeighbors(lot, neighborhood);
         var familyNumbers = ReadAdjacentFamilyNumbers(lot, neighborhood);
-        // Sims.exe FUN_0046d0cf restores SIMI +0xac as the random state when FUN_004074bc holds game time;
-        // otherwise it replaces the saved value with timeGetTime(). The native loader preserves the saved state
-        // for deterministic replay; production startup still needs the original hold/time-seed gate.
+        // Preserves the saved random seed from the SIMI chunk for deterministic replay.
         var simulationState = lot.OfType(ResourceType.Parse("SIMI")).FirstOrDefault() is { } simulationStateChunk
             ? Formats.SimulationState.Read(lot, simulationStateChunk)
             : null;
@@ -63,13 +60,15 @@ public static class SavedLotObjectLoader
             ? SimulatorConstants.Read(library.Global, constantsChunk)
             : SimulatorConstants.Empty;
         world.ApplySimulatorConstants(constants);
-        // Room refresh lazily consumes the original Global FCNS values (FUN_004666a9) before computing
-        // score/light records, so apply the constants before the saved-lot 0xf0 room-map lifecycle runs.
+        // Applies global constants prior to room map initialization so score and lighting calculations
+        // receive valid configuration values.
         world.LotTileFlags = SimsEngine.World.LotTiles.Read(lot);
+        world.LotTerrain = lot.Find(ResourceType.Parse("Arry"), 0) is not null
+            ? SimsEngine.World.LotTerrain.Read(lot)
+            : null;
         world.LoadRoomMaps(ReadRoomMaps(lot, simulationState?.Version ?? 0));
         world.RefreshSavedPortalWallStyles();
         world.PlacementEligibilityGrids[1] = ReadPlacementEligibilityGrid(lot, simulationState?.Version ?? 0);
-        // FUN_00440b6d constructs created objects through the same definition registry the lot was restored from.
         world.ObjectFactory = guid => CreateInstance(world, unchecked((uint)guid), registry, library, language, registerSavedType: true);
         world.ObjectGroupFactory = guid => CreateObjectGroup(world, unchecked((uint)guid), registry, library, language, registerSavedType: true);
         world.PlacementPreviewFactory = guid => CreateInstance(world, unchecked((uint)guid), registry, library, language, registerSavedType: false);
@@ -83,16 +82,13 @@ public static class SavedLotObjectLoader
     {
         var masterEntry = registry.Find(guid);
         if (masterEntry is null || masterEntry.Definition[ObjdField.MasterId] == 0) return null;
-        // FUN_00440b6d only creates a group when FUN_0043aedc accepts the requested definition (SubIndex -1).
-        // A part definition by itself returns no object.
+        // Multi-tile object groups are created only from master definitions with SubIndex -1; part
+        // definitions cannot instantiate a group on their own.
         if (masterEntry.Definition[ObjdField.SubIndex] != ushort.MaxValue) return [];
 
         var masterId = masterEntry.Definition[ObjdField.MasterId];
-        // FUN_0043adda finds the lead part first: same file and MasterId, with MtLeadObject (OBJD +0x7e) nonzero,
-        // or falling back to FUN_0043ad41(masterEntry, 0, 0, 0) (SubIndex 0, LevelOffset 0).
-        // FUN_0043ae5e then scans the ordered type-definition vector for all parts in the same file with the same
-        // MasterId whose SubIndex is not -1 (FUN_0043aedc == 0); FUN_00440b6d skips the lead part when FUN_0043ae5e
-        // visits it again. The SubIndex -1 master definition itself is catalog-only and is never instantiated.
+        // Identifies multi-tile parts by matching Master ID within the same file. The SubIndex -1 master
+        // definition acts as a catalog placeholder and is never instantiated directly.
         var allParts = registry.Entries.Where(entry => ReferenceEquals(entry.File, masterEntry.File) &&
             entry.Definition[ObjdField.MasterId] == masterId &&
             entry.Definition[ObjdField.SubIndex] != ushort.MaxValue).ToArray();
@@ -113,9 +109,8 @@ public static class SavedLotObjectLoader
             {
                 var part = CreateInstance(world, entry.Guid, registry, library, language, registerSavedType);
                 if (part is null) throw new InvalidDataException($"Multi-tile definition {entry.Guid:X8} could not be instantiated.");
-                // FUN_004318eb reads SubIndex's high byte as signed X and its low byte as unsigned Y. The source
-                // multi-tile initializer rotates that pair into +0x1a0/+0x1a4; MultiTileOffset consumes those
-                // latter fields in sixteenths of a tile.
+                // Interprets the OBJD SubIndex field as a signed X tile offset in the high byte and an
+                // unsigned Y tile offset in the low byte.
                 var subIndex = unchecked((ushort)entry.Definition[ObjdField.SubIndex]);
                 var offsetX = unchecked((sbyte)(subIndex >> 8));
                 var offsetY = (byte)(subIndex & 0xff);
@@ -145,17 +140,12 @@ public static class SavedLotObjectLoader
         catch
         {
             foreach (var instance in created.AsEnumerable().Reverse()) world.Remove(instance.Id);
-            // The group may have registered its root/earlier members before a later constructor failed.
             return [];
         }
     }
 
-    /// <summary>FUN_00440b6d's construction path for Create New Object Instance: a definition from the registry, its
-    /// OBJD fields, own slot definitions, type record (function and check tables, behavior scope, interaction table),
-    /// the +0x80 creation flag. Registration, activation and placement stay with the caller. Person data and the
-    /// init trees are not initialized.</summary>
-    /// <summary>FUN_0043194c sizes the instance attribute table (+0x2c, count at +0x30) from OBJD NumAttributes (+0x74),
-    /// with a minimum of 8.</summary>
+    /// <summary>Sizes the instance attribute table from OBJD NumAttributes, enforcing a minimum capacity of
+    /// 8.</summary>
     private static int InstanceAttributeCount(ObjectEntry entry) => Math.Max((int)entry.Definition[ObjdField.NumAttributes], 8);
 
     internal static XObject? CreateInstance(SimulationWorld world, uint guid, ObjectRegistry registry, GlobalLibrary library, byte language,
@@ -176,7 +166,7 @@ public static class SavedLotObjectLoader
             : new XObject(id, definition, InstanceAttributeCount(entry));
         instance.RuntimeClass = objectClass.Value;
         instance.RequestKey = id;
-        instance.Flags = 0x80; // FUN_00440b6d sets +0x114 bit 7
+        instance.Flags = 0x80;
         instance.DynamicSpriteFlags = new short[entry.Definition[ObjdField.NumDynamicSprites]];
         instance.TypeAttributes = world.GetOrCreateTypeAttributes(guid, entry.Definition[ObjdField.NumAttributes]);
         RestoreSlotDefinitions(instance, entry);
@@ -220,7 +210,7 @@ public static class SavedLotObjectLoader
         return instance;
     }
 
-    /// <summary>SAnimator::ResetSuits (00588907.c) calls cXObject::GetBodyString(0xd, -1) (1-based entry 13 = 0-based index 12) and maps its sex/species token to +0x60e.</summary>
+    /// <summary>Reads the body string entry at index 12 to resolve the character's gender and species mode.</summary>
     internal static short? AnimatorBodyStringMode(ObjectEntry entry, byte language)
     {
         var id = entry.Definition[ObjdField.BodyStringsId];
@@ -241,10 +231,8 @@ public static class SavedLotObjectLoader
             _ => null,
         };
 
-    /// <summary>New cXPerson instances load their selector's Body Strings during construction
-    /// (Mac ObjSelector::GetBodyStrings). Seed the persistent character with its default body and head
-    /// so the native renderer and lot serializer have the same base appearance before any saved state
-    /// or clothing change is applied.</summary>
+    /// <summary>Initializes a character with default body and head meshes from its object definition
+    /// strings so base appearance is established before saved clothing is applied.</summary>
     private static PersonCharacter? DefaultPersonCharacter(ObjectEntry entry, byte language)
     {
         var id = entry.Definition[ObjdField.BodyStringsId];
@@ -264,9 +252,8 @@ public static class SavedLotObjectLoader
         return new PersonCharacter(0, 0, parts, [], [string.Empty, string.Empty, string.Empty], 3, new float[9]);
     }
 
-    /// <summary>FUN_00457759/0045778a select function 0/1; FUN_00402741 combines the root's version in the high
-    /// word with the sum of versions of every distinct reachable tree. It masks each opcode with 0x7fff before the
-    /// above-255 call test and pushes the masked id.</summary>
+    /// <summary>Computes a behavior tree fingerprint by combining the root version in the high word with
+    /// the version sum of all distinct reachable subroutines.</summary>
     public static uint SavedTreeFingerprint(ITreeTable? scope, ushort root)
     {
         if (scope is null) return 0;
@@ -290,9 +277,8 @@ public static class SavedLotObjectLoader
         return result;
     }
 
-    /// <summary>FUN_0047870b loads upper-level Arry wall layers, but clears their runtime wall grids when the SIMI
-    /// stream version is at most 0x16. Keep the saved Arry-backed room data independently; the lot manager
-    /// dimension is 64 tiles in Sims.exe FUN_00415c5b.</summary>
+    /// <summary>Loads upper-level wall layers from Arry chunks, clearing runtime wall grids when the
+    /// simulation state stream version is 0x16 or earlier.</summary>
     public static IReadOnlyDictionary<int, RoomMap> ReadRoomMaps(IffFile lot, int simulationVersion)
     {
         ArgumentNullException.ThrowIfNull(lot);
@@ -304,31 +290,25 @@ public static class SavedLotObjectLoader
         return result;
     }
 
-    /// <summary>FUN_0047870b loads Arry 10 into the level-one placement-eligibility grid for SIMI versions
-    /// greater than 0x34. FUN_00477a73 initializes that grid to 0xff; older versions take FUN_004776fd, which
-    /// walks the grid coordinates and writes the same 0xff sentinel across the plane.</summary>
+    /// <summary>Reads the placement eligibility grid from Arry 10 for simulation state versions above 0x34;
+    /// earlier versions default to an unconstrained grid initialized to 0xFF.</summary>
     public static byte[] ReadPlacementEligibilityGrid(IffFile lot, int simulationVersion)
     {
         ArgumentNullException.ThrowIfNull(lot);
         var result = new byte[LotGeometry.LotDimension * LotGeometry.LotDimension];
         Array.Fill(result, (byte)0xff);
-        // Before SIMI 0x35, FUN_0047870b calls FUN_004776fd rather than reading Arry 10. That helper enumerates
-        // the full grid and writes 0xff into each cell, so the constructor-equivalent result above is final.
         if (simulationVersion < 0x35 || lot.Find(ResourceType.Parse("Arry"), 10) is not { } chunk)
             return result;
 
         var array = LotArray.Read(lot, chunk);
         if (array.Rows < LotGeometry.LotDimension || array.Width < LotGeometry.LotDimension || array.ElementSize != 1)
             throw new InvalidDataException("Arry 10 eligibility grid must contain a 64 by 64 byte plane.");
-        // FUN_0047870b and FUN_004790bc index the grid [x][y].
         for (var x = 0; x < LotGeometry.LotDimension; x++)
         for (var y = 0; y < LotGeometry.LotDimension; y++)
             result[x * LotGeometry.LotDimension + y] = array.Element(x, y)[0];
         return result;
     }
 
-    /// <summary>Restores already-decoded ObjM records. This overload is also used by differential tests so the
-    /// object-state mapping can be verified independently of the resource-stream decoder.</summary>
     public static SimulationWorld Restore(
         IReadOnlyList<LotObject> savedObjects,
         IEnumerable<ObjectTypeEntry> savedTypes,
@@ -357,10 +337,6 @@ public static class SavedLotObjectLoader
         world.SavedObjectManagerVersion = objectManagerVersion;
         if (typeRegistry is not null)
         {
-            // FUN_004e8c79 initializes DAT_006f2648 by walking the ordered type-record vector and adding a 0x44-byte
-            // row for each OBJD whose type is Person (2). FUN_004e8b76 appends any later person type record missing
-            // from that table. ObjectRegistry retains the source scan order, and duplicate keys remain ordered because
-            // FUN_004e988f returns the first matching row.
             foreach (var entry in typeRegistry.Entries)
             {
                 if (entry.Definition[ObjdField.Type] != XPerson.PersonType) continue;
@@ -371,25 +347,22 @@ public static class SavedLotObjectLoader
         }
         if (savedSimulationState is { } loadedSimulationState)
         {
-            // SIMI carries the lot's global table; FUN_0046d0cf reads it with the rest of the simulation state.
+            // The SIMI chunk stores the lot's simulation global variable table.
             for (var global = 0; global < Math.Min(loadedSimulationState.Globals.Count, world.Globals.Length); global++)
                 world.Globals[global] = loadedSimulationState.Globals[global];
-            // FUN_0046d0cf restores these SIMI entries into the date-manager fields at +0x10 (Hour), +0x12
-            // (DayOfMonth), +0x1e (Month), and +0x20 (Year); FUN_00432396 reads the latter three directly.
             world.UseSimulationGlobalsForCurrentDate();
-            // FUN_0046d0cf restores the clock words from the same global table; the native clock otherwise starts
-            // at midnight and a saved 06:30 lot would export night lighting.
+            // Restores the simulation clock from global variables so saved daytime lots do not default to
+            // midnight lighting.
             world.Clock.Restore(world[SimulationGlobal.Hour], world[SimulationGlobal.Minute], world[SimulationGlobal.Second]);
             if (loadedSimulationState.Version > 0x0d)
                 world.ObjectManagerRandomState = unchecked((uint)loadedSimulationState.Field0xAC);
         }
         else
         {
-            // FUN_0046cfd5 initializes the date manager to 1997/6/15 before any saved SIMI data is applied.
             world.CurrentDate = SimulationDate.Initial;
         }
-        // FUN_0046cfd5 and FUN_00413d0e derive GameEdition from the installed pack markers, not the saved lot's old
-        // SIMI value. Keep the same mask that gated ObjectRegistry's FUN_0043c6ee expansion scans.
+        // Derives the game edition global variable from installed expansion pack markers rather than the
+        // saved simulation state.
         world[SimulationGlobal.GameEdition] = typeRegistry?.GameEditionMask ?? 0xff;
         if (savedNeighbors is not null)
         {
@@ -409,8 +382,8 @@ public static class SavedLotObjectLoader
                 typeEntry = findDefinition(placeholderGuid);
             var typeScope = typeEntry is null ? null : findBehaviorScope(typeEntry);
             world.CodeOwnerScopes.Add(type.TypeIndex, typeScope);
-            // FUN_0043a5fb compares the saved TreeValue0/1 with the current function 0/1 fingerprints and sets
-            // TypeRecord +0xb4 bit 2 on a mismatch; FUN_00431edd later resets that type's objects.
+            // Compares saved behavior tree fingerprints against current definitions to trigger an object
+            // reset on mismatch.
             if (typeEntry is not null)
             {
                 var tree0 = SavedTreeFingerprint(typeScope, typeEntry.ActionFunctions.ElementAtOrDefault(0));
@@ -442,7 +415,7 @@ public static class SavedLotObjectLoader
             if (entry is null)
                 throw new InvalidDataException($"Lot object {saved.ObjectId} needs missing definition {savedType.Guid:X8} and its placeholder.");
             var objectClass = LotObjects.ClassOf(entry.Definition);
-            if (objectClass is null) continue; // Sims.exe creates no cXObject for unmastered types 8 and 9.
+            if (objectClass is null) continue;
 
             var state = saved.Decoded
                 ?? throw new InvalidDataException($"Lot object {saved.ObjectId} ({savedType.Guid:X8}) has no decoded {objectClass} state.");
@@ -459,43 +432,31 @@ public static class SavedLotObjectLoader
                 ? new XPerson(saved.ObjectId, definition, state.Attributes.Length)
                 : new XObject(saved.ObjectId, definition, state.Attributes.Length);
             instance.RuntimeClass = objectClass;
-            // FUN_00431b5e initializes +0x84 to -5 via FUN_00433ef5. The saved-state virtual FUN_00434353
-            // then restores the 0x48 object-data words beginning at +0x4a for these version-0x2f+ lots;
-            // +0x84 is data field 29, so the following Data copy restores its saved room value after the initializer.
-            // FUN_0044350d registers the newly created object in the lot manager under the saved ObjM id
-            // and writes that same one-based lookup key to cXObject +0xf0.
             instance.RequestKey = saved.ObjectId;
-            // FUN_0043194c allocates the attribute table from OBJD NumAttributes; the saved list may be shorter.
             var instanceAttributeCount = InstanceAttributeCount(entry);
             instance.Attributes = new short[Math.Max(instanceAttributeCount, state.Attributes.Length)];
             state.Attributes.CopyTo(instance.Attributes, 0);
             RestoreSlotDefinitions(instance, entry);
             state.Temps.CopyTo(instance.Temporaries, 0);
             state.Data.CopyTo(instance.Data, 0);
-            // FUN_00440b6d allocates the dynamic-sprite array from OBJD NumDynamicSprites; the saved list may be
-            // shorter, and the unused entries stay 0.
             var dynamicSpriteCount = (int)entry.Definition[ObjdField.NumDynamicSprites];
             instance.DynamicSpriteFlags = new short[Math.Max(dynamicSpriteCount, state.Values0x34.Length)];
             state.Values0x34.CopyTo(instance.DynamicSpriteFlags, 0);
             instance.Slots.AddRange(state.Slots);
             PadSlotVector(instance);
-            // FUN_00434578 serializes each +0x130 record, including entry 0 (the vector sentinel).
-            // Type-0 definitions populate records 1..N, while FootprintSlots omits that sentinel.
+            // The serialized slot table includes a sentinel entry at index 0, whereas runtime footprint
+            // collections omit it.
             for (var footprintIndex = 0; footprintIndex < instance.FootprintSlots.Count; footprintIndex++)
             {
                 var relationIndex = footprintIndex + 1;
                 if (relationIndex >= instance.Slots.Count) break;
                 instance.FootprintSlots[footprintIndex].OccupantObjectId = instance.Slots[relationIndex];
             }
-            // FUN_0043426c reads +0x108,+0x10c,+0x100,+0x104,+0xf8,+0xf4 in this order, and the u32s at +0xf8 and
-            // +0xf4 are the x and y positions in sixteenths of a tile (ObjectHead.X and ObjectHead.Y).
+            // Positions in serialized object records are stored in sixteenths of a tile.
             instance.Position = new ObjectPosition(state.Values0x108[4], state.Values0x108[5], state.Value0x110);
-            // FUN_0043426c reads +0x108 (MinY), +0x10c (MinX), +0x100 (MaxY), +0x104 (MaxX), +0xf8 (X), +0xf4 (Y).
             instance.FootprintBounds = new FootprintBounds(
                 state.Values0x108[3], state.Values0x108[2], state.Values0x108[1], state.Values0x108[0]);
             instance.FootprintBoundsDirection = instance[ObjectData.Direction];
-            // FUN_0043fe4a marks every newly registered object with +0x80 before its virtual +0x7c restore.
-            // FUN_0043426c only overwrites the flag word for ObjM version 0x37, so older saved versions retain it.
             instance.Flags = unchecked((uint)(state.Value0x114 ?? 0x80));
             instance.SavedStack.AddRange(state.Stack);
             instance.SavedStackSize = state.StackSize;
@@ -512,9 +473,8 @@ public static class SavedLotObjectLoader
                     instance.Relationships.Set(target, index, relationship.Values[index]);
             }
 
-            // FUN_00440b6d allocates the type-attribute table from OBJD NumAttributes; a lot without a TATT entry
-            // leaves it zero-filled instead of empty. All instances of the same GUID share the same backing array
-            // (0043e1d5.c:31-53, 00458001.c, 00458026.c).
+            // Type attributes are shared across all instances of the same GUID and sized according to the
+            // object definition's attribute count.
             var typeAttributeCount = (int)entry.Definition[ObjdField.NumAttributes];
             instance.TypeAttributes = world.GetOrCreateTypeAttributes(savedType.Guid, typeAttributeCount);
 
@@ -572,8 +532,8 @@ public static class SavedLotObjectLoader
             ApplyLoadedClockEligibility(world, instance, entry.Definition.Guid, objectManagerVersion, state.ManagerFlags);
         }
 
-        // FUN_004227e6 appends each constructed part to the end of its master's +0x18c chain; the save stores only
-        // the part's +0x190 lead, so rebuild the chain in registration order (the order the parts were constructed).
+        // Reconstructs the multi-tile part chain in registration order because saved state stores only the
+        // master reference.
         foreach (var part in world.WalkOrder)
         {
             if (part.MultiTileMasterId == 0 || part.MultiTileMasterId == part.Id) continue;
@@ -594,8 +554,7 @@ public static class SavedLotObjectLoader
             if (tail is not null) tail.MultiTileNextId = part.Id;
         }
 
-        // FUN_00431c90/FUN_00431edd initialize manager bit 19 from FUN_004359a1. Resolve the multitile lead first;
-        // only that root's private interaction table can make the root an autonomy candidate.
+        // For multi-tile objects, only the lead object's interaction table determines autonomy eligibility.
         foreach (var instance in world.WalkOrder)
         {
             var root = InteractionMenus.Target(world, instance);
@@ -604,16 +563,11 @@ public static class SavedLotObjectLoader
 
         foreach (var (person, state) in pendingPersonStates)
         {
-            // FUN_00459d62 (cXPerson::PostLoad, line 12): calls FUN_004258ed to bind the restored person to its
-            // neighborhood record, updating PersonData[NeighborId] (+0x5ca), version-gated persistent fields (+0x58c),
-            // and PersonData[FamilyNumber] (+0x606).
             if ((savedNeighbors is not null || typeRegistry is not null) && !LotObjects.IsPlaceholder(unchecked((uint)(person.TypeRecord?.Key ?? 0))))
                 world.BindPersonToNeighborRecord(person);
             person.RestoreActionState(state, world);
         }
 
-        // FUN_0045d099 restores the +0xb00 list after every lot object has been registered. FUN_0043fd68 reads
-        // each saved +0xf0 key and resolves it through the lot manager's saved-id table; a removed target becomes null.
         foreach (var (person, state) in pendingPersonStates)
         foreach (var savedReference in state.Objects)
         {
@@ -623,9 +577,8 @@ public static class SavedLotObjectLoader
             if (target is not null) person.InteractingObjects.Add(target);
         }
 
-        // FUN_0043a5fb restores OBJT TypeIndex into TypeRecord +0xa4, and FUN_0043de5b uses
-        // that same value as the index in the code-owner table. Restore frames only after every
-        // type scope and object has been registered, so cross-object code owners resolve too.
+        // Restores execution stack frames only after all objects and type scopes are registered so
+        // cross-object code owners can be resolved.
         foreach (var owner in world.WalkOrder.Where(item => item.SavedStack.Count != 0))
             world.SavedExecutionStacks.Add(owner.Id, TreeRunner.RestoreSavedStack(world, owner,
                 codeOwner => world.CodeOwnerScopes.GetValueOrDefault(codeOwner)));
@@ -633,9 +586,6 @@ public static class SavedLotObjectLoader
         return world;
     }
 
-    /// <summary>Builds the person's source-ordered +0x148 type-record slots and current +0x5ca one-based index.
-    /// FUN_00424850 adds one record for each registered type in its five supported OBJD categories, and
-    /// FUN_004258ed stores the slot matching the person's current +0x11c type-record key.</summary>
     private static void InitializeGenericSimsCallPersonTypeRecords(XObject instance, ObjectRegistry? typeRegistry, byte language)
     {
         if (instance is not XPerson person) return;
@@ -668,16 +618,15 @@ public static class SavedLotObjectLoader
         var houses = Path.GetDirectoryName(Path.GetFullPath(lot.Source));
         var neighborhood = houses is null ? null : Directory.GetParent(houses)?.FullName;
         var path = neighborhood is null ? null : Path.Combine(neighborhood, "Neighborhood.iff");
-        // Imported Complete Collection profiles keep the original neighborhood files one level below the staged
-        // Houses/ and Characters/ directories. Sims.exe FUN_00430b85 restores the selected neighborhood's ordered
-        // NBRS slots; use that preserved root when the staged root has no Neighborhood.iff.
+        // Falls back to UserData/Neighborhood.iff when the neighborhood file is not present in the staged
+        // directory.
         if (path is not null && !File.Exists(path)) path = Path.Combine(neighborhood!, "UserData", "Neighborhood.iff");
         if ((path is null || !File.Exists(path)) && houses is not null) path = Path.Combine(houses, "Neighborhood.iff");
         return path is not null && File.Exists(path) ? IffFile.Open(path) : null;
     }
 
-    /// <summary>Sims.exe FUN_00424850 (line 127) loads TATT #1 from Neighborhood.iff into the object-type manager
-    /// (+0x1250); merge any lot-level TATT #1 on top so shared per-GUID type attributes are populated.</summary>
+    /// <summary>Loads base type attributes from TATT resource 1 in the neighborhood file and merges any
+    /// lot-level TATT resource 1 over them.</summary>
     private static IReadOnlyDictionary<uint, short[]>? ReadMergedTypeAttributes(IffFile lot, IffFile? neighborhood = null)
     {
         Dictionary<uint, short[]>? merged = null;
@@ -699,10 +648,8 @@ public static class SavedLotObjectLoader
         return merged;
     }
 
-    /// <summary>Neighborhood.iff is stored beside Houses/. FUN_00430b85 restores NBRS slots in order, and
-    /// FUN_00423e3b links each record to the current type record by GUID. The type-record eligibility bits are set
-    /// during registry construction: FUN_0043c6ee marks the People scan and FUN_0043bb37 stores its category in
-    /// +0xb4 bits 2–3. Keep empty NBRS slots so FUN_00427162 sees the same ordered vector length and holes.</summary>
+    /// <summary>Reads neighbor records from NBRS chunks in order, preserving empty slots so vector indices
+    /// and gaps remain consistent.</summary>
     private static Neighbors? ReadAdjacentNeighbors(IffFile lot, IffFile? neighborhood = null)
     {
         var file = neighborhood ?? OpenAdjacentNeighborhoodFile(lot);
@@ -712,16 +659,14 @@ public static class SavedLotObjectLoader
         var neighbors = Neighbors.ReadRecoveringSupportedPrefix(file, chunk);
         if (!neighbors.IsComplete)
         {
-            // Sims.exe's Neighbor::DoStream (Mac analysis/mac-reference/asm/code/Neighbor.s, 0x1009B220) accepts
-            // version-73 formats 4 and 10. Retain complete earlier slots so their characters and relationships
-            // remain available, but the incomplete object refuses to serialize over the original NBRS chunk.
+            // Recovers valid leading slots from truncated neighbor rosters while preventing serialization
+            // from overwriting the original resource.
             Console.Error.WriteLine($"Native load: recovered {neighbors.CompleteSlotPrefix} complete slots from malformed neighbor roster in {file.Source}; remaining slots are unknown and the roster will not be saved.");
         }
         return neighbors;
     }
 
-    /// <summary>FUN_100AC850 derives each neighbor's family number from FAMI membership and copies it into
-    /// Neighbor +0xee; FUN_100ABD30 then loads that value into person data 61 for a created cXPerson.</summary>
+    /// <summary>Derives each neighbor's family number from FAMI membership records.</summary>
     private static IReadOnlyDictionary<uint, int>? ReadAdjacentFamilyNumbers(IffFile lot, IffFile? neighborhood = null)
     {
         var file = neighborhood ?? OpenAdjacentNeighborhoodFile(lot);
@@ -732,8 +677,8 @@ public static class SavedLotObjectLoader
         {
             if (chunk.Id == 0) continue;
             var family = Family.Read(file, chunk);
-            // Family::LoadFamily stores the FAMI chunk id in runtime +0x10c; Neighborhood::UpdateFamilyNumbers
-            // copies that runtime value to each listed Neighbor, independently of the serialized FamilyNumber field.
+            // Maps the FAMI chunk ID to each listed family member independently of serialized family
+            // fields.
             foreach (var member in family.Members) result[member] = chunk.Id;
         }
         return result;
@@ -754,9 +699,8 @@ public static class SavedLotObjectLoader
             }
 
             var entry = registry?.Find(saved.Guid);
-            // FUN_00424850 (lines 112-125): right after reading NBRS, Sims.exe removes any neighbor record whose
-            // GUID does not resolve to a loaded object definition (`*(int *)(iVar6 + 8) == 0` -> `FUN_004259ec`),
-            // clearing its slot in the +0x148 neighbor vector (`piVar4[iVar3 - 1] = 0`) and removing relationships to it.
+            // Removes neighbor records whose GUID cannot be resolved in the object registry, clearing their
+            // slots and relationships.
             if (registry is not null && entry is null)
             {
                 world.NeighborWalkOrder.Add(null);
@@ -773,9 +717,8 @@ public static class SavedLotObjectLoader
             };
             if (saved.PersonData is { } personData)
                 personData.Take(neighbor.PersonData.Length).ToArray().CopyTo(neighbor.PersonData, 0);
-            // Neighborhood::UpdateFamilyNumbers resets every neighbor's family field, then rebuilds it from FAMI
-            // membership. Do this after loading NBRS persistent data so a stale saved PersonData[FamilyNumber] cannot
-            // override the authoritative household roster.
+            // Rebuilds neighbor family numbers from authoritative FAMI membership to override stale saved
+            // person data.
             if (familyNumbersByGuid is not null)
                 neighbor.PersonData[(int)PersonData.FamilyNumber] = familyNumbersByGuid.TryGetValue(saved.Guid, out var familyNumber)
                     ? unchecked((short)familyNumber)
@@ -795,9 +738,8 @@ public static class SavedLotObjectLoader
             RestoreCatalogNeighbors(world, registry, familyNumbersByGuid);
     }
 
-    /// <summary>FUN_00424850 (lines 209-291): after loading NBRS, Sims.exe scans all registered object definitions
-    /// whose OBJD Type is 2, 0x200, 0x400, 0x800, or 0x1000 and calls FUN_004257ef(selector, -1) whenever
-    /// no neighbor record exists for that selector yet, registering expansion/service NPCs into the neighbor vector.</summary>
+    /// <summary>Scans registered object definitions for person and NPC types, creating neighbor records for
+    /// catalog NPCs that are not yet in the neighbor roster.</summary>
     private static void RestoreCatalogNeighbors(SimulationWorld world, ObjectRegistry registry,
         IReadOnlyDictionary<uint, int>? familyNumbersByGuid)
     {
@@ -843,10 +785,8 @@ public static class SavedLotObjectLoader
         }
     }
 
-    /// <summary>Ports the manager-flag tail of Sims.exe FUN_0043fe4a after the object's virtual state restore
-    /// (0x440140–0x440251). From version 0x36 an ordinary object reads its saved flag dword into the manager's
-    /// parallel +0x24 vector; a placeholder definition, which stores no dword, sets the eligibility bit instead.
-    /// Versions 0x36–0x38 then keep only the low word and enable every object; 0x39 and later keep the saved word.</summary>
+    /// <summary>Applies clock eligibility flags from saved state based on lot version, enabling all objects
+    /// in versions 0x36 through 0x38 while preserving saved flags in version 0x39 and later.</summary>
     private static void ApplyLoadedClockEligibility(
         SimulationWorld world, XObject instance, uint effectiveGuid, int version, int? savedFlags)
     {
@@ -869,24 +809,18 @@ public static class SavedLotObjectLoader
     private static ResourceFormatException MissingChunk(IffFile lot, ResourceType type) =>
         new(lot.Source, type.ToString(), 0, "required saved-lot chunk is missing");
 
-    /// <summary>Object construction calls FUN_0046e3ed on the definition's SLOT resource. It dispatches type 0 to
-    /// FUN_0046dfd7/FUN_00435b8c (cXObject +0x130, 0x24-byte footprint entries), type 1 to
-    /// FUN_0046e09f/FUN_0045f795 (+0x148, 0x3c-byte ticking/render records), and type 3 to its routing list. Retain
-    /// every parsed source entry, type-0 footprint entries, and the already-modeled type-1 records without conflating
-    /// the vectors.</summary>
-    // The +0x130 relation vector holds the entry-0 sentinel plus one record per type-0 definition (FUN_00431b5e).
-    // The cXPerson constructor (FUN_00459797) then appends five more records, and FUN_00434578 only overwrites the
-    // leading records a saved lot lists, so a person keeps all of them however few were saved.
+    /// <summary>Processes SLOT resource definitions, separating type 0 footprint slots, type 1 runtime
+    /// ticking slots, and type 3 routing slots.</summary>
+    // Characters append five standard slots to their footprint slot vector, and loading saved state
+    // preserves trailing slots if fewer were serialized.
     private static void PadSlotVector(XObject instance)
     {
         var length = 1 + instance.FootprintSlots.Count;
         while (instance.Slots.Count < length) instance.Slots.Add(0);
     }
 
-    /// <summary>The cXPerson constructor (FUN_00459797) appends five 0x24-byte records to the +0x130 vector through
-    /// FUN_0046dfaf defaults: the first has height code 6 (the hand slot Grab and Create Object request as slot 0),
-    /// the second keeps code 0, and the last three have code 1. It also appends one default 0x38-byte SpriteSlot
-    /// record to +0x140 (00459797.c:35-37, 0046e076.c) with Z = 2.0f (+0x08) and -1 in +0x0c/+0x14.</summary>
+    /// <summary>Appends standard character slots including the hand slot at height code 6 and three general
+    /// slots at height code 1, along with a default sprite slot.</summary>
     private static void RestoreSlotDefinitions(XObject instance, ObjectEntry entry)
     {
         RestoreObjectSlotDefinitions(instance, entry);
@@ -929,9 +863,8 @@ public static class SavedLotObjectLoader
         }
     }
 
-    /// <summary>FUN_0043fe4a substitutes the general placeholder for missing non-person definitions and the
-    /// template-person definition for missing type-2 definitions. Known dog/cat template GUIDs retain their own
-    /// class-specific placeholders. This chooses from the saved OBJT type, before decoding the object's state.</summary>
+    /// <summary>Selects a fallback placeholder GUID for missing object definitions based on the saved OBJT
+    /// type.</summary>
     private static uint? PlaceholderGuid(ObjectTypeEntry type) => type.ObjectType switch
     {
         2 when type.Guid == 0x4A70DF92 || unchecked((uint)type.Field0x8C) == 0x4A70DF92 => 0x4A70DF92,

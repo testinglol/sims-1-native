@@ -27,7 +27,7 @@ public class AudioDecoderTests
     public void XaAudio_DecodesRealGameSoundFromArchive()
     {
         var gameDir = LocateGameDirectory();
-        if (gameDir == null) return; // Skip if game directory is unavailable
+        if (gameDir == null) return;
 
         var soundDataFar = Path.Combine(gameDir, "SoundData", "SoundData.far");
         if (!File.Exists(soundDataFar)) return;
@@ -45,7 +45,6 @@ public class AudioDecoderTests
         Assert.Equal(468, totalSamples);
         Assert.True(duration > 0.02f && duration < 0.03f);
 
-        // Check RIFF WAV structure
         Assert.True(wav.Length >= 44 + 468 * 2);
         Assert.Equal((byte)'R', wav[0]);
         Assert.Equal((byte)'I', wav[1]);
@@ -112,7 +111,6 @@ public class AudioDecoderTests
             using var bank = new SoundBank(gameDir, tempDir);
             Assert.False(bank.IsMock);
 
-            // 1. UI click
             var click = bank.Resolve("ui_click");
             Assert.NotNull(click);
             Assert.Equal("FX", click.Group);
@@ -120,35 +118,29 @@ public class AudioDecoderTests
             Assert.True(click.Duration > 0.01f && click.Duration < 1.0f);
             Assert.True(File.Exists(Path.Combine(tempDir, Path.GetFileName(click.RelativePath))));
 
-            // 2. Loop event
             var bdoze = bank.Resolve("ui_nhood_bdoze_loop");
             Assert.NotNull(bdoze);
             Assert.True(bdoze.IsLoop);
 
-            // 3. Voice event
             var vox = bank.Resolve("vox_laugh_giggle");
             Assert.NotNull(vox);
             Assert.Equal("VOX", vox.Group);
             Assert.True(vox.Duration > 0.1f);
 
-            // 4. Phone ring
             var phone = bank.Resolve("phone_ring");
             Assert.NotNull(phone);
             Assert.True(phone.Duration > 0.1f);
 
-            // 5. Mode music (MP3)
             var music = bank.Resolve("bkground_buy1");
             Assert.NotNull(music);
             Assert.Equal("MUSIC", music.Group);
             Assert.True(music.IsLoop);
             Assert.EndsWith(".mp3", music.RelativePath);
 
-            // 6. Expansion station
             var dtn = bank.Resolve("station_dtnhood");
             Assert.NotNull(dtn);
             Assert.Equal("MUSIC", dtn.Group);
 
-            // 7. Unknown event returns null in production mode
             var missing = bank.Resolve("native_missing_event");
             Assert.Null(missing);
         }

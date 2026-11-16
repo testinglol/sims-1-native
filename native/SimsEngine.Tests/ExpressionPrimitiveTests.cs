@@ -165,10 +165,8 @@ public sealed class ExpressionPrimitiveTests
     public void ParsesTheOperand()
     {
         var (context, me, _) = World();
-        // temp 3 += literal 7: lhs data 3, rhs data 7, operator 3 ("+="), owners 8 and 7.
         Assert.True(ExpressionPrimitive.Execute(context, [3, 0, 7, 0, 0, 3, 8, 7]));
         Assert.Equal(7, me.Temporaries[3]);
-        // A sign-extended owner byte (0xff) is not an owner.
         Assert.Equal(SimulationError.IllegalOwnerFieldInDataReference, Fails(() => ExpressionPrimitive.Execute(context, [3, 0, 7, 0, 0, 2, 0xff, 7])));
     }
 
@@ -181,7 +179,6 @@ public sealed class ExpressionPrimitiveTests
         Assert.False(Run(context, DataOwner.Temporary, 0, ExpressionOperator.LessThan, DataOwner.Literal, 5));
         Assert.True(Run(context, DataOwner.Temporary, 0, ExpressionOperator.LessThanOrEqualTo, DataOwner.Literal, 5));
         Assert.True(Run(context, DataOwner.Temporary, 0, ExpressionOperator.NotEqualTo, DataOwner.Literal, 6));
-        // A comparison reads its left side only, so a read-only owner is fine.
         Assert.True(Run(context, DataOwner.Literal, 9, ExpressionOperator.EqualTo, DataOwner.Literal, 9));
     }
 
@@ -222,7 +219,8 @@ public sealed class ExpressionPrimitiveTests
         Assert.False(Run(context, DataOwner.Temporary, 0, ExpressionOperator.IsFlagSet, DataOwner.Literal, 2));
         Run(context, DataOwner.Temporary, 0, ExpressionOperator.ClearFlag, DataOwner.Literal, 1);
         Assert.Equal(unchecked((short)0x8000), me.Temporaries[0]);
-        // Flag 0 shifts by 31: it tests the sign and sets or clears nothing.
+        // Testing flag 0 checks the sign bit via a 31-bit shift, whereas setting or clearing flag 0 has no
+        // effect.
         Assert.True(Run(context, DataOwner.Temporary, 0, ExpressionOperator.IsFlagSet, DataOwner.Literal, 0));
         Run(context, DataOwner.Temporary, 0, ExpressionOperator.ClearFlag, DataOwner.Literal, 0);
         Assert.Equal(unchecked((short)0x8000), me.Temporaries[0]);
@@ -249,7 +247,6 @@ public sealed class ExpressionPrimitiveTests
         var (context, me, _) = World();
         Run(context, DataOwner.Temporary, 0, ExpressionOperator.AssignSquareRoot, DataOwner.Literal, 10);
         Assert.Equal(3, me.Temporaries[0]);
-        // The square root of a negative number is NaN, which __ftol answers as 0 here.
         Run(context, DataOwner.Temporary, 0, ExpressionOperator.AssignSquareRoot, DataOwner.Literal, -4);
         Assert.Equal(0, me.Temporaries[0]);
     }
@@ -265,7 +262,6 @@ public sealed class ExpressionPrimitiveTests
         Assert.Equal(-100f, me[Motive.Hunger]);
         me[Motive.Fun] = -3.75f;
         Assert.Equal(-3, Variables.Get(context, DataOwner.MyMotive, (short)Motive.Fun));
-        // Operators that need a short reference reject a motive.
         Assert.Equal(SimulationError.ExpressionAttemptingToWriteInAReadOnlyArea, Fails(() => Run(context, DataOwner.MyMotive, (short)Motive.Fun, ExpressionOperator.OrWith, DataOwner.Literal, 1)));
         Assert.Equal(SimulationError.MotiveNumberOutOfRange, Fails(() => Variables.Get(context, DataOwner.MyMotive, 16)));
     }
@@ -286,7 +282,6 @@ public sealed class ExpressionPrimitiveTests
     {
         var (context, _, _) = World();
         Assert.Equal(SimulationError.BadOperator, Fails(() => Run(context, DataOwner.Temporary, 0, (ExpressionOperator)21, DataOwner.Literal, 0)));
-        // The right side is read first.
         Assert.Equal(SimulationError.StackNumberOutOfRange, Fails(() => Run(context, DataOwner.Temporary, 9, (ExpressionOperator)21, DataOwner.Parameter, 3)));
     }
 
@@ -311,11 +306,8 @@ public sealed class ExpressionPrimitiveTests
         var (context, me, chair) = World();
         chair.Attributes[1] = 42;
         Assert.Equal(42, Variables.Get(context, DataOwner.StackObjectAttribute, 1));
-        // Parameter 1 holds 1: attribute 1 of the stack object.
         Assert.Equal(42, Variables.Get(context, DataOwner.StackObjectAttributeByParameter, 1));
-        // The chair is not a person.
         Assert.Equal(SimulationError.ObjectReferredToMustBeAPerson, Fails(() => Variables.Get(context, DataOwner.StackObjectMotive, 0)));
-        // Stack object id is writable.
         Variables.Set(context, DataOwner.StackObjectId, 0, 1);
         Assert.Equal(1, context.Frame.StackObject);
         Assert.Equal(SimulationError.ReferenceToStackObjectOutOfRange, Fails(() => Variables.Get(context, DataOwner.StackObjectId, 1)));
@@ -391,7 +383,6 @@ public sealed class ExpressionPrimitiveTests
         me.Temporaries[0] = 0x400;
         Assert.Equal(2, Variables.Get(context, DataOwner.RoomByTemporary0, 2));
 
-        // The score (field 0) still comes from the host; the group does not.
         host.RoomFields[(unchecked((short)levelOne.RoomAt(1, 1)), 0)] = 77;
         host.RoomFields[(0x400, 2)] = 99;
         me.Temporaries[0] = unchecked((short)levelOne.RoomAt(1, 1));
@@ -443,16 +434,13 @@ public sealed class ExpressionPrimitiveTests
         Assert.Equal(body.ClockManagerIndex, Variables.Get(context, DataOwner.NeighborInStackObject, 0));
         Assert.DoesNotContain(host.Calls, call => call.StartsWith("NeighborInStackObject", StringComparison.Ordinal));
 
-        // Unhandled FUN_00425ba7 selectors retain its zero-initialized result.
         Assert.Equal(0, Variables.Get(context, DataOwner.NeighborInStackObject, 3));
         Assert.DoesNotContain(host.Calls, call => call.StartsWith("NeighborInStackObject", StringComparison.Ordinal));
 
-        // Field 1 ("belongs in house") searches the household's member keys natively.
         Assert.Equal(0, Variables.Get(context, DataOwner.NeighborInStackObject, 1));
         context.World.NeighborInteractionManagerTypeKeys.Add(0x0BADF00D);
         Assert.Equal(1, Variables.Get(context, DataOwner.NeighborInStackObject, 1));
 
-        // A missing neighbor or a neighbor whose object is absent answers 0 without the host.
         context.Frame.StackObject = 9;
         Assert.Equal(0, Variables.Get(context, DataOwner.NeighborInStackObject, 0));
         context.World.NeighborWalkOrder[0]!.TypeRecordKey = 0x12345678;

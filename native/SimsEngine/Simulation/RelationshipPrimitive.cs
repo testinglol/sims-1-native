@@ -1,28 +1,7 @@
 namespace SimsEngine.Simulation;
 
-/// <summary>The Relationship primitive (opcode 0x1a), after Sims.exe FUN_0044d1bc. It reads or writes one value of a
-/// relationship list: the value at index <c>operand[0]</c> of the list owner A keeps toward target B. Owner and target
-/// come from <c>operand[1]</c>, a mode 0 to 3 that picks the running object ("me"), the stack object, or the object
-/// named by a local (modes 2 and 3). Object-list modes resolve stack/local indices directly through the lot object's
-/// one-based manager vector, as `FUN_00407498` does, rather than through the running object's stack-object table.
-/// <para>Operand: byte 0, the value index (unsigned). Byte 1, the mode: 0 is me to the stack object, 1 the stack object to
-/// me, 2 the stack object to the neighbor named by local <c>operand[3]</c>, 3 that neighbor to the stack object; any other
-/// mode raises error 21. Byte 2, the flags: bit 0 set makes a missing slot false (otherwise the list grows to hold it, with
-/// 0s); bit 1 set uses the neighbor records (a neighbor-record list), clear uses the objects' own lists; bit 2 set writes
-/// the variable into the relationship, clear reads the relationship into the variable. Byte 3, the local index for modes 2
-/// and 3 (error 51 when it is out of range). Byte 4, the variable's owner (<see cref="DataOwner"/>). Byte 5 is not read.
-/// Bytes 6 and 7, the variable's data (a short).</para>
-/// <para>Modes with neighbor records: the list is the record's, and the target is the record's id; a mode 0 or 1 first
-/// casts the running object to a person (error 28 when it is not one). A missing neighbor record raises error 21.</para>
-/// <para>Modes with objects: the list is the object's, and the target is the object's id. When both objects are persons,
-/// Sims.exe uses the first person's neighbor record instead, with the second person's neighbor index as the target (the
-/// person path). A missing neighbor record there raises error 55 (inferred: Sims.exe does not check it and reads from
-/// address 0xc).</para>
-/// <para>When bit 2 is set, the native path raises the same neighbor dirty notifications as
-/// FUN_004448a6/Neighborhood::RelationshipsChanged before slot lookup; object-list writes use the no-op
-/// FUN_0044489b path. A float variable (a motive) cannot take the 16-bit write Sims.exe makes, so a read into one
-/// raises error 19 (inferred).</para>
-/// <para>Returns true or false, as the original does; it raises errors the original throws.</para></summary>
+/// <summary>Executes the Relationship primitive (opcode 0x1a) to read or write relationship table values
+/// between Sims or objects, flagging the neighborhood matrix dirty on modification.</summary>
 public static class RelationshipPrimitive
 {
     public static PrimitiveResult Execute(in TreeContext context, ReadOnlySpan<byte> operand)
@@ -92,7 +71,6 @@ public static class RelationshipPrimitive
         return world.Neighbors.GetValueOrDefault(key);
     }
 
-    // The neighbor-record modes resolve one-based manager slots (FUN_0042573e), then use the target record ID. Modes 0 and 1 cast the running object first.
     private static (NeighborState Record, NeighborState Target) NeighborRecords(in TreeContext context, byte mode, byte localIndex)
     {
         var world = context.World;
@@ -131,11 +109,10 @@ public static class RelationshipPrimitive
         return (a, b);
     }
 
-    // The tail both forms share: the slot at index (grown when allowed), then the variable is written or read.
     private static PrimitiveResult Relate(in TreeContext context, RelationshipTable table, short target, int index, bool noGrow, bool write, DataOwner variableOwner, short data,
         NeighborState? sourceNeighbor = null, NeighborState? targetNeighbor = null)
     {
-        // FUN_0044d1bc notifies the neighborhood before slot lookup/growth when writing a neighbor-record relation.
+        // Flags neighborhood relationships dirty prior to slot lookup or expansion.
         if (write && sourceNeighbor is not null && targetNeighbor is not null)
             context.World.MarkRelationshipsChanged(sourceNeighbor, targetNeighbor);
         if (table.Count(target) <= index)

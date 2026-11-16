@@ -7,10 +7,6 @@ using SimsEngine.Simulation;
 using SimsEngine.World;
 using SimsSimulation;
 
-/// <summary>
-/// Neighborhood-screen edits applied by the one-shot export process: evict an occupied family back to the
-/// Select a Family list, delete an unhoused family, bulldoze a vacant lot, rezone a lot, or edit a lot description.
-/// </summary>
 internal static class NeighborhoodEdits
 {
     public static object Apply(string edit, string game, string profile, byte language = 1, int mapMode = 1)
@@ -397,7 +393,7 @@ internal static class NeighborhoodEdits
         world.ReplaceSavedValuation(0, world.SavedSimulationState?.Field0xA4 ?? 0);
         if (world.SavedSimulationState is { BudgetDays.Count: > 0 } simi)
         {
-            // FUN_0046d38c (0046d38c.c:9-11) always writes cBudgetDay stream version 1 with 8 categories.
+            // Writes daily budget history records using version 1 with 8 spending categories.
             var clearedDays = simi.BudgetDays.Select(_ => new BudgetDay(true, new int[8])).ToArray();
             world.ReplaceSavedBudgetDays(clearedDays);
         }
@@ -698,7 +694,6 @@ internal static class NeighborhoodEdits
                 }
                 catch (Exception error) when (error is InvalidDataException or ResourceFormatException or IOException or EndOfStreamException or ArgumentException)
                 {
-                    // Keep toolbar enabled when a matching extension exists, but skip malformed files from the chooser.
                 }
             }
         }
@@ -922,8 +917,8 @@ internal static class NeighborhoodEdits
 
         var nbrsChunk = ngh.OfType(nbrsType).FirstOrDefault();
         var existingNeighbors = nbrsChunk is not null ? Neighbors.ReadRecoveringSupportedPrefix(ngh, nbrsChunk) : null;
-        // FUN_00424850 (lines 112-125): Sims.exe removes any neighbor record whose GUID does not resolve to an
-        // installed object or character file, freeing its slot in the +0x148 neighbor vector (`piVar4[iVar3 - 1] = 0`).
+        // Purges neighbor records whose GUIDs cannot be resolved to installed object or character
+        // definitions.
         var neighborEntries = existingNeighbors?.Entries
             .Where(e => registry.Find(e.Guid) is not null)
             .ToList() ?? new List<Neighbor>();
@@ -1264,8 +1259,8 @@ internal static class NeighborhoodEdits
         var version = BinaryPrimitives.ReadInt32LittleEndian(ngbhBytes.AsSpan(4, 4));
         if (version >= 0x14 && ngbhBytes.Length >= 44 && house > 0)
         {
-            // Sims.exe FUN_00428f4f (0x00429918..0x0042993c): importing a tutorial house resets NGBH[1] (progress)
-            // to 0 and records NGBH[0] = house; importing a non-tutorial house onto NGBH[0] clears NGBH[0] to 0.
+            // Importing a tutorial lot resets tutorial progress and sets neighborhood variable 0 to the
+            // house number; importing non-tutorial lots clears it to 0.
             var currentTutorialHouse = BinaryPrimitives.ReadInt16LittleEndian(ngbhBytes.AsSpan(12, 2));
             if (isTutorialLot)
             {

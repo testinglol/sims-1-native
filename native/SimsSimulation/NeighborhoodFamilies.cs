@@ -3,11 +3,8 @@ using SimsEngine.Simulation;
 
 namespace SimsSimulation;
 
-/// <summary>The neighborhood's FAMI records as Mac Neighborhood keeps them, keyed by Family +0x10c (the FAMI chunk id,
-/// stored by Family::LoadFamily). The active household is the record <see cref="FamilyBudget"/> holds, so a
-/// removal from it also reaches the budget, the save, the active-person vector used by GenericSimsCall, and the
-/// active-family member keys that <c>UpdateInstanceVisitorTypes</c> tests (Family::TestMember). Other changed records
-/// are kept for the save.</summary>
+/// <summary>Maintains neighborhood family records indexed by chunk ID, synchronizing active household
+/// membership and tracking modified records for saving.</summary>
 internal sealed class NeighborhoodFamilies(SimulationWorld world, IffFile? neighborhood, ushort? activeChunkId)
     : INeighborhoodFamilies
 {
@@ -15,7 +12,6 @@ internal sealed class NeighborhoodFamilies(SimulationWorld world, IffFile? neigh
     private readonly Dictionary<ushort, Family> changed = [];
     private readonly Dictionary<ushort, Family> loaded = [];
 
-    /// <summary>The non-active records changed since load, to write back with the neighborhood.</summary>
     public IReadOnlyDictionary<ushort, Family> Changed => changed;
 
     public bool HasMember(short familyNumber, int guid) => Find(familyNumber)?.Members.Contains(unchecked((uint)guid)) == true;
@@ -67,7 +63,6 @@ internal sealed class NeighborhoodFamilies(SimulationWorld world, IffFile? neigh
         if (id == activeChunkId && world.FamilyBudget is FamilyBudget budget)
         {
             budget.ActiveFamily = family;
-            // Family::TestMember reads the active family's +0x12c member vector.
             world.NeighborInteractionManagerTypeKeys.Clear();
             world.NeighborInteractionManagerTypeKeys.AddRange(family.Members.Select(member => unchecked((int)member)));
         }

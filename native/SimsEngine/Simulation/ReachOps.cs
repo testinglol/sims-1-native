@@ -2,8 +2,6 @@ using SimsEngine.Formats;
 
 namespace SimsEngine.Simulation;
 
-/// <summary>The avatar and object calls Reach/Put (FUN_0045cb26) makes: the legacy <see cref="ISimulationHost"/> supplies them
-/// when one is attached, <see cref="ReachOps"/> otherwise.</summary>
 internal interface IReachOps
 {
     (XObject? Holder, int Value) GrabHolder(XObject target);
@@ -34,14 +32,11 @@ internal sealed class HostReachOps(ISimulationHost host) : IReachOps
     public void Place(XObject target, ObjectPosition at, XObject who, int flag) => host.Place(target, at, who, flag);
 }
 
-/// <summary>Reach/Put without a legacy host, after the Mac <c>cXPerson::TryReach</c>, <c>SAnimator</c> reach calls,
-/// <c>cXPerson::TryGetReachInfo</c>, <c>cXObject::GetSlotHeight</c> and <c>GetReachSkill</c>, which agree with Sims.exe
-/// FUN_0045cb26, FUN_00592602 and FUN_004340f2. The reach clip is the Global.iff STR# 154 (adult) or 155 (child) entry of the
-/// reach index; the primary animation channel plays it. Grab and Put use the same placement check and action as the Grab and
-/// Drop Onto primitives (vtable +0x54 and +0x58 with the other object and slot argument).</summary>
+/// <summary>Handles reach and put operations, selecting animation clips from Global.iff string tables 154
+/// for adults or 155 for children based on target slot height.</summary>
 internal sealed class ReachOps(SimulationWorld world, TreeStack? stack) : IReachOps
 {
-    // 1 / (sqrt(6) + sqrt(6)): FUN_00454f69's factor (DAT_00667280 over twice the root of DAT_00666dc0).
+    // Projection scaling factor: 1 / (2 * sqrt(6)).
     private static readonly float SlotFactor = (float)(1.0 / (Math.Sqrt(6.0) + Math.Sqrt(6.0)));
 
     public (XObject? Holder, int Value) GrabHolder(XObject target)
@@ -70,22 +65,18 @@ internal sealed class ReachOps(SimulationWorld world, TreeStack? stack) : IReach
     {
         var index = ReachIndex(position, me[PersonData.Sitting] == 1);
         if (index == -1) return false;
-        // GetReachSkill: age 17 and below (and a negative word) read the child set.
+        // Ages 17 and below use child reach animations.
         var age = me[PersonData.PersonAge];
         var child = age <= 17;
         if (!world.ReachAvatarAnimationTable.TryGetValue((child, index), out var clip)) return false;
-        // StartReachAnimation erases SAnimator +0x2c before attempting StartPractice
-        // (SAnimator.s 0x10356664–0x103566A0).
         me.PendingAnimationEvents.Clear();
         me.AnimationPlayback = new AvatarAnimationPlayback(clip, false, false, startedAtMils: me.AnimatorMilliseconds);
         me.AnimatorCurrentSkill = -1;
-        // StartReachAnimation clears SAnimator +0x98 and +0x188 only after StartSkill succeeds
-        // (SAnimator.s 0x103566A4–0x103566C8).
         me.AnimatorControlState = 0;
         return true;
     }
 
-    // SAnimator::FindReachAnimationIndex: the animation bands by reach position, plus one for a seated Sim.
+    // Selects reach animation band by target height, offset for seated Sims.
     internal static int ReachIndex(float position, bool sitting)
     {
         int index;

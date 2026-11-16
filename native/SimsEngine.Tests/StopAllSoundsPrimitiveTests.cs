@@ -5,7 +5,6 @@ namespace SimsEngine.Tests;
 
 public sealed class StopAllSoundsPrimitiveTests
 {
-    // Operand: word 0 names the owner (0 the running object, otherwise the stack object).
     private static byte[] Operand(short word0) => [(byte)word0, (byte)(word0 >> 8), 0, 0];
 
     [Fact]

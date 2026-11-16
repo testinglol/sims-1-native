@@ -37,7 +37,7 @@ public sealed class CharacterSearchPathTests
         File.WriteAllText(full, text);
     }
 
-    // FUN_00413d0e sets the House Party edition bit from these two files; the pack folders are searched only when it is set.
+    // House Party character directories are searched only when the expansion edition flag is active.
     private static void MarkHousePartyInstalled(string game)
     {
         Write(game, @"ExpansionShared\Sound\houseparty.hot", "");
@@ -55,7 +55,8 @@ public sealed class CharacterSearchPathTests
             Write(game, @"GameData\Skins\B001.cmx", "base");
             Write(game, @"GameData\cmx2\B002.cmx", "cmx2");
             Write(game, @"GameData\cmxpreview\B003.cmx", "preview");
-            // House Party keeps its folders as entry folders of the pack's .far, and one loose Skins folder.
+            // House Party stores character assets inside the expansion archive and within a loose Skins
+            // folder.
             MarkHousePartyInstalled(game);
             Directory.CreateDirectory(Path.Combine(game, "ExpansionPack2"));
             File.WriteAllBytes(Path.Combine(game, "ExpansionPack2", "ExpansionPack2.far"),
@@ -71,7 +72,7 @@ public sealed class CharacterSearchPathTests
             Assert.Equal("loose", Text(path.Find("ct-cost.cmx")!));
             Assert.Null(path.Find("X.cmx"));
             Assert.Equal(5, path.OfExtension(".cmx").Count());
-            // The Complete Collection executable always sets edition bit 0x80, so ExpansionShared is on the path.
+            // Edition flag 0x80 adds the shared expansion skins directory to the character search path.
             Write(game, @"ExpansionShared\Skins\S.cmx", "shared");
             Assert.Equal(@"ExpansionShared\Skins", CharacterSearchPath.Skins(game).Find("S.cmx")!.Folder);
         }

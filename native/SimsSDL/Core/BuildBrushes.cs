@@ -124,10 +124,8 @@ public sealed class GroundTilePicker
     }
 }
 
-/// <summary>
-/// The tiles the build tools may change on the viewed level, from the host state's <c>buildable</c> mask
-/// (row by row, <see cref="Width"/> tiles to a row). A vertex counts as buildable when every tile around it is.
-/// </summary>
+/// <summary>Defines the buildable tile mask for the current level. A vertex is buildable only when all
+/// adjacent tiles surrounding it are buildable.</summary>
 public sealed class BuildableArea : IEquatable<BuildableArea>
 {
     private readonly bool[] _tiles;
@@ -152,10 +150,6 @@ public sealed class BuildableArea : IEquatable<BuildableArea>
         return new BuildableArea(width, height, [.. tiles]);
     }
 
-    /// <summary>
-    /// Reads <c>width</c>, <c>height</c>, and <c>buildable</c> from a JSON state dictionary;
-    /// returns <c>null</c> when the state has no usable mask.
-    /// </summary>
     public static BuildableArea? Create(IReadOnlyDictionary<string, JsonElement> state)
     {
         if (!state.TryGetValue("width", out JsonElement widthEl) ||
@@ -190,10 +184,6 @@ public sealed class BuildableArea : IEquatable<BuildableArea>
         return Create(width, height, tiles);
     }
 
-    /// <summary>
-    /// Reads <c>width</c>, <c>height</c>, and <c>buildable</c> from an untyped host state map;
-    /// returns <c>null</c> when the state has no usable mask.
-    /// </summary>
     public static BuildableArea? Create(IReadOnlyDictionary<string, object?> state)
     {
         if (!TryGetInt(state, "width", out int width) || !TryGetInt(state, "height", out int height))
@@ -981,9 +971,8 @@ public sealed record BuildRoomFill
     public int Level { get; }
     public ushort Pattern { get; }
 
-    /// <summary>
-    /// The picked quadrant for a floor fill on a diagonal room divider; zero means the tile center.
-    /// </summary>
+    /// <summary>Specifies the target half-tile quadrant for diagonal floor fills, where zero indicates the
+    /// entire tile center.</summary>
     public int Half { get; }
 
     private BuildRoomFill(string command, int x, int y, int level, ushort pattern, int half)

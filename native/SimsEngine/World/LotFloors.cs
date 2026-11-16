@@ -2,9 +2,8 @@ using SimsEngine.Formats;
 
 namespace SimsEngine.World;
 
-/// <summary>One level's floor patterns, [x, y] as the lot stores them. Level 1 reads Arry 11 (16-bit patterns) when the
-/// lot has it and Arry 1 (one byte) otherwise, level 2 reads 111 / 101, as FUN_0047870b does; edits are written back to
-/// the array that was read, promoting native edits to the 16-bit plane when necessary.</summary>
+/// <summary>Stores floor patterns for a lot level. Level 1 reads 16-bit pattern data from Arry 11 when
+/// present, falling back to 8-bit Arry 1; level 2 reads Arry 111 or Arry 101.</summary>
 public sealed class LotFloors
 {
     public const int Size = 64;
@@ -47,9 +46,6 @@ public sealed class LotFloors
 
     public IffFile WriteTo(IffFile lot)
     {
-        // FUN_0047870b expands legacy byte floors into words; modern floor planes are Arry 11/111.
-        // Native saves retain the legacy chunks/SIMI version and overlay only this word plane. Upgrading an entire
-        // Sims.exe save also requires modern wall planes and FLRm remapping; this is a native storage contract.
         var elementSize = shape.ElementSize == 2 || patterns.Any(pattern => pattern > byte.MaxValue) ? 2 : 1;
         var targetId = elementSize == 2 ? (ushort)(Level == 1 ? 11 : 111) : chunkId;
         var data = new byte[Size * Size * elementSize];

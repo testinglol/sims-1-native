@@ -75,9 +75,6 @@ public sealed class StairAndRouteAnimationParityTests
         var startTileY = bella.Position.Y >> 4;
         var startRoom = world.LotRoomMaps[1].RoomAt(startTileX, startTileY);
 
-        // Find a genuinely clear straight walkable corridor in the same room at least 3 tiles away
-        // (every intermediate tile walkable so the pathfinder builds a straight path rather than a U-detour around furniture),
-        // then face Bella 180 degrees opposite that target before starting Go Here.
         (int X, int Y)? chosen = null;
         for (var radius = 5; radius >= 3 && chosen is null; radius--)
         {
@@ -152,7 +149,7 @@ public sealed class StairAndRouteAnimationParityTests
         Assert.True(arrived, $"Bella did not finish walking to ({goalTileX},{goalTileY}) (pos={bella.Position}, routeResult={bella[PersonData.RouteResult]})");
         Assert.Equal(0, bella[PersonData.RouteResult]);
         Assert.True(turn180Starts <= 1, $"Expected standing-turn-180 to play at most once, but started {turn180Starts} times (360 spin regression).");
-        // 8.0 direction units = 360 degrees; a 180-degree turn + minor path steering must stay well below 6.5 units.
+        // Rotation is measured in octant units where 8.0 units represent a full 360-degree turn.
         Assert.True(cumulativeRootTurn < 6.5f, $"AnimatorRootDirection accumulated {cumulativeRootTurn:F2} octants (>= 292 deg): {string.Join(" | ", turnLog)}");
     }
 
@@ -182,7 +179,6 @@ public sealed class StairAndRouteAnimationParityTests
             name.Contains("Stair", StringComparison.OrdinalIgnoreCase) &&
             name.Contains("Hi", StringComparison.OrdinalIgnoreCase));
 
-        // Pick a clear upstairs tile on level 2 in the upstairs stair landing room.
         (int X, int Y)? upstairsTile = null;
         var upstairsRoom = world.LotRoomMaps[2].RoomAt(hiPad.Position.X >> 4, hiPad.Position.Y >> 4);
         for (var tx = 10; tx < 54 && upstairsTile is null; tx++)
@@ -239,7 +235,6 @@ public sealed class StairAndRouteAnimationParityTests
         Assert.Equal(0, bella[PersonData.RouteResult]);
         Assert.Equal(0, bella[PersonData.WalkingUpStairs]);
 
-        // Now route Bella back downstairs from floor 2 -> floor 1 and verify a2o-stair-descend.
         Assert.True(EnqueueGoHere(world, bella, floor1StartTile.X, floor1StartTile.Y, 1));
 
         var sawStairDescend = false;

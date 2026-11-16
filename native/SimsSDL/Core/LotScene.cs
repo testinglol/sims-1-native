@@ -32,10 +32,8 @@ public sealed record LotScene
         public string? Encoding { get; init; }
     }
 
-    /// <summary>
-    /// A sound owner's tile and altitude in pixels, from the host. Listed for every owner with a sound playing, so one
-    /// above or below the view (which has no sprite) can still be placed. Old scenes omit the list.
-    /// </summary>
+    /// <summary>Tracks a sound source's tile coordinate and altitude in pixels, allowing positional audio
+    /// for off-screen sources without active sprites.</summary>
     public sealed record SoundSource
     {
         [JsonConstructor]
@@ -105,9 +103,8 @@ public sealed record LotScene
         [JsonPropertyName("side")]
         public int? Side { get; init; }
 
-        /// <summary>
-        /// Scene-picker cardinal direction (0...3) or explicit diagonal bit (0x10 / 0x20) as the Sims.exe Arry wall flag.
-        /// </summary>
+        /// <summary>Maps the scene picker direction to an <c>Arry</c> wall edge flag, representing cardinal
+        /// directions (0–3) or diagonal boundaries (0x10 or 0x20).</summary>
         [JsonIgnore]
         public int? EdgeBit =>
             Edge is 1 or 2 or 4 or 8 or 16 or 32
@@ -177,11 +174,8 @@ public sealed record LotScene
         public required bool Down { get; init; }
     }
 
-    /// <summary>
-    /// The same sprite drawn from near- or far-zoom art. <see cref="X"/> and <see cref="Y"/> are offsets from the
-    /// medium sprite's corner and all four measures are in scene (medium-zoom) units, so near art carries two texels
-    /// per unit and far art half of one.
-    /// </summary>
+    /// <summary>Represents alternate-zoom sprite offsets and dimensions in medium-zoom units, where near
+    /// zoom provides two texels per unit and far zoom provides half a texel.</summary>
     public sealed record ZoomImage
     {
         [JsonConstructor]
@@ -243,22 +237,17 @@ public sealed record LotScene
         [JsonPropertyName("objectID")]
         public int? ObjectID { get; init; }
 
-        /// <summary>
-        /// OBJD field 57, the object's directional floor-shadow source value; absent for older scene payloads.
-        /// </summary>
+        /// <summary>OBJD field 57, specifying the object's directional floor-shadow type index.</summary>
         [JsonPropertyName("shadow")]
         public int? Shadow { get; init; }
 
-        /// <summary>
-        /// Signed OBJD field 79; Sims.exe uses this to adjust the shadow lookup palette.
-        /// </summary>
+        /// <summary>Signed OBJD field 79, specifying a palette brightness adjustment for the object's
+        /// shadow.</summary>
         [JsonPropertyName("shadowBrightness")]
         public int? ShadowBrightness { get; init; }
 
-        /// <summary>
-        /// A Mac FloorShadowMgr surface cached from floors.iff for ShadowID 0 or 16, in the same zoom-local
-        /// coordinates as the object sprite. Other IDs require the engine's generated lookup surface.
-        /// </summary>
+        /// <summary>Pre-rendered floor shadow surface loaded from <c>floors.iff</c> for shadow IDs 0 and
+        /// 16; other IDs use dynamic lookup surfaces.</summary>
         [JsonPropertyName("floorShadow")]
         public ZoomImage? FloorShadow { get; init; }
 
@@ -303,6 +292,9 @@ public sealed record LotScene
 
         [JsonPropertyName("far")]
         public ZoomImage? Far { get; init; }
+
+        [JsonPropertyName("hideAtFarZoom")]
+        public bool? HideAtFarZoom { get; init; }
 
         public ZoomImage? Image(LotZoom zoom) => zoom switch
         {
@@ -519,15 +511,12 @@ public sealed record LotScene
         [JsonPropertyName("room")]
         public int? Room { get; init; }
 
-        /// <summary>
-        /// OBJD field 57 for an avatar mesh; absent for older scene payloads and non-object meshes.
-        /// </summary>
+        /// <summary>OBJD field 57, specifying the directional floor-shadow type index for an avatar mesh.</summary>
         [JsonPropertyName("shadow")]
         public int? Shadow { get; init; }
 
-        /// <summary>
-        /// Signed OBJD field 79 for the avatar object's shadow palette adjustment.
-        /// </summary>
+        /// <summary>Signed OBJD field 79, specifying the shadow palette brightness adjustment for an avatar
+        /// mesh.</summary>
         [JsonPropertyName("shadowBrightness")]
         public int? ShadowBrightness { get; init; }
 
@@ -573,9 +562,11 @@ public sealed record LotScene
         [JsonPropertyName("farTexture")]
         public int? FarTexture { get; init; }
 
-        /// <summary>
-        /// The floor texture for a zoom; the UVs span one tile at every zoom, so only the texture changes.
-        /// </summary>
+        [JsonPropertyName("tint")]
+        public IReadOnlyList<float>? Tint { get; init; }
+
+        /// <summary>Floor texture for the given zoom level; UV coordinates span exactly one tile at every
+        /// zoom.</summary>
         public int TextureFor(LotZoom zoom) => zoom switch
         {
             LotZoom.Near => NearTexture ?? Texture,
@@ -634,9 +625,8 @@ public sealed record LotScene
         [JsonPropertyName("b")]
         public required byte B { get; init; }
 
-        /// <summary>
-        /// The darkest shade of the vertex's grass colour row and its grass state (0 green, 255 brown); absent in older scenes.
-        /// </summary>
+        /// <summary>Encodes the darkest shade of the terrain vertex grass palette and its wear state (0 for
+        /// green, 255 for brown).</summary>
         [JsonPropertyName("dr")]
         public byte? DR { get; init; }
 
@@ -650,10 +640,8 @@ public sealed record LotScene
         public byte? Grass { get; init; }
     }
 
-    /// <summary>
-    /// Physical overhead architecture, independent of roof visibility. RGBA8 in source lot coordinates:
-    /// story coverage bits, biased terrain altitude high/low bytes (1/256 tile), valid cell. Older hosts omit this.
-    /// </summary>
+    /// <summary>Overhead architectural map encoded in RGBA8 format: story coverage bitmask, high and low
+    /// bytes of biased terrain altitude (in 1/256 tile units), and cell validity.</summary>
     public sealed record OverheadMapData
     {
         [JsonConstructor]
@@ -712,10 +700,8 @@ public sealed record LotScene
         public required float Depth { get; init; }
     }
 
-    /// <summary>
-    /// Leading textures, sprites and meshes, and the static architecture, already validated in an earlier snapshot.
-    /// An animation frame keeps those and appends its own, so only the appended items need checking again.
-    /// </summary>
+    /// <summary>Tracks validated counts of static architecture, textures, sprites, and meshes so animation
+    /// frames only validate newly appended entries.</summary>
     internal readonly record struct ValidatedState(int Textures = 0, int Sprites = 0, int Meshes = 0, bool Architecture = false)
     {
         public static readonly ValidatedState None = new();
@@ -766,9 +752,8 @@ public sealed record LotScene
     [JsonPropertyName("viewLevel")]
     public int? ViewLevel { get; init; }
 
-    /// <summary>
-    /// The scene's origin in the host's projection (the sprites are shifted by it), for placing sound owners.
-    /// </summary>
+    /// <summary>Specifies the projection origin offset applied to scene sprites, used to align audio source
+    /// positions.</summary>
     [JsonPropertyName("originX")]
     public float? OriginX { get; init; }
 
@@ -827,6 +812,17 @@ public sealed record LotScene
 
     public static (LotScene Scene, List<byte[]> Pixels) Load(string path)
     {
+        if (SimsSimulation.InMemorySessionAssets.TryGetPayload<SimsSimulation.SceneExporter.ExportedLotScene>(path, out var exported)
+            && exported is not null)
+        {
+            var directScene = FromExported(exported);
+            directScene.Validate();
+            string directory = Path.GetDirectoryName(Path.GetFullPath(path))
+                ?? throw new ContentError("Lot scene path has no parent directory");
+            string memoryRoot = SimsSimulation.InMemorySessionAssets.Canonicalize(directory);
+            return (directScene, ReadPixels(directScene.Textures, memoryRoot));
+        }
+
         byte[] bytes;
         string root;
         if (SimsSimulation.InMemorySessionAssets.TryReadBytes(path, out var inMemoryBytes))
@@ -858,6 +854,240 @@ public sealed record LotScene
         var pixels = ReadPixels(scene.Textures, root);
         return (scene, pixels);
     }
+
+    internal static LotScene FromExported(SimsSimulation.SceneExporter.ExportedLotScene payload)
+    {
+        var diagonals = new byte[payload.FloorDiagonals.Length];
+        for (int i = 0; i < payload.FloorDiagonals.Length; i++)
+            diagonals[i] = (byte)payload.FloorDiagonals[i];
+
+        var sounds = new SoundSource[payload.SoundSources.Length];
+        for (int i = 0; i < payload.SoundSources.Length; i++)
+        {
+            var s = payload.SoundSources[i];
+            sounds[i] = new SoundSource(s.ObjectID, s.Level, s.X, s.Y, s.Z);
+        }
+
+        int terrainCount = payload.Terrain.Length;
+        var placementVertices = new TerrainVertex[terrainCount];
+        var terrainVertices = new TerrainVertex[terrainCount];
+        int lotSize = payload.LotSize;
+        for (int i = 0; i < terrainCount; i++)
+        {
+            var vertex = payload.Terrain[i];
+            placementVertices[i] = new TerrainVertex(
+                vertex.X, vertex.Y - payload.PlacementLift,
+                (byte)vertex.R, (byte)vertex.G, (byte)vertex.B,
+                (byte)vertex.Dr, (byte)vertex.Dg, (byte)vertex.Db, (byte)vertex.Grass);
+
+            int tileIndex = i / 6;
+            int tx = tileIndex % lotSize;
+            int ty = tileIndex / lotSize;
+            var v = (tx == 0 || tx == lotSize - 1 || ty == 0 || ty == lotSize - 1)
+                ? payload.Terrain[tileIndex * 6]
+                : vertex;
+            terrainVertices[i] = new TerrainVertex(
+                v.X, v.Y,
+                (byte)v.R, (byte)v.G, (byte)v.B,
+                (byte)v.Dr, (byte)v.Dg, (byte)v.Db, (byte)v.Grass);
+        }
+
+        var meshes = new Mesh[payload.Meshes.Length];
+        for (int i = 0; i < payload.Meshes.Length; i++)
+        {
+            var m = payload.Meshes[i];
+            meshes[i] = new Mesh
+            {
+                Texture = m.Texture,
+                ObjectID = m.ObjectID,
+                Depth = m.Depth,
+                Vertices = ToMeshVertices(m.Vertices),
+                Level = m.Level,
+                Room = m.Room,
+                Unlit = m.Unlit,
+                Floor = m.Floor is { } floor
+                    ? new FloorSurface(
+                        floor.X, floor.Y, floor.Pattern, floor.Half,
+                        floor.Water is { } water
+                            ? new WaterSurface(water.Adjacency, water.Sprite, water.Corners)
+                            : null,
+                        floor.Level)
+                    : null,
+                NearTexture = m.NearTexture,
+                FarTexture = m.FarTexture,
+                Layer = m.Layer,
+                Roof = m.Roof is { } roof
+                    ? new RoofSurface(roof.Style, roof.Pitch, roof.File, roof.Part)
+                    : null,
+                Shadow = m.Shadow,
+                ShadowBrightness = m.ShadowBrightness,
+                FloorShadow = ToZoomImage(m.FloorShadow),
+                FloorShadowNear = ToZoomImage(m.FloorShadowNear),
+                FloorShadowFar = ToZoomImage(m.FloorShadowFar),
+                Tint = m.Tint
+            };
+        }
+
+        return new LotScene
+        {
+            SchemaVersion = 1,
+            House = payload.House,
+            Width = payload.Width,
+            Height = payload.Height,
+            LotWidth = payload.LotSize,
+            LotHeight = payload.LotSize,
+            FloorDiagonals = diagonals,
+            TerrainHeights = payload.TerrainHeights,
+            CameraOrientation = payload.CameraOrientation,
+            OriginX = payload.OriginX,
+            OriginY = payload.OriginY,
+            WallMode = payload.WallMode,
+            RoofsVisible = payload.RoofsVisible,
+            ViewLevel = payload.ViewLevel,
+            Stories = payload.Stories,
+            Lighting = ToLighting(payload.Lighting),
+            Textures = ToTextures(payload.Textures),
+            Sprites = ToSprites(payload.Sprites),
+            SoundSources = sounds,
+            PlacementVertices = placementVertices,
+            TerrainVertices = terrainVertices,
+            Meshes = meshes,
+            CensorRects = ToCensorRects(payload.CensorRects),
+            Limitations = payload.Limitations
+        };
+    }
+
+    internal static SceneLighting? ToLighting(global::SceneLighting.State? state)
+    {
+        if (state is null)
+            return null;
+
+        var rooms = new SceneLighting.Room[state.Rooms.Length];
+        for (int i = 0; i < state.Rooms.Length; i++)
+        {
+            var r = state.Rooms[i];
+            rooms[i] = new SceneLighting.Room(r.Id, r.Outside, r.Ambient, r.Daylight, r.R, r.G, r.B);
+        }
+
+        SceneLighting.Light[]? lights = null;
+        if (state.Lights is { } sourceLights)
+        {
+            lights = new SceneLighting.Light[sourceLights.Length];
+            for (int i = 0; i < sourceLights.Length; i++)
+            {
+                var l = sourceLights[i];
+                lights[i] = new SceneLighting.Light(l.X, l.Y, l.Toward, l.Strength, l.Level);
+            }
+        }
+
+        SceneLighting.Window[]? windows = null;
+        if (state.Windows is { } sourceWindows)
+        {
+            windows = new SceneLighting.Window[sourceWindows.Length];
+            for (int i = 0; i < sourceWindows.Length; i++)
+            {
+                var w = sourceWindows[i];
+                windows[i] = new SceneLighting.Window(w.X, w.Y, w.Level);
+            }
+        }
+
+        return new SceneLighting(
+            new SceneLighting.RGB(state.Outside.R, state.Outside.G, state.Outside.B),
+            rooms,
+            state.Minutes,
+            state.Phase,
+            lights,
+            windows,
+            new SceneLighting.RGB(state.Backdrop.R, state.Backdrop.G, state.Backdrop.B));
+    }
+
+    internal static Texture[] ToTextures(SimsSimulation.SceneExporter.Texture[] source)
+    {
+        if (source.Length == 0)
+            return Array.Empty<Texture>();
+        var result = new Texture[source.Length];
+        for (int i = 0; i < source.Length; i++)
+        {
+            var t = source[i];
+            result[i] = new Texture(t.File, t.Width, t.Height, t.Encoding);
+        }
+        return result;
+    }
+
+    internal static Sprite[] ToSprites(SimsSimulation.SceneExporter.SceneSprite[] source)
+    {
+        if (source.Length == 0)
+            return Array.Empty<Sprite>();
+        var result = new Sprite[source.Length];
+        for (int i = 0; i < source.Length; i++)
+        {
+            var s = source[i];
+            result[i] = new Sprite
+            {
+                Texture = s.Texture,
+                X = s.X,
+                Y = s.Y,
+                Width = s.Width,
+                Height = s.Height,
+                Flip = s.Flip,
+                ObjectID = s.ObjectID == 0 ? null : s.ObjectID,
+                Depth = s.Depth,
+                Layer = s.Layer,
+                DepthTexture = s.DepthTexture,
+                DepthNear = s.DepthNear,
+                DepthFar = s.DepthFar,
+                Wall = s.Wall is { } w
+                    ? new WallSide(w.X, w.Y, w.Level, w.Direction, w.Cut, w.Edge, w.Side)
+                    : null,
+                Level = s.Level,
+                Room = s.Room,
+                Junction = s.Junction is { } j
+                    ? new WallJunction(j.X, j.Y, j.Level, j.Flags, j.Frame, j.Down)
+                    : null,
+                ArchitectureDepth = s.ArchitectureDepth is { } d
+                    ? new WallDepth(d.X, d.Y, d.Level, d.Configuration)
+                    : null,
+                Near = ToZoomImage(s.Near),
+                Far = ToZoomImage(s.Far),
+                HideAtFarZoom = s.HideAtFarZoom,
+                Shadow = s.Shadow,
+                ShadowBrightness = s.ShadowBrightness,
+                FloorShadow = ToZoomImage(s.FloorShadow),
+                FloorShadowNear = ToZoomImage(s.FloorShadowNear),
+                FloorShadowFar = ToZoomImage(s.FloorShadowFar)
+            };
+        }
+        return result;
+    }
+
+    internal static CensorRect[] ToCensorRects(SimsSimulation.SceneExporter.CensorRect[] source)
+    {
+        if (source.Length == 0)
+            return Array.Empty<CensorRect>();
+        var result = new CensorRect[source.Length];
+        for (int i = 0; i < source.Length; i++)
+        {
+            var r = source[i];
+            result[i] = new CensorRect(r.X, r.Y, r.Width, r.Height, r.Depth);
+        }
+        return result;
+    }
+
+    internal static MeshVertex[] ToMeshVertices(SimsSimulation.SceneExporter.Vertex[] source, float shiftX = 0f, float shiftY = 0f)
+    {
+        if (source.Length == 0)
+            return Array.Empty<MeshVertex>();
+        var result = new MeshVertex[source.Length];
+        for (int i = 0; i < source.Length; i++)
+        {
+            var v = source[i];
+            result[i] = new MeshVertex(v.X + shiftX, v.Y + shiftY, v.Z, v.U, v.V, v.Nx, v.Ny, v.Nz);
+        }
+        return result;
+    }
+
+    internal static ZoomImage? ToZoomImage(SimsSimulation.SceneExporter.ZoomImage? z) =>
+        z is null ? null : new ZoomImage(z.Texture, z.X, z.Y, z.Width, z.Height, z.DepthTexture);
 
     public static List<byte[]> ReadPixels(IReadOnlyList<Texture> textures, string rootDirectory)
     {
@@ -899,39 +1129,41 @@ public sealed record LotScene
                     throw new ContentError("Lot texture escapes scene directory");
                 data = File.ReadAllBytes(file);
             }
-            switch (texture.Encoding ?? "rgba")
-            {
-                case "rgba":
-                case "depth8":
-                    if (data.Length != expectedSize)
-                        throw new ContentError($"Truncated lot texture: {texture.File}");
-                    result.Add(data);
-                    break;
-                case "png":
-                    result.Add(new PNGImage(data, texture.Width, texture.Height).Rgba);
-                    break;
-                case "bmp":
-                {
-                    var image = new SimsBitmap(data);
-                    if (image.Width != texture.Width || image.Height != texture.Height)
-                        throw new ContentError("BMP dimensions differ from scene metadata");
-                    result.Add(image.Rgba);
-                    break;
-                }
-                case "tga":
-                {
-                    var image = new SimsTarga(data);
-                    if (image.Width != texture.Width || image.Height != texture.Height)
-                        throw new ContentError("TGA dimensions differ from scene metadata");
-                    result.Add(image.Rgba);
-                    break;
-                }
-                default:
-                    throw new ContentError("Unsupported lot texture encoding");
-            }
+            result.Add(DecodeTextureBytes(texture, data));
         }
 
         return result;
+    }
+
+    internal static byte[] DecodeTextureBytes(Texture texture, byte[] data)
+    {
+        long expectedSize = (long)texture.Width * texture.Height * (texture.Encoding == "depth8" ? 1 : 4);
+        switch (texture.Encoding ?? "rgba")
+        {
+            case "rgba":
+            case "depth8":
+                if (data.Length != expectedSize)
+                    throw new ContentError($"Truncated lot texture: {texture.File}");
+                return data;
+            case "png":
+                return new PNGImage(data, texture.Width, texture.Height).Rgba;
+            case "bmp":
+            {
+                var image = new SimsBitmap(data);
+                if (image.Width != texture.Width || image.Height != texture.Height)
+                    throw new ContentError("BMP dimensions differ from scene metadata");
+                return image.Rgba;
+            }
+            case "tga":
+            {
+                var image = new SimsTarga(data);
+                if (image.Width != texture.Width || image.Height != texture.Height)
+                    throw new ContentError("TGA dimensions differ from scene metadata");
+                return image.Rgba;
+            }
+            default:
+                throw new ContentError("Unsupported lot texture encoding");
+        }
     }
 
     public void Validate() => Validate(ValidatedState.None);
@@ -1310,6 +1542,12 @@ public sealed record LotScene
 
                 ValidateZoomFloorTexture(mesh.Floor is not null, mesh.NearTexture);
                 ValidateZoomFloorTexture(mesh.Floor is not null, mesh.FarTexture);
+
+                if (mesh.Tint is { } meshTint)
+                {
+                    if (meshTint.Count != 4 || meshTint.Any(c => !float.IsFinite(c) || c < 0f || c > 1f))
+                        throw new ContentError("Invalid mesh material tint");
+                }
 
                 float uvLimit = mesh.Roof is null ? 16f : 4096f;
                 foreach (var vertex in mesh.Vertices)

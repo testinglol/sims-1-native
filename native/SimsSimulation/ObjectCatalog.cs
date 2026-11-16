@@ -9,14 +9,9 @@ namespace SimsSimulation;
 internal sealed record ObjectCatalogEntry(ObjectEntry Source, uint Guid, int Categories, int Price,
     string Name, string Description, int RoomSort = 0, int FunctionSubsort = 0);
 
-/// <summary>
-/// The native protocol's residential catalog projection. Sims.exe's FUN_004fe37e catalog report reads
-/// the OBJD catalog name, FunctionFlags, RoomFlags and lot-type subsorts; it explicitly admits linked group roots
-/// (MasterId nonzero, SubIndex -1), so a native cXMTObject root is catalogable even though its physical children are not.
-/// The House05 chair (25B82D98) confirms
-/// category flag 1, room flags 16, zero FunctionSubsort and price $150 in the installed DiningChairs resource;
-/// zero remains a valid residential entry.
-/// </summary>
+/// <summary>Residential catalog filtering evaluates object definition function flags, room flags, and lot
+/// subsorts. Multi-tile groups are cataloged via their root definition (having a nonzero master ID and
+/// sub-index -1) while physical child tiles are omitted.</summary>
 internal static class ObjectCatalog
 {
     public static bool TryGetEntry(ObjectEntry source, byte language, out ObjectCatalogEntry? item)
@@ -27,8 +22,9 @@ internal static class ObjectCatalog
         var subIndex = definition[ObjdField.SubIndex];
         var objectClass = LotObjects.ClassOf(definition);
         var buildMode = definition[ObjdField.RoomSort] == 0 ? definition[ObjdField.BuildModeType] : 0;
-        // Build-mode tools list portals, multi-tile roots, columns, and pool accessories by BuildModeType
-        // (1 door, 2 window, 3 stairs, 4 plants, 5 fireplace, 6 column, 7 pool accessory) when RoomSort is 0; catalog category is BuildModeType + 7 (8 through 14).
+        // When an object has a room sort value of 0, build tools categorize portals, multi-tile roots,
+        // columns, and pool accessories by BuildModeType (1 through 7), mapping to catalog categories 8
+        // through 14.
         var buildTool = buildMode is >= 1 and <= 7;
         if (definition[ObjdField.Disabled] != 0 ||
             objectClass is not (ObjectClass.Object or ObjectClass.MultiTileObject or ObjectClass.Portal) ||
@@ -70,18 +66,13 @@ internal static class ObjectCatalog
             .ToArray();
     }
 
-    /// <summary>FUN_005072f5's room mode: button 0 to 7 in Res_CPanel.h order (Living 158, Dining, Bedroom, Study,
-    /// Kitchen, Bathroom, Outside, Misc 165) selects this RoomSort bit. The installed catalog confirms it: bit 1 lists
-    /// coffee makers and toasters, 2 alarm clocks and nightstands, 4 toilets, 8 end tables, 0x10 garden items,
-    /// 0x20 holiday dinners, 0x40 plants and trash cans, 0x80 desks and bookcases.</summary>
+    /// <summary>Maps catalog room filter buttons (Living, Dining, Bedroom, Study, Kitchen, Bathroom,
+    /// Outside, Misc) to their corresponding object definition RoomSort bitmasks.</summary>
     private static readonly int[] RoomMasks = [0x08, 0x20, 0x02, 0x80, 0x01, 0x04, 0x10, 0x40];
-    // FUN_005072f5 mode 1 translates the eight sub-sort buttons (its second switch, on the field at +0xb4) to these OBJD
-    // FunctionSubsort masks; the first switch, on +0xb0, holds the category masks instead.
-    // The final two are the original Other (0x90) and All (0xff) filters; All also includes objects with no subsort.
+    // Maps sub-sort buttons to object FunctionSubsort masks, where 0x90 represents Other and 0xFF
+    // represents All (including items with no subsort).
     private static readonly int[] FunctionSubsortMasks = [0x01, 0x02, 0x04, 0x08, 0x20, 0x40, 0x90, 0xff];
 
-    /// <summary><paramref name="room"/> null browses by function (<paramref name="category"/> is the function category).
-    /// Otherwise it is the room button index and <paramref name="category"/> the function category within that room, or -1 for every function.</summary>
     public static object Page(ObjectRegistry registry, byte language, int category, int offset, int count, string session,
         int? room = null, int? subsort = null, string? game = null)
     {
@@ -102,11 +93,11 @@ internal static class ObjectCatalog
                 : (item.RoomSort & roomMask) != 0 && (category == -1 || (item.Categories & (1 << category)) != 0)))
             .Cast<ObjectCatalogEntry>()
             .OrderBy(item => item.Price)
-            // Mac CatalogSortPred compares Product::price first and Product::name on ties.
             .ThenBy(item => item.Name, StringComparer.Ordinal)
             .ThenBy(item => item.Guid)
             .ToArray();
-        // FUN_00505151 enables a sub-sort button only when the room has an item of that function.
+        // A catalog function button within room view is enabled only when the selected room contains items
+        // matching that function.
         var functionCounts = room is null ? null : new int[8];
         var functionSubsortCounts = room is not null || category is < 0 or > 7 ? null : new int[8];
         if (functionCounts is not null)
@@ -175,8 +166,8 @@ internal static class ObjectCatalog
         return null;
     }
 
-    /// <summary>FUN_005084ca / FUN_00457ba2 / FUN_004578c8..FUN_00457b46: builds the catalog rating lines from
-    /// UIText.iff STR# 160 (0xa0) for OBJD words 0x52..0x58 (Hunger..Room), word 0x59 (Skill bits 0..6), and TTAB flags.</summary>
+    /// <summary>Generates catalog motive and skill rating lines using text strings from resource 160,
+    /// evaluated against object definition motive offsets, skill bits, and interaction table flags.</summary>
     internal static string[] CatalogRatings(ObjectEntry item, IReadOnlyList<string>? strings, byte language = 1,
         BehaviorScope? scope = null, ObjectEntry? masterFallback = null)
     {
@@ -205,9 +196,8 @@ internal static class ObjectCatalog
                 var nonDebug = table.Interactions.Where(entry => (entry.Flags & 0x80) == 0).ToArray();
                 if (nonDebug.Length > 0 && strings.Count >= 20)
                 {
-                    // FUN_005084ca / FUN_005081d5 (0x004751a6..0x00475215, 0x004761a1..0x00476210):
-                    // STR# 160 0-based [14]=adults (0xf), [15]=kids (0x10), [16]=Group Activity (0x11),
-                    // [17]=pets (0x12, FUN_00457a80), [18]=dogs (0x13, FUN_004579a2), [19]=cats (0x14, FUN_00457a11).
+                    // String table 160 indices specify target demographics: 14 for adults, 15 for children,
+                    // 16 for group activities, 17 for pets, 18 for dogs, and 19 for cats.
                     if (nonDebug.All(e => (e.Flags & 0x10) != 0 && (e.Flags & 0x200) == 0 && (e.Flags & 0x400) == 0))
                         lines.Add(strings[14]);
                     else if (nonDebug.All(e => (e.Flags & 0x40) != 0 && (e.Flags & 0x200) == 0 && (e.Flags & 0x400) == 0))
@@ -227,9 +217,8 @@ internal static class ObjectCatalog
         return lines.Where(line => line.Length > 0).ToArray();
     }
 
-    /// <summary>Sims.exe's catalog report resolves the item's CatalogStringsID from its OBJD and the original object
-    /// package stores that catalog bitmap as BMP_ with the same ID. Export the installed bitmap into the native
-    /// session; the SDL catalog already consumes this optional protocol image and applies the game's magenta key.</summary>
+    /// <summary>Resolves an object's catalog icon from the bitmap resource sharing the object definition's
+    /// CatalogStringsID, applying magenta color-key transparency.</summary>
     internal static object? CatalogIcon(ObjectEntry item, string session)
     {
         var masterDef = ResolveMasterDefinition(item.File, item.Definition);
@@ -293,21 +282,16 @@ internal static class ObjectCatalog
         return definition;
     }
 
-    /// <summary>FUN_005084ca / FUN_004cbd1c / FUN_0043856d: renders the catalog popup's 168x127 preview box image
-    /// by choosing the largest zoom (3, 2, or 1) whose DGRP bounds fit inside the 160x119 inner box.</summary>
+    /// <summary>Renders the catalog popup preview image by selecting the highest zoom level (from 3 down to
+    /// 1) whose draw group bounding box fits within the 160x119 inner box.</summary>
     internal static object? CatalogPreview(ObjectEntry item, string session)
     {
         var rendered = RenderedPreview(item);
         return rendered is null ? CatalogIcon(item, session) : StoreImage(rendered, 1, session);
     }
 
-    /// <summary>
-    /// Product::GenerateSpeechIcons calls RenderSpeechShot when its BMP_ cache and the two standard UI backgrounds
-    /// are available. The source screenshot selects the same signed OBJD thumbnail graphic and front-direction + 4
-    /// used by RenderedIcon. This partial fallback fits those DGRP layers over the source's white speech background
-    /// at the medium buffer size consumed by DrawSpriteSlot. It does not reproduce DrawIconic's XViewer-derived
-    /// RenderParam, viewport-based scale selection, or DoIconic render, and it does not modify the object package.
-    /// </summary>
+    /// <summary>Generates an object speech balloon icon by rendering its thumbnail draw group at
+    /// front-direction plus four rotation steps, scaled to the target speech icon dimensions.</summary>
     internal static (int Width, int Height, byte[] Rgba)? GenerateProductSpeechIcon(ObjectEntry item, int size = 16)
     {
         if (item.Definition[ObjdField.Type] != 1 || size is < 1 or > 128) return null;
@@ -329,9 +313,8 @@ internal static class ObjectCatalog
         if (width <= 0 || height <= 0 || size is < 1 or > 128 || rgba.Length != checked(width * height * 4))
             throw new ArgumentException("Invalid speech image dimensions or pixels");
 
-        // SquareOffAndShrink expands the shorter side of the DrawIconic crop before scaling it to the square
-        // speech buffer, and 0049bafe.c:106 blits speech icons with color-key transparency so padding and source
-        // magenta/transparent pixels stay alpha == 0 instead of an opaque white square.
+        // Speech icons preserve color-key transparency during scaling so that background padding and
+        // transparent pixels retain zero alpha.
         var scale = Math.Min(size / (float)width, size / (float)height);
         var fittedWidth = Math.Clamp((int)MathF.Round(width * scale), 1, size);
         var fittedHeight = Math.Clamp((int)MathF.Round(height * scale), 1, size);
@@ -352,7 +335,6 @@ internal static class ObjectCatalog
             var fy = Math.Clamp(sourceY - MathF.Floor(sourceY), 0, 1);
             static (float Pr, float Pg, float Pb, float A) Read(byte[] pixels, int at)
             {
-                // Native catalog BMPs mark transparent DrawIconic pixels with the game's magenta key or alpha == 0.
                 var alphaByte = pixels[at + 3];
                 if (alphaByte == 0 || (pixels[at] == 255 && pixels[at + 1] == 0 && pixels[at + 2] == 255))
                     return (0f, 0f, 0f, 0f);
@@ -380,19 +362,16 @@ internal static class ObjectCatalog
 
     private sealed record IconLayer(int X, int Y, int Width, int Height, bool Flip, float Order, int Index, byte[] Rgba);
 
-    /// <summary>EA's FUN_0043856d draws query art by rendering a DGRP object. Mac RenderSpeechShot selects it through
-    /// ObjSelector::GetThumbnailGraphicIndex, whose signed OBJD field indexes the selector's BaseGraphic run.</summary>
     internal static byte[]? RenderedIcon(ObjectEntry item) => RenderObjectFitting(item, 37, 37, fixedZoom: 3);
 
-    /// <summary>FUN_004cbf52 / FUN_004e58e7 / FUN_004e5c2f: renders a 74x37 two-frame catalog thumbnail (normal + highlighted)
-    /// at zoom 3 and box-filters it into the 37x37 inner area of ThumbTemplate.bmp.</summary>
+    /// <summary>Renders a 74x37 two-frame catalog thumbnail containing normal and highlighted states at
+    /// zoom 3, filtered into the 37x37 frame of the thumbnail template.</summary>
     private static byte[]? RenderedCatalogIcon(ObjectEntry item) => RenderObjectFitting(item, 37, 37, fixedZoom: 3, twoStateCatalogSheet: true);
 
-    /// <summary>FUN_0043856d: tries zoom 3, 2, 1 and chooses the largest zoom whose rendered bounds fit inside the
-    /// 160x119 inner preview box (width <= 154 and height <= 113, i.e. 3px margin on each side).</summary>
+    /// <summary>Renders an object preview by selecting the highest zoom level (3, 2, or 1) whose bounds fit
+    /// within the 160x119 preview box with a 3-pixel margin on all sides.</summary>
     private static byte[]? RenderedPreview(ObjectEntry item) => RenderObjectFitting(item, 160, 119, fixedZoom: null);
 
-    /// <summary>004360c1.c:230-285 + FUN_004cbd1c: renders an object preview fitting inside the 120x120 dialog icon box.</summary>
     internal static byte[]? RenderedDialogPreview(ObjectEntry item) => RenderObjectFitting(item, 118, 118, fixedZoom: null);
 
     private static byte[]? RenderObjectFitting(ObjectEntry item, int maxWidth, int maxHeight, int? fixedZoom, bool twoStateCatalogSheet = false)
@@ -404,8 +383,8 @@ internal static class ObjectCatalog
         var master = masterDef[ObjdField.MasterId];
         if (master != 0)
         {
-            // FUN_00438c61 / FUN_004318eb: gather all physical sub-object OBJD chunks with the same MasterId in this IFF
-            // and rotate their signed-high-byte / unsigned-low-byte tile coordinates by directionIndex.
+            // Gathers all child object definitions sharing the master ID and rotates their tile offset
+            // coordinates (packed in the sub-index field) according to the target direction.
             foreach (var chunk in item.File.OfType(ResourceType.Objd))
             {
                 Objd subDef;
@@ -483,8 +462,9 @@ internal static class ObjectCatalog
 
         foreach (var (def, rx, ry) in parts)
         {
-            // FUN_004e58e7 (004e58e7.c:67) & FUN_00438834 (00438834.c:88-90): ThumbnailGraphicIndex comes from the
-            // master OBJD, and if out of range for a tile's NumGraphics it resets to 0 instead of skipping the tile.
+            // The thumbnail graphic index is taken from the master object definition. If this index exceeds
+            // a tile part's available graphics count, it falls back to index 0 instead of skipping the
+            // tile.
             int graphicIndex = masterGraphicIndex != 0 ? masterGraphicIndex : def.ThumbnailGraphicIndex;
             var graphicCount = def[ObjdField.NumGraphics];
             if (graphicIndex < 0 || graphicIndex >= graphicCount) graphicIndex = 0;
@@ -549,9 +529,9 @@ internal static class ObjectCatalog
                 if (width is < 1 or > 2048 || height is < 1 or > 2048 || rgba.Length != width * height * 4) continue;
                 var x = -sprite.Offset2 / 16f;
                 var y = -sprite.Offset3 / 16f;
-                // FUN_00438834 (00438834.c:146-153) & FUN_004c8ec9 / FUN_004c1bfd: SPR2 frames blit at
-                // (tilePixelX + sprite.X, tilePixelY + sprite.Y - height - (int)(sprite.Offset1 * (1 << (zoom + 1))))
-                // without adding SPR2 frame.X/frame.Y (which are world-space depth/anchor values).
+                // Sprite frames are positioned using draw group offsets and elevation scaled by zoom level;
+                // sprite frame header coordinates represent world-space depth anchors rather than 2D screen
+                // offsets.
                 var left = tilePixelX + sprite.X + boundsX;
                 var top = tilePixelY + sprite.Y - height - (sprite.Offset1 != 0f ? (int)(sprite.Offset1 * (1 << (zoom + 1))) : 0);
                 layers.Add(new IconLayer(left, top, width, height, flip, (rx + ry) * 16f + x + y, layerSequence++, rgba));

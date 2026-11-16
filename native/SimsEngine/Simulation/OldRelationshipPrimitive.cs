@@ -1,23 +1,7 @@
 namespace SimsEngine.Simulation;
 
-/// <summary>The Old Relationship primitive (opcode 0x18, marked "DO NOT USED" in the label table), after Sims.exe
-/// FUN_0044d5d3. It copies one value between a relationship list and a tree parameter: the value at index
-/// <c>operand[1]</c> of the list the owner A keeps toward target B, and parameter <c>operand[2]</c>.
-/// <para>Operand: byte 0, nonzero writes the parameter into the relationship, zero reads the relationship into the
-/// parameter (the change notice on a write is not modelled, see below). Byte 1, the value index (signed). Byte 2, the
-/// parameter index (signed; error 8 when it is negative or when the frame has no parameters, and inferred: also when it is
-/// past the last parameter). Byte 3, the mode (signed): 0 is me to the stack object, 1 the stack object to me, 2 the stack
-/// object to parameter 0, 3 parameter 0 to the stack object; any other mode raises error 21. Byte 4, the flags: bit 0 set
-/// makes a missing slot false (otherwise the list grows to hold it, with 0s); bit 1 set uses the neighbor records, clear
-/// uses the objects' own lists. Bytes 5 to 7 are not read.</para>
-/// <para>The records and objects are looked up as in <see cref="RelationshipPrimitive"/>: a mode 0 or 1 with neighbor
-/// records casts the running object to a person (error 28), a missing record or object raises error 21, and when both
-/// objects are persons the first person's neighbor record and the second person's neighbor index are used.</para>
-/// <para>Mode 2 and 3 read parameter 0 without a check in Sims.exe; here a frame without parameters raises error 10
-/// (inferred).</para>
-/// <para>Writes send the original neighbor dirty notice (FUN_004448a6) before slot lookup for neighbor-record and
-/// person paths; ordinary object writes use FUN_0044489b, which is a nullsub.</para>
-/// <para>Returns true, or false when the slot is missing and the flags forbid growing.</para></summary>
+/// <summary>Executes the legacy Old Relationship primitive (opcode 0x18) to transfer values between
+/// relationship records and tree parameters across specified owner and target modes.</summary>
 public static class OldRelationshipPrimitive
 {
     private const int ParameterZero = 0;
@@ -81,7 +65,6 @@ public static class OldRelationshipPrimitive
         return world.Neighbors.GetValueOrDefault(key);
     }
 
-    // The record modes: the owner's record and the target's id. Modes 0 and 1 cast the running object first.
     private static (NeighborState Record, NeighborState Target) NeighborRecords(in TreeContext context, sbyte mode)
     {
         var world = context.World;
@@ -116,8 +99,8 @@ public static class OldRelationshipPrimitive
         return (a, b);
     }
 
-    // The tail: a missing slot is false or grows (as Relationship does), then the parameter is copied to or from the slot.
-    // The index is signed, so a negative index reaches the slot access and raises error 7 there (inferred).
+    // Copies values between the parameter and relationship slot, expanding the table when growth is
+    // permitted.
     private static PrimitiveResult Relate(in TreeContext context, RelationshipTable table, short target, int index, bool noGrow, bool write, int parameterIndex,
         NeighborState? sourceNeighbor = null, NeighborState? targetNeighbor = null)
     {

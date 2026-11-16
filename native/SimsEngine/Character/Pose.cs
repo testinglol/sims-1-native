@@ -4,42 +4,15 @@ using SimsEngine.Formats;
 
 namespace SimsEngine.Character;
 
-/// <summary>One bone's transform at a frame: its local transform (relative to its parent, as the bone's own transform
-/// stands) and its world transform as produced by Mac's Bone::UpdateTransform routine.</summary>
 public sealed record BonePose(string Name, string Parent, bool Animated, Vector3 LocalTranslation, Quaternion LocalRotation,
     Vector3 WorldTranslation, Quaternion WorldRotation);
 
-/// <summary>The pose of a skeleton at one frame of an animation.
-/// <list type="bullet">
-/// <item><description>Motion to bone: each motion drives the bone with the same name (case-sensitive, exact), Sims.exe's motion
-/// lookup (FUN_0059783a compares names with FUN_004317d5, a byte-for-byte compare). Motions naming no bone are ignored.
-/// How a motion's bone index is set at load is not traced; the name rule is Inferred for that binding.</description></item>
-/// <item><description>Curve sampling: a motion reads translation frame <c>Integers[2] + frame</c> (three floats) and rotation
-/// frame <c>Integers[3] + frame</c> (four floats) from the animation's curve arrays. FUN_00597c54 reads
-/// <c>(motion+0x24 + frame) * 12</c> from the translation array at animation+0x60 (the unlerped branch) and
-/// <c>(motion+0x28 + frame) * 16</c> from the rotation array at animation+0x68. The motion's Integers sit at motion+0x1c to
-/// +0x28 (FUN_00596834, kept as read by the reader).</description></item>
-/// <item><description>Frame: the playback clamps the frame to the first motion's frame count minus one (FUN_00597a90 stores that
-/// count as the playback length, FUN_00597c54 clamps to it). A frame below zero is zero. No motions means the bind pose.</description></item>
-/// <item><description>Between frames: Windows FUN_00597c54 interpolates translation linearly and rotation with
-/// BlendQuats1/FUN_005939a0: linear blending, shorter-arc sign correction, and normalization only when the resulting
-/// magnitude differs from one by more than 0.00001 (also Mac skeleton.s 0x1036C180–0x1036C394). Windows suppresses
-/// interpolation when the elapsed update spans at least two frame intervals; Mac Practice::Apply has a different gate
-/// (skeleton.s 0x10361DC4–0x10361EA0). Native playback follows the Windows gate.</description></item>
-/// <item><description>Bones with no motion keep the skeleton's transform as read (the bind pose). Inferred: FUN_00598dab copies
-/// each bone's transform into the playback's bone object, and FUN_00597c54 writes only bones that have a track, so an
-/// untracked bone keeps that copy.</description></item>
-/// <item><description>Composition follows Mac <c>Bone::UpdateTransform</c> (skeleton.s 0x10366700–0x10366A40): the local
-/// translation is rotated by the parent quaternion's <c>quattom3</c> matrix and added to the parent translation. For rotation,
-/// Mac negates the parent quaternion's W, multiplies local * parent, then negates the result W. Roots use the skeleton root
-/// transform. Missing parents are treated as roots because no linked parent is supplied to the update walk.</description></item>
-/// </list></summary>
+/// <summary>Evaluates skeletal poses by sampling per-bone curve tracks, interpolating translations and
+/// shortest-arc rotations across frames, and composing transforms down the bone hierarchy.</summary>
 public static class Pose
 {
-    /// <summary>Advances SAnimator's transient HEAD posture angle. AdjustHead wraps the desired-minus-current
-    /// direction delta into [-4, 4), moves by at most 0.2 direction units, clamps the accumulated angle to
-    /// [-1.5, 1.5], and decays it by 0.8 when head seek is inactive (Mac SAnimator.s 0x1034DC1C–0x1034DD18;
-    /// constants at lbl_1059BBC4 + 0x38/+0x54/+0x58/+0x5c/+0x60/+0x64/+0x68).</summary>
+    /// <summary>Advances the transient head posture angle toward a target direction, stepping by at most
+    /// 0.2 units within [-1.5, 1.5] and decaying by a factor of 0.8 when target seeking is inactive.</summary>
     public static float AdvanceHeadAdjustment(float current, float baselineDirection, float targetDirection, bool seeking)
         => AdvanceHeadAdjustment(current, baselineDirection, targetDirection, seeking, out _);
 
@@ -58,11 +31,9 @@ public static class Pose
         return Math.Clamp(next, -1.5f, 1.5f);
     }
 
-    /// <summary>Computes SAnimator's eight-way angular value from source horizontal X/Z coordinates. Both the baseline
-    /// (actor registration to HeadFake registration) and target direction use atan2(deltaZ, -deltaX), converted to
-    /// eighth-turn units and normalized to [0, 8). A zero-length vector leaves the stored value unchanged; the source
-    /// tests squared length against zero (Windows FUN_005904d6, Mac SAnimator.s 0x1034E2D8–0x1034E3D0 and
-    /// lbl_1059BC80 + 0x40).</summary>
+    /// <summary>Computes an eight-way direction heading from horizontal X/Z displacements using
+    /// atan2(deltaZ, -deltaX) in eighth-turn units normalized to [0, 8), preserving the previous heading if
+    /// the displacement vector is zero.</summary>
     public static float HeadDirection(Vector2 origin, Vector2 point, float previous)
     {
         var deltaX = point.X - origin.X;
@@ -75,11 +46,9 @@ public static class Pose
         return direction;
     }
 
-    /// <summary>Applies AdjustHead's transient rotation to skeleton bone id 31 (the skeleton vector index used by
-    /// <c>FindBone(0x1f)</c>). The source extracts the base X Euler angle from the converted quaternion matrix at
-    /// indices 5/6, adds +0x210 × 0.125 × 2π, clamps the combined angle to [-1.2, 1.2], then multiplies the X Euler
-    /// quaternion by the saved local quaternion (Mac SAnimator.s 0x1034DD48–0x1034DF07 and U3DQuaternion.s
-    /// 0x103E2D70–0x103E2E54). Input/output poses retain authored Sims.exe quaternions.</summary>
+    /// <summary>Applies transient head rotation to bone index 31 by adjusting the bone's base pitch angle,
+    /// clamping the result to [-1.2, 1.2] radians before re-multiplying the local rotation quaternion.
+    /// </summary>
     public static IReadOnlyList<BonePose> ApplyHeadAdjustment(Skeleton skeleton, IReadOnlyList<BonePose> pose,
         float adjustment)
     {
@@ -109,19 +78,14 @@ public static class Pose
         return Recompose(skeleton, GetLayout(skeleton), local);
     }
 
-    /// <summary>Selects SAnimator's cached locomotion stride for its current practice phase. Mac Tick uses
-    /// +0x170 when phase is less than marker 2 or greater than or equal to marker 1; otherwise it uses +0x174
-    /// (SAnimator.s 0x103507D4–0x1035080C).</summary>
+    /// <summary>Selects the active locomotion stride based on cycle phase, returning the primary stride
+    /// when phase is outside [markerTwoPhase, markerOnePhase) and the secondary stride otherwise.</summary>
     public static float LocomotionStrideAtPhase(float phase, float markerOnePhase, float markerTwoPhase,
         float markerOneStride, float markerTwoStride) =>
         phase < markerTwoPhase || phase >= markerOnePhase ? markerOneStride : markerTwoStride;
 
-    /// <summary>Returns the world translation of a VitaBoy registration made from a posed bone and suffix.
-    /// <c>FindRegistration</c> uses identity for an absent or unrecognized suffix. Its authored suffix transforms are
-    /// Palm (Z rotation PI, translation (0.5,0,0)), Top (Z rotation -PI/2, translation (0.8,0,0)),
-    /// HeadFake (Z rotation -PI/2, translation (0.8,0,100)), and Shoulder (Z rotation PI, translation (0,0,1));
-    /// Mac VitaBoy.s 0x103813F0–0x10381760, corroborated by Windows FUN_005a14b9. The authored suffix offset is
-    /// composed directly with the source bone transform.</summary>
+    /// <summary>Returns the world translation of a bone registration point, composing the bone transform
+    /// with authored offsets for known suffixes such as Palm, Top, HeadFake, and Shoulder.</summary>
     public static Vector3 RegistrationTranslation(BonePose bone, string? suffix)
     {
         ArgumentNullException.ThrowIfNull(bone);
@@ -136,16 +100,10 @@ public static class Pose
         return bone.WorldTranslation + Vector3.Transform(offset, BoneMatrixRotation(bone.WorldRotation));
     }
 
-    /// <summary>Returns the quaternion used by Mac Bone's cached absolute matrix. UpdateTransform stores the composed
-    /// world quaternion with W negated, then negates W again before quattom3 builds the matrix (skeleton.s
-    /// 0x10366758–0x10366794 and 0x103669D8–0x10366A14). The vertex pipeline multiplies that matrix as a row
-    /// vector (RealMath.s 0x10005DAC–0x10005E38); System.Numerics' quaternion matrix has the transposed convention.
-    /// Conjugating the input to quattom3 therefore leaves the stored quaternion, up to an irrelevant overall sign.</summary>
     public static Quaternion BoneMatrixRotation(Quaternion storedWorldRotation) => storedWorldRotation;
 
-    /// <summary>Returns the frame distance to the next marker boundary used by SAnimator::Tick's near-waypoint branch.
-    /// Tick targets marker 2 when outside [marker 2, marker 1), otherwise marker 1, and wraps a negative difference by
-    /// one practice cycle (SAnimator.s 0x103508CC–0x103508EC).</summary>
+    /// <summary>Calculates the frame distance from the current animation phase to the upcoming footstep
+    /// marker boundary, wrapping across cycle boundaries.</summary>
     public static float FramesToNextLocomotionMarker(float phase, float markerOnePhase, float markerTwoPhase,
         int frameCount)
     {
@@ -156,9 +114,8 @@ public static class Pose
         return phaseDelta * frameCount;
     }
 
-    /// <summary>Calculates the Practice::Fade arguments from SAnimator::Tick's near-waypoint branch. The target weight is
-    /// max(distance / selected stride, 0.2) (constant at lbl_1059BBC4 + 0x5c); the end time is now plus the truncated
-    /// next-marker duration, clamped to the 100 ms constant at lbl_10619D68 (SAnimator.s 0x10350824–0x10350958).</summary>
+    /// <summary>Calculates locomotion fade parameters near a waypoint, scaling target weight to distance
+    /// over stride with a minimum of 0.2 and bounding duration to the next marker interval.</summary>
     public static (float TargetWeight, int DurationMilliseconds)? LocomotionFade(float distance, float stride,
         float phase, float markerOnePhase, float markerTwoPhase, float skillDurationMilliseconds, float walkingScale)
     {
@@ -171,10 +128,8 @@ public static class Pose
         return (targetWeight, Math.Max(duration, 100));
     }
 
-    /// <summary>Evaluates the two SAnimator::StartVitaBoy locomotion stride values from marker bone transforms.
-    /// Mac stores +0x170 as scale * (marker-2 bone-1 Z - marker-1 bone-2 Z), and +0x174 as
-    /// scale * (marker-2 bone-2 Z - marker-2 bone-1 Z) (SAnimator.s 0x10358E8C–0x10359068).
-    /// Marker times are normalized by Skill duration there; callers convert them to animation frames.</summary>
+    /// <summary>Evaluates locomotion stride distances from bone displacements along the Z axis between
+    /// animation footstep markers.</summary>
     public static (float MarkerOneStride, float MarkerTwoStride) LocomotionStrides(Skeleton skeleton,
         Animation animation, AnimationCurves curves, float markerOneFrame, string markerOneBone,
         float markerTwoFrame, string markerTwoBone)
@@ -201,7 +156,6 @@ public static class Pose
                 : throw new InvalidDataException($"Locomotion marker bone {name} is absent from the selected skeleton");
     }
 
-    /// <summary>Returns the cached bind pose for <paramref name="skeleton"/> without allocating per frame.</summary>
     public static IReadOnlyList<BonePose> BindPose(Skeleton skeleton)
     {
         ArgumentNullException.ThrowIfNull(skeleton);
@@ -213,17 +167,14 @@ public static class Pose
         return Recompose(skeleton, layout, local);
     }
 
-    /// <summary>Returns the cached Ordinal bone-name-to-index table (first name wins) for <paramref name="skeleton"/>.</summary>
     public static IReadOnlyDictionary<string, int> BoneIndices(Skeleton skeleton)
     {
         ArgumentNullException.ThrowIfNull(skeleton);
         return GetLayout(skeleton).IndexByName;
     }
 
-    /// <summary>The pose of <paramref name="skeleton"/> at <paramref name="frame"/> of <paramref name="animation"/>, decoded from
-    /// <paramref name="curves"/>. When <paramref name="loop"/> is true, the next sample after the final frame wraps to frame zero,
-    /// matching Practice cycle mode 1. Bones are returned in the skeleton's order.</summary>
-    /// <exception cref="InvalidDataException">A motion reads a curve frame past the end of its array.</exception>
+    /// <summary>Samples a skeleton pose at the specified animation frame, wrapping the trailing
+    /// interpolation sample to frame zero when looping is enabled.</summary>
     public static IReadOnlyList<BonePose> Sample(Skeleton skeleton, Animation animation, AnimationCurves curves, double frame,
         IReadOnlyList<BonePose>? basePose = null, float practiceWeight = 1f, bool loop = false,
         bool interpolateFrame = true)
@@ -252,12 +203,9 @@ public static class Pose
         }
 
         var index = layout.IndexByName;
-        // Practice::Apply (00597c54.c:138) only applies motions and marks bones Animated when 0.0 < practiceWeight.
         if (length > 0 && practiceWeight > 0f)
         {
-            // Practice clamps its current integer frame to the motion's last frame but retains the fractional phase.
-            // Cycle mode 1 then selects frame zero as the following sample at the seam (skeleton.s
-            // 0x10361D6C–0x10361E04). At an exact phase of one, the clamped last frame remains selected.
+            // Clamps integer frame to last frame and wraps next sample to frame zero on loop.
             var phaseFrame = Math.Clamp(frame, 0, loop ? length : length - 1);
             var frameFloor = (int)Math.Floor(phaseFrame);
             var first = Math.Min(frameFloor, length - 1);
@@ -266,13 +214,12 @@ public static class Pose
             if (second == first) fraction = 0f;
             var weight = second == first ? 0f : fraction;
 
-            // Motions apply in file order, so a later motion for the same bone replaces an earlier one (FUN_00597c54 writes each track).
+            // Later motions for the same bone override earlier tracks in file order.
             for (var m = 0; m < animation.Motions.Count; m++)
             {
                 var motion = animation.Motions[m];
                 if (!index.TryGetValue(motion.Name, out var bone) || motion.FrameCount <= 0) continue;
-                // Practice::Apply (00597c54.c) bounds each track against its own motion.FrameCount so mixed single-frame
-                // static pose tracks and shorter secondary tracks never index past their per-motion curve span.
+                // Bounds frame sampling to each motion's track length for mixed-duration tracks.
                 var motionLast = motion.FrameCount - 1;
                 var motionFirst = Math.Min(first, motionLast);
                 var motionSecond = weight <= 0f || second == first
@@ -283,11 +230,7 @@ public static class Pose
                             ? first + 1
                             : motionFirst;
                 var motionWeight = motionSecond == motionFirst ? 0f : weight;
-                // A base index of -1 means the motion has no channel of that kind; the bone then keeps the value it already has
-                // for that channel.
-                // Bone.Integers[2] (+0x74 in Bone::ReadFromFile 00595963.c:74) is the CanBlend flag (0 on ROOT, 1 on body bones).
-                // When CanBlend == 0 or practiceWeight >= 1.0f, Practice::Apply (00597c54.c:307-312, 343-349, 387, 422-428)
-                // assigns the sampled translation/rotation directly without weighting by practiceWeight.
+                // Bones with CanBlend disabled bypass blend weighting and assign directly.
                 var current = local[bone];
                 var boneIntegers = bones[bone].Integers;
                 var canBlend = boneIntegers.Length <= 2 || boneIntegers[2] != 0;
@@ -330,11 +273,10 @@ public static class Pose
     {
         var bones = skeleton.Bones;
         var count = bones.Count;
-        // The first name wins when a skeleton repeats a name (Inferred: the decompilation does not show duplicates being rejected).
         var index = new Dictionary<string, int>(count, StringComparer.Ordinal);
         for (var bone = 0; bone < count; bone++) index.TryAdd(bones[bone].Name, bone);
 
-        // A parent name the skeleton does not contain makes the bone a root (Inferred: FUN_0059903f has no entry for an unknown parent).
+        // Bones referencing unknown parent names are treated as root bones.
         var parents = new int[count];
         for (var bone = 0; bone < count; bone++)
             parents[bone] = index.TryGetValue(bones[bone].Parent, out var parent) ? parent : -1;
@@ -410,7 +352,6 @@ public static class Pose
 
     private readonly record struct Local(Vector3 Translation, Quaternion Rotation, bool Animated);
 
-    /// <summary>The world transform of one bone using the Mac UpdateTransform rule. A cycle in the parent links is an error.</summary>
     private static (Vector3 Translation, Quaternion Rotation) World(int bone, int[] parents, Local[] local,
         (Vector3 Translation, Quaternion Rotation)?[] worlds, bool[] inProgress)
     {
@@ -426,22 +367,20 @@ public static class Pose
         return result;
     }
 
-    /// <summary>Matches Bone::UpdateTransform: quattom3(parent) rotates local translation; world rotation is
-    /// WFlip(local * WFlip(parent)) (Mac skeleton.s 0x10366700–0x10366A40, Quaternion::operator* at SAnimator.s 0x1034DF70).</summary>
+    /// <summary>Composes a parent world transform with a child local transform by rotating child
+    /// translation and multiplying orientations.</summary>
     private static (Vector3 Translation, Quaternion Rotation) Compose((Vector3 Translation, Quaternion Rotation) parent, Local child) =>
         (parent.Translation + Vector3.Transform(child.Translation, parent.Rotation),
             FlipW(Quaternion.Multiply(child.Rotation, FlipW(parent.Rotation))));
 
     private static Quaternion FlipW(Quaternion value) => new(value.X, value.Y, value.Z, -value.W);
 
-    /// <summary>The translation of one motion at a frame: three floats at the motion's translation base plus the frame.</summary>
     private static Vector3 Translation(AnimationCurves curves, Motion motion, int frame, string animation)
     {
         var offset = Offset(motion.Integers[2], frame, 3, curves.Translations.Length, motion, animation, "translation");
         return new Vector3(curves.Translations[offset], curves.Translations[offset + 1], curves.Translations[offset + 2]);
     }
 
-    /// <summary>The rotation of one motion at a frame: four floats (X, Y, Z, W) at the motion's rotation base plus the frame.</summary>
     private static Quaternion Rotation(AnimationCurves curves, Motion motion, int frame, string animation)
     {
         var offset = Offset(motion.Integers[3], frame, 4, curves.Rotations.Length, motion, animation, "rotation");
@@ -459,15 +398,14 @@ public static class Pose
 
     private static Vector3 Lerp(Vector3 a, Vector3 b, float t) => a + (b - a) * t;
 
-    /// <summary>Matches BlendQuats1/FUN_005939a0 for an in-range weight: linear interpolation along the shorter arc,
-    /// normalizing only when the magnitude differs from one by more than 0.00001.</summary>
+    /// <summary>Blends two quaternions along the shorter arc using linear interpolation, normalizing only
+    /// when the resulting magnitude deviates from one by more than 1e-5.</summary>
     private static Quaternion Blend(Quaternion a, Quaternion b, float t)
     {
         if (t == 0) return a;
         if (Quaternion.Dot(a, b) < 0) b = -b;
         var blended = new Quaternion(a.X + (b.X - a.X) * t, a.Y + (b.Y - a.Y) * t, a.Z + (b.Z - a.Z) * t, a.W + (b.W - a.W) * t);
-        // Mac compares |magnitude - 1| with 0x3727C5AC (0.00001), then compares the magnitude itself with the same value.
-        // It writes identity for a near-zero result; otherwise it leaves near-unit results bit-for-bit unnormalized.
+        // Leaves near-unit quaternions unnormalized to preserve original precision.
         var magnitude = blended.Length();
         if (MathF.Abs(magnitude - 1f) <= 1e-5f) return blended;
         return magnitude <= 1e-5f ? Quaternion.Identity : Quaternion.Normalize(blended);

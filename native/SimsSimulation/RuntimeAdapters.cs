@@ -3,8 +3,6 @@ using SimsNative.Plugins;
 using SimsEngine.Simulation;
 using SimsEngine.Formats;
 
-/// <summary>Native audio dispatcher implementing the A15 audio architecture. Emits AudioEvent JSON payloads
-/// to the frontend pipe, manages voice limits, voice stealing, hits, loops, 3D attenuation, and master buses.</summary>
 internal sealed class HitAudioRuntime : IDisposable
 {
     public const int NeighborhoodOwnerID = -1;
@@ -66,7 +64,6 @@ internal sealed class HitAudioRuntime : IDisposable
         try { Directory.CreateDirectory(directory); } catch { }
     }
 
-    /// <summary>Calculates inverse distance rolloff attenuation gain following Mac cListener.</summary>
     public static float AttenuationGain(float distance, float minDist = 5.0f, float rolloff = 1.0f, float maxDist = 40.0f)
     {
         if (distance <= minDist) return 1.0f;
@@ -321,12 +318,8 @@ internal sealed class HitAudioRuntime : IDisposable
 
             var group = isVox ? "VOX" : res.Group;
             var isPositional = isVox || res.IsPositionalObjectTrack;
-            // Per Sims.exe (0057376b.c:100-119), positional tracks require a valid non-zero owner ID,
-            // whereas kArgsNormal non-positional tracks play globally even when ownerID == 0.
             if (isPositional && ownerID <= 0) return false;
 
-            // Rely strictly on SoundBank's HIT/HOT loop metadata when real SoundData is loaded;
-            // never force loop=true from event-name substrings like "amb" ("bamboo", "screamb") or "_loop_start".
             var loop = res.IsLoop ||
                        (soundBank.IsMock && isPositional && name.Contains("loop", StringComparison.OrdinalIgnoreCase));
 
@@ -342,8 +335,6 @@ internal sealed class HitAudioRuntime : IDisposable
             }
             else if (group.Equals("MUSIC", StringComparison.OrdinalIgnoreCase) && loop)
             {
-                // Non-positional looped MUSIC replaces active mode music, whereas one-shot stings (!loop, e.g. sting_fire)
-                // layer over active mode music without wiping it or attaching to ownerVoices[ownerID].
                 foreach (var existing in activeVoices.Values
                     .Where(v => v.Group.Equals("MUSIC", StringComparison.OrdinalIgnoreCase) && v.OwnerId <= 0)
                     .Select(v => v.VoiceId)
@@ -569,9 +560,8 @@ internal sealed class HitAudioRuntime : IDisposable
         name.StartsWith("event_", StringComparison.OrdinalIgnoreCase) ||
         name.StartsWith("ui_", StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>Pauses or resumes in-world simulation audio when the simulator speed enters or leaves 0.
-    /// Follows Sims.exe cSound::Pause (00574972.c:30-46): MUSIC mode streams, UI sounds, and event/dialog
-    /// stingers (event_good, event_bad, etc.) continue playing while paused.</summary>
+    /// <summary>Pauses or resumes in-world simulation audio when simulation speed changes, while allowing
+    /// music streams, UI sounds, and event stingers to continue playing.</summary>
     public void SetSimulationPaused(bool paused, bool blockingDialog = false)
     {
         lock (sync)
@@ -924,5 +914,4 @@ internal sealed class HitAudioRuntime : IDisposable
         soundBank.Dispose();
     }
 }
-
 

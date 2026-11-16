@@ -5,16 +5,14 @@ namespace SimsEngine.Tests;
 
 public sealed class BurnPrimitiveTests
 {
-    // Operand: byte 0 the mode (1 adds the origin's footprint), byte 1 the flags (bit 0 clear is the strict check).
+    // The burn primitive operand specifies the placement mode at byte 0 (where mode 1 adds the origin
+    // footprint) and flags at byte 1 (where clearing bit 0 enables strict validation).
     private static byte[] Operand(byte mode, byte flags = 0) => [mode, flags, 0, 0, 0, 0, 0, 0];
 
     private static SimulationError Fails(Action action) => Assert.Throws<SimulationException>(action).Error;
 
-    // The host records the key in hex (0x24C95F99), the spread in decimal.
     private const string FireCall = "FindObjectType(24C95F99)";
 
-    /// <summary>A 64-tile lot with the origin object (stack object 5) at <paramref name="position"/>, the running
-    /// person (100) and the Fire type.</summary>
     private static (TreeContext Context, PrimitiveTestHost Host, XObject Origin) Lot(ObjectPosition position, short direction = 2)
     {
         var (context, _, host) = PrimitiveTestWorld.Create(stackObject: 5);
@@ -25,7 +23,6 @@ public sealed class BurnPrimitiveTests
                 return (context, host, origin);
     }
 
-    // Tile (10, 14) at height 7: X 160 is tile 10, Y 224 is tile 14.
     private static readonly ObjectPosition Centre = new(160, 224, 7);
 
     [Fact]
@@ -114,7 +111,8 @@ public sealed class BurnPrimitiveTests
     [Fact]
     public void TileZeroAndTheLastTileAreOutsideTheLot()
     {
-        // Sims.exe's lot dimension is 64: tiles 1 to 62 are inside (0 and 63 are outside).
+        // Lot boundaries span 64 tiles, where border tiles 0 and 63 are outside the playable lot and only
+        // tiles 1 through 62 are valid.
         var (context, host, _) = Lot(new ObjectPosition(0, 224, 7));
         Assert.Equal(PrimitiveResult.False, BurnPrimitive.Execute(context, Operand(0)));
         Assert.DoesNotContain(host.Calls, call => call.StartsWith("BurnSpread"));
@@ -152,7 +150,8 @@ public sealed class BurnPrimitiveTests
     [Fact]
     public void TheTileIsAByteSoALargeTileWrapsToANegativeOne()
     {
-        // 128 tiles is 2048 units; Sims.exe keeps the tile as a C char, which reads it as -128, outside the lot.
+        // Tile coordinates are stored as signed 8-bit integers, causing 2048 world units (128 tiles) to
+        // overflow to -128 and fall outside the lot.
         var (context, host, _) = Lot(new ObjectPosition(2048, 224, 7));
         Assert.Equal(PrimitiveResult.False, BurnPrimitive.Execute(context, Operand(0)));
         Assert.DoesNotContain(host.Calls, call => call.StartsWith("BurnSpread"));
@@ -171,7 +170,6 @@ public sealed class BurnPrimitiveTests
     [Fact]
     public void NativeLotDimensionIsUsedWithoutAHostQuery()
     {
-        // Bounds use the source manager's fixed +0x10 dimension (64).
         var (context, host, _) = Lot(new ObjectPosition(0, 224, 7));
         BurnPrimitive.Execute(context, Operand(0));
         Assert.DoesNotContain(host.Calls, call => call == "LotSize");

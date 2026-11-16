@@ -11,19 +11,14 @@ public sealed class Wave6ParityRegressionTests
     [Fact]
     public void HandResaleValue_MatchesSimsExeGrabToolAndDisposePanelRounding()
     {
-        // FUN_00487c19 + FUN_00487f4b + cWinDisposePanel::Draw (0x004820c2):
-        // - BuildModeType 0 (Buy objects) and 7 (pool ladders/diving boards): full CurrentValue
-        // - BuildModeType 4 (trees/shrubs/flowers): 0
-        // - BuildModeType 1, 2, 3, 5, 6 (doors, windows, stairs, fireplaces, columns): (int)(val * 0.8f + 0.5f)
         Assert.Equal(127, SimulationWorld.HandResaleValue(127, 0));
         Assert.Equal(127, SimulationWorld.HandResaleValue(127, 7));
         Assert.Equal(0, SimulationWorld.HandResaleValue(127, 4));
 
-        // 127 * 0.8f = 101.6f -> + 0.5f = 102.1f -> 102 (truncation without +0.5f would wrongly produce 101!)
         foreach (var buildType in new[] { 1, 2, 3, 5, 6 })
         {
             Assert.Equal(102, SimulationWorld.HandResaleValue(127, buildType));
-            Assert.Equal(79, SimulationWorld.HandResaleValue(99, buildType)); // 99 * 0.8 + 0.5 = 79.7 -> 79
+            Assert.Equal(79, SimulationWorld.HandResaleValue(99, buildType));
         }
     }
 
@@ -79,7 +74,6 @@ public sealed class Wave6ParityRegressionTests
             if (File.Exists(lotZoningPath))
                 File.Copy(lotZoningPath, Path.Combine(userPath, "LotZoning.iff"));
 
-            // Evict House 5 (Goth): previously threw ArgumentException shrinking SIMI #1 from 326 to 302 bytes.
             _ = NeighborhoodEdits.Evict(userPath, gameDir, 5);
 
             var evictedHouse = SimsEngine.Formats.IffFile.Open(Path.Combine(userPath, "Houses", "House05.iff"));
@@ -99,7 +93,6 @@ public sealed class Wave6ParityRegressionTests
             Assert.Equal(3, goth.Members.Length);
             Assert.Equal(3, goth.MemberThumbnails.Length);
 
-            // Also verify WriteSavedSimulationStateTo cleanly resizes legacy 7-category SIMI lots when upgraded to version-1 8-category days.
             var registry = SimsEngine.Content.ObjectRegistry.Scan(gameDir);
             var library = SimsEngine.Content.GlobalLibrary.Open(gameDir);
             var world = SavedLotObjectLoader.Load(evictedHouse, registry, library);

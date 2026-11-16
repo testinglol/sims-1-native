@@ -17,7 +17,7 @@ public sealed class FindLocationSearchTests
             walls.Raw(openDiagonalAtCandidate && x == 1 && y == 2
                 ? [0x10, 0x0F, 0, 2, 0, 0, 0, 0]
                 : [0, 0x0F, 0, 0, 0, 0, 0, 0]);
-        // LotArray is stored and read as [x][y] by the game; RoomMap exposes it as (x,y).
+        // Lot arrays are stored and indexed as [x][y] in row-major layout, with x as the outer dimension.
         foreach (var (x, y, value) in values) waterBytes[x * size + y] = value;
         var water = new ChunkBuilder().S16(0).S16(0).S32(size).S32(size).S32(1).U32(0).Raw(waterBytes).ToArray();
         var file = new IffFile(ChunkBuilder.File(("Arry", 2, walls.ToArray()), ("Arry", 9, water)), "water-search.iff");
@@ -43,7 +43,6 @@ public sealed class FindLocationSearchTests
     private static XObject AddObject(SimulationWorld world, short id, int x, int y)
     {
         var item = world.Add(new XObject(id, PrimitiveTestWorld.Definition()));
-        // FUN_00432a70 rejects ordinary placements when Allowed Height Flags bit 0 is clear.
         item[ObjectData.AllowedHeightFlags] = 1;
         item.Position = new ObjectPosition(x, y, 1);
         return item;
@@ -65,7 +64,6 @@ public sealed class FindLocationSearchTests
             FlagB = 0,
         }, out var found));
 
-        // FUN_00434895 starts at the center, then its direction -1 offset sequence visits (-1, 0).
         Assert.Equal(new ObjectPosition(1 * 16 + 8, 2 * 16 + 8, 1), found);
     }
 
@@ -86,7 +84,6 @@ public sealed class FindLocationSearchTests
             FlagB = 0,
         }, out var found));
 
-        // The next original offset is (-1, +1), before either adjacent cardinal tile.
         Assert.Equal(new ObjectPosition(1 * 16 + 8, 3 * 16 + 8, 1), found);
     }
 
@@ -106,7 +103,6 @@ public sealed class FindLocationSearchTests
             FlagB = 0,
         }, out var found));
 
-        // FUN_00434895 direction 0 updates the second offset as 0, +1, -1, +2, -2...
         Assert.Equal(new ObjectPosition(2 * 16 + 8, 3 * 16 + 8, 1), found);
     }
 
@@ -128,7 +124,6 @@ public sealed class FindLocationSearchTests
             FlagB = 0,
         }, out var found));
 
-        // ContinueFlag retains the center's tile-map class.
         Assert.Equal(new ObjectPosition(32 * 16 + 8, 33 * 16 + 8, 1), found);
     }
 
@@ -167,7 +162,6 @@ public sealed class FindLocationSearchTests
             ContinueFlag = 0, FlagB = 0,
         }, out var found));
 
-        // Source candidate (1,2) has a raw Arry 8 byte below 0x10 and fails FUN_004790e8 == false.
         Assert.Equal(new ObjectPosition(1 * 16 + 8, 3 * 16 + 8, 1), found);
     }
 
@@ -177,7 +171,6 @@ public sealed class FindLocationSearchTests
         const int size = 64;
         var world = new SimulationWorld();
         world.LotRoomMaps[1] = WaterRoomMap([(1, 2, 0x30)]);
-        // FUN_00434895 reads bit 0x20 from the lot manager +0x34 grid (Arry 8), not from the water grid (Arry 9).
         var tileBytes = new byte[size * size];
         tileBytes[1 * size + 2] = 0x20;
         var tiles = new ChunkBuilder().S16(0).S16(0).S32(size).S32(size).S32(1).U32(0).Raw(tileBytes).ToArray();
@@ -201,8 +194,6 @@ public sealed class FindLocationSearchTests
     [Fact]
     public void FlagBAcceptsOnlyRoomKeyZeroAsTheOriginalRoomLookupDoes()
     {
-        // FUN_00434895 passes a candidate with the flag set only when FUN_004325af's room lookup is 0 (level 1's first room,
-        // the one holding tile (0, 0)). The center tile is in room 1 here, so the search moves to the room-0 side.
         var world = new SimulationWorld();
         world.LotRoomMaps[1] = SplitRoomMap();
         var stack = AddObject(world, 1, -16, -16);

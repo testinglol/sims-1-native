@@ -5,8 +5,8 @@ namespace SimsEngine.Tests;
 
 public sealed class SetMotiveChangePrimitiveTests
 {
-    // Byte 0 the rate's owner, byte 1 the target's owner, byte 2 the motive, byte 3 the flags, bytes 4 and 5 the rate's data,
-    // bytes 6 and 7 the target's data.
+    // Operand encodes rate owner in byte 0, target owner in byte 1, motive index in byte 2, flags in byte
+    // 3, rate data in bytes 4-5, and target data in bytes 6-7.
     private static byte[] Operand(byte rateOwner, byte targetOwner, byte motive, byte flags, short rate, short target) =>
         [rateOwner, targetOwner, motive, flags, (byte)rate, (byte)(rate >> 8), (byte)target, (byte)(target >> 8)];
 
@@ -31,7 +31,6 @@ public sealed class SetMotiveChangePrimitiveTests
         var (context, me, _) = PrimitiveTestWorld.Create();
         me.Temporaries[3] = 900;
         me[Motive.Hunger] = 42.7f;
-        // Rate from temporary 3 (owner 8, data 3); target from my motive 7 (owner 14), which reads truncated to 42.
         Assert.Equal(PrimitiveResult.True, SetMotiveChangePrimitive.Execute(context, Operand(8, 14, 7, 0, 3, 7)));
         var change = Assert.Single(me.MotiveChanges);
         Assert.Equal(Motive.Hunger, change.Motive);
@@ -75,7 +74,7 @@ public sealed class SetMotiveChangePrimitiveTests
     public void TheMotiveErrorComesBeforeTheVariablesAreRead()
     {
         var (context, me, _) = PrimitiveTestWorld.Create();
-        // An illegal owner (0xFF) would raise error 9 if the rate were read first.
+        // Motive number range validation occurs before rate data owner validation.
         Assert.Equal(SimulationError.MotiveNumberOutOfRange, Fails(() => SetMotiveChangePrimitive.Execute(context, Operand(0xFF, 7, 13, 0, 0, 0))));
         Assert.Empty(me.MotiveChanges);
     }
@@ -96,7 +95,7 @@ public sealed class SetMotiveChangePrimitiveTests
         SetMotiveChangePrimitive.Execute(context, Literal(6, 1800, 60));
         Assert.Equal(2, me.MotiveChanges.Count);
 
-        // Motive 13 would be refused, but the clear branch never reads it.
+        // The motive change clear operation bypasses motive range validation.
         Assert.Equal(PrimitiveResult.True, SetMotiveChangePrimitive.Execute(context, Operand(7, 7, 13, 1, 0, 0)));
         Assert.Empty(me.MotiveChanges);
     }

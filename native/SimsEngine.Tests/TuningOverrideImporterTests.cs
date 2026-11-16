@@ -56,7 +56,6 @@ public class TuningOverrideImporterTests
         var (file, chunk) = CreateBconChunk(0x1001, tuningFlag: true, [10, 20, 30]);
         var scope = new BehaviorScope(file, file, null);
 
-        // Before override
         Assert.Equal(10, scope.Constants(0x1001, allowTuningOverride: true)![0]);
         Assert.Equal(20, scope.Constants(0x1001, allowTuningOverride: true)![1]);
 
@@ -76,9 +75,9 @@ public class TuningOverrideImporterTests
         var text = string.Join("\n",
             "ObjFile\tVersion 2",
             "Target\tGUID: 0xCAFEBABE",
-            "0\t1\tmod\t15",         // Motive 1 -> Energy (9) delta +15
-            "0\t2\tads\t18",         // Motive 2 -> Comfort (6), impact 18 -> mappedAd 3
-            "0\t0\tatt\thigh",       // Attenuation high -> 4
+            "0\t1\tmod\t15",
+            "0\t2\tads\t18",
+            "0\t0\tatt\thigh",
             ""
         );
 
@@ -89,9 +88,8 @@ public class TuningOverrideImporterTests
         Assert.Equal(4u, ov.AttenuationCode);
         Assert.Equal(0.0f, ov.AttenuationValue);
 
-        // Check motives
-        var mappedEnergy = TuningOverrideImporter.MapMotiveCode(1); // 9
-        var mappedComfort = TuningOverrideImporter.MapMotiveCode(2); // 6
+        var mappedEnergy = TuningOverrideImporter.MapMotiveCode(1);
+        var mappedComfort = TuningOverrideImporter.MapMotiveCode(2);
         Assert.True(ov.Motives.TryGetValue(mappedEnergy, out var energyOv));
         Assert.Equal((short)15, energyOv.DeltaAdjustment);
 
@@ -133,10 +131,10 @@ public class TuningOverrideImporterTests
         var text = string.Join("\n",
             "ObjFile\tVersion 2",
             "Target\tGUID: 0x99999999",
-            "notanumber\t1\tmod\t10", // Bad interaction index
-            "0\t99\tmod\t10",          // Bad motive code (99)
-            "0\t1\tads\t999",          // Bad ad impact (999)
-            "0\t0\tunknownkw\tfoo",    // Unrecognized keyword
+            "notanumber\t1\tmod\t10",
+            "0\t99\tmod\t10",
+            "0\t1\tads\t999",
+            "0\t0\tunknownkw\tfoo",
             ""
         );
 
@@ -195,23 +193,22 @@ public class TuningOverrideImporterTests
     private static InteractionTable CreateInteractionTable()
     {
         var builder = new ChunkBuilder();
-        builder.S16(1); // count: 1
-        builder.S16(6); // version: 6
-        // Interaction 0
-        builder.S16(1); // ActionTree
-        builder.S16(0); // GuardTree
-        builder.S32(10); // motive count: 10
-        builder.U32(0); // flags
-        builder.S32(0); // tta
-        builder.U32(1); // attenuationCode
-        builder.S32(BitConverter.SingleToInt32Bits(1.0f)); // attenuationValue
-        builder.U32(0); // threshold
-        builder.S32(0); // joining
+        builder.S16(1);
+        builder.S16(6);
+        builder.S16(1);
+        builder.S16(0);
+        builder.S32(10);
+        builder.U32(0);
+        builder.S32(0);
+        builder.U32(1);
+        builder.S32(BitConverter.SingleToInt32Bits(1.0f));
+        builder.U32(0);
+        builder.S32(0);
         for (var i = 0; i < 10; i++)
         {
-            builder.S16(0); // Minimum
-            builder.S16(10); // Delta
-            builder.S16(0); // Personality
+            builder.S16(0);
+            builder.S16(10);
+            builder.S16(0);
         }
         var bytes = ChunkBuilder.File(("TTAB", 128, builder.ToArray()));
         var file = new IffFile(bytes, "ttab-test.iff");

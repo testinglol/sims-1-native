@@ -2,7 +2,8 @@ using SimsEngine.Formats;
 
 namespace SimsSimulation;
 
-/// <summary>Loads the original ExpansionShared/work.iff CARR table used by Sims.exe FUN_00404ccb/FUN_00403647.</summary>
+/// <summary>Loads career progression and track definitions from the CARR table in
+/// <c>ExpansionShared/work.iff</c>.</summary>
 internal static class SimCareerCatalog
 {
     public static CareerCatalog? Load(string gameRoot)

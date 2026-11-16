@@ -4,8 +4,6 @@ using SimsEngine.Formats;
 
 namespace SimsEngine.Tests;
 
-/// <summary>Pose sampling and composition on hand-built skeletons and curves: the frame and curve reads of FUN_00597c54, the
-/// blend of FUN_005939a0 and the parent links of FUN_0059903f.</summary>
 public class PoseTests
 {
     [Theory]
@@ -52,7 +50,8 @@ public class PoseTests
         Assert.Equal(pose[31].LocalTranslation, adjusted[31].LocalTranslation);
     }
 
-    /// <summary>sin and cos of 45 degrees: a quarter turn about Z is (0, 0, Half, Half).</summary>
+    /// <summary>A 90-degree rotation about the Z axis represented by a unit quaternion whose Z and W
+    /// components are the sine and cosine of 45 degrees.</summary>
     private const float Half = 0.70710678f;
 
     private static readonly Quaternion QuarterTurnZ = new(0, 0, Half, Half);
@@ -164,7 +163,6 @@ public class PoseTests
     private static Bone MakeBone(string name, string parent, Vector3 translation, Quaternion? rotation = null) =>
         new(name, parent, [], translation, rotation ?? Quaternion.Identity, [0, 0, name == "ROOT" ? 0 : 1], [0, 0]);
 
-    /// <summary>ROOT at (1, 0, 0), PELVIS under it at (0, 2, 0), HEAD under PELVIS at (0, 0, 3); all at the identity rotation.</summary>
     private static Skeleton Dog() => WithBones(
         MakeBone("ROOT", "NULL", new Vector3(1, 0, 0)),
         MakeBone("PELVIS", "ROOT", new Vector3(0, 2, 0)),
@@ -172,8 +170,9 @@ public class PoseTests
 
     private static Skeleton WithBones(params Bone[] bones) => new("dog", bones);
 
-    /// <summary>A motion whose translation frames start at <paramref name="translationBase"/> and rotation frames at
-    /// <paramref name="rotationBase"/> (its Integers[2] and Integers[3]).</summary>
+    /// <summary>Creates a motion where <paramref name="translationBase"/> and
+    /// <paramref name="rotationBase"/> define the base offsets for translation and rotation frames in the
+    /// curve channel array.</summary>
     private static Motion MakeMotion(string name, int frames, int translationBase = 0, int rotationBase = 0) =>
         new(name, frames, 0f, [0, 0, translationBase, rotationBase], [], []);
 
@@ -208,12 +207,10 @@ public class PoseTests
         AssertVector(new Vector3(5, 0, 0), root.WorldTranslation);
         AssertRotation(new Quaternion(0, 0, -Half, Half), root.WorldRotation);
 
-        // The bind pose is the skeleton's own transform.
         var pelvis = Named(poses, "PELVIS");
         Assert.False(pelvis.Animated);
         AssertVector(new Vector3(0, 2, 0), pelvis.LocalTranslation);
         AssertRotation(Quaternion.Identity, pelvis.LocalRotation);
-        // Bone::UpdateTransform rotates the child offset with the parent world quaternion, which is the inverse root turn.
         AssertVector(new Vector3(7, 0, 0), pelvis.WorldTranslation);
         AssertRotation(new Quaternion(0, 0, -Half, Half), pelvis.WorldRotation);
 
@@ -295,11 +292,9 @@ public class PoseTests
     [Fact]
     public void EachMotionReadsItsOwnTranslationAndRotationBase()
     {
-        // Translation frames carry their index in X; rotation frame 1 is the quarter turn, the others are the identity.
         var curves = new AnimationCurves(
             [0, 0, 0, 1, 0, 0, 2, 0, 0, 3, 0, 0],
             [0, 0, 0, 1, 0, 0, Half, Half, 0, 0, 0, 1, 0, 0, 0, 1]);
-        // The PELVIS motion starts at translation frame 2 and rotation frame 1, and plays two frames.
         var animation = MakeAnimation(4, 4, MakeMotion("PELVIS", 2, translationBase: 2, rotationBase: 1));
 
         var first = Named(Pose.Sample(Dog(), animation, curves, 0), "PELVIS");
@@ -342,7 +337,8 @@ public class PoseTests
         var halfPose = Pose.Sample(skeleton, overlay, new AnimationCurves([9, 0, 0, 9, 0, 0], []), 0, basis, 0.5f);
         var zeroPose = Pose.Sample(skeleton, overlay, new AnimationCurves([9, 0, 0, 9, 0, 0], []), 0, basis, 0f);
 
-        // 00597c54.c:308: CanBlend (Integers[2]) is 1 on PELVIS (blends) and 0 on ROOT (assigns directly when weight > 0).
+        // When a bone's blend flag is disabled, its transform is assigned directly for any positive weight
+        // rather than interpolated.
         AssertVector(new Vector3(7, 0, 0), Named(halfPose, "PELVIS").LocalTranslation);
         AssertVector(new Vector3(9, 0, 0), Named(halfPose, "ROOT").LocalTranslation);
         AssertVector(new Vector3(5, 0, 0), Named(zeroPose, "PELVIS").LocalTranslation);
@@ -352,7 +348,8 @@ public class PoseTests
     [Fact]
     public void AMotionWithoutTranslationChannelKeepsTheBoneTranslation()
     {
-        // The PELVIS motion has rotation frames only (translation base -1): its translation stays at the bind pose.
+        // A translation base index of -1 indicates rotation-only motion channels, leaving bone translation
+        // at the bind pose.
         var animation = MakeAnimation(1, 1, MakeMotion("PELVIS", 1, translationBase: -1, rotationBase: 0));
         var curves = new AnimationCurves([9, 0, 0], [0, 0, Half, Half]);
 
@@ -379,10 +376,8 @@ public class PoseTests
 
         var halfway = Named(Pose.Sample(Dog(), animation, curves, 0.5), "ROOT");
         AssertVector(new Vector3(1, 0, 0), halfway.LocalTranslation);
-        // A normalized blend of the identity and a quarter turn is a 45 degree turn about Z.
         AssertRotation(new Quaternion(0, 0, MathF.Sin(MathF.PI / 8), MathF.Cos(MathF.PI / 8)), halfway.LocalRotation);
 
-        // The last frame has no next frame to blend with.
         AssertVector(new Vector3(2, 0, 0), Named(Pose.Sample(Dog(), animation, curves, 1.5), "ROOT").LocalTranslation);
     }
 
@@ -414,7 +409,8 @@ public class PoseTests
     public void TheShorterArcIsUsedWhenTheKeysAreOnOppositeHemispheres()
     {
         var animation = MakeAnimation(2, 2, MakeMotion("ROOT", 2));
-        // The same quarter turn stored with its sign flipped: the blend must still take the 45 degree arc.
+        // Quaternion interpolation takes the shortest spherical arc, correctly blending antipodal rotations
+        // with negated signs.
         var curves = new AnimationCurves([0, 0, 0, 0, 0, 0], [0, 0, 0, 1, 0, 0, -Half, -Half]);
 
         var halfway = Named(Pose.Sample(Dog(), animation, curves, 0.5), "ROOT");
@@ -502,7 +498,6 @@ public class PoseTests
     [Fact]
     public void AMotionReadingPastTheCurveArrayIsAnError()
     {
-        // Two frames play, but the curve holds one translation frame.
         var animation = MakeAnimation(1, 2, MakeMotion("ROOT", 2));
         var curves = new AnimationCurves([0, 0, 0], [0, 0, 0, 1, 0, 0, 0, 1]);
 

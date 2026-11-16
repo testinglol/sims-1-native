@@ -8,7 +8,7 @@ layout(std430, set = 0, binding = 0) readonly buffer Vertices { AvatarVertex ver
 layout(location = 0) out vec2 outUV;
 layout(location = 1) flat out vec4 outTint;
 layout(location = 2) out vec3 outNormal;
-// Character Detail Low (quad.uvRect.x = 1) draws the texture alone, as the exe's D3D stage 0 SELECTARG1(TEXTURE).
+// Character Detail Low (quad.uvRect.x = 1) draws the unlit texture alone.
 layout(location = 3) flat out float outTextureOnly;
 
 void main() {

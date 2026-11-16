@@ -2,16 +2,9 @@ using System.Buffers.Binary;
 
 namespace SimsEngine.Formats;
 
-/// <summary>A lot array chunk (Arry): a grid of fixed-size elements that a lot file keeps one per map layer, as
-/// Sims.exe FUN_004310b4 reads it.
-/// <para>When the chunk starts with a nonzero s16 it is the old layout: s16 element size, s16 row count, s16 width,
-/// then the elements from byte offset rows * 4 + 8 (Sims.exe skips that space without reading it). Otherwise the chunk
-/// is a little-endian stream without the persist header (FUN_004644dc) that FUN_0043143a reads: two s16s (the first
-/// being that zero), u32 row count (+8), u32 width (+4), u32 element size (+0x1c) and a u32 that selects run-length
-/// coding when nonzero, then rows * width * element size bytes. Coded data is a list of runs, each an s16 header whose
-/// bit 15 means "one byte repeated" and whose low 15 bits are the run length, followed by that one byte or that many
-/// literal bytes; after every run a pad byte follows when the stream offset is odd.</para>
-/// <para>Sims.exe does not check that a run stays inside the array; this reader rejects one that does not.</para></summary>
+/// <summary>Represents a lot array (Arry) grid resource. Older formats store 16-bit dimensions with data
+/// offset by <c>rows * 4 + 8</c>, while modern formats store 32-bit dimensions and support optional RLE
+/// compression where bit 15 flags repeated bytes and runs align to even byte offsets.</summary>
 public sealed class LotArray
 {
     public bool OldLayout { get; }
@@ -21,7 +14,6 @@ public sealed class LotArray
     public int Width { get; }
     public int ElementSize { get; }
     public bool RunLengthCoded { get; }
-    /// <summary>The elements, row by row.</summary>
     public byte[] Data { get; }
 
     private LotArray(bool oldLayout, short field0, short field1, int rows, int width, int elementSize, bool coded, byte[] data)
@@ -36,7 +28,6 @@ public sealed class LotArray
         Data = data;
     }
 
-    /// <summary>The element at <paramref name="row"/>, <paramref name="column"/>.</summary>
     public ReadOnlySpan<byte> Element(int row, int column) =>
         Data.AsSpan((row * Width + column) * ElementSize, ElementSize);
 
@@ -70,7 +61,6 @@ public sealed class LotArray
                 if (length > data.Length - at) throw reader.Error($"run of {length} bytes passes the end of the array");
                 if ((header & 0x8000) != 0)
                 {
-                    // Sims.exe stores the byte at the run start even for a zero-length run.
                     var value = reader.U8();
                     data[at] = value;
                     data.AsSpan(at, length).Fill(value);
@@ -83,8 +73,7 @@ public sealed class LotArray
         return new LotArray(false, first, field1, rows, width, elementSize, coded, data);
     }
 
-    /// <summary>The chunk bytes for this array's shape holding <paramref name="data"/>, written without run-length
-    /// coding (the coded flag at +0x10 is clear, which Sims.exe FUN_0043143a reads as raw elements).</summary>
+    /// <summary>Serializes the array data as an uncompressed Arry chunk.</summary>
     public byte[] ToChunkData(ReadOnlySpan<byte> data, int? elementSize = null)
     {
         if (OldLayout) throw new NotSupportedException("Old-layout lot arrays are not written");

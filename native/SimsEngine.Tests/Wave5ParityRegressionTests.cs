@@ -42,7 +42,6 @@ public sealed class Wave5ParityRegressionTests
         var avatarGeometry = AvatarSceneGeometry.For(gameDir, bootstrap.Registry);
         var camera = new LotCamera(0, 64, 64);
 
-        // Adult human (Bella Goth, id 18): crown-to-chin fills the 35x41 portrait window cleanly.
         var bella = Assert.IsType<XPerson>(bootstrap.World.ObjectById(18));
         var bellaMeshes = avatarGeometry.BuildHeadMeshes(bella, 1, 0, (_, _) => 0f, camera);
         Assert.NotEmpty(bellaMeshes);
@@ -53,10 +52,6 @@ public sealed class Wave5ParityRegressionTests
         Assert.InRange(bellaBounds.MinY, 0, 5);
         Assert.InRange(bellaBounds.MaxY, 35, 40);
 
-        // Unleashed Ragdoll cat (b005cat_ragdoll) & Rottweiler dog (b010dog_rott) use single-suit appearances
-        // with both PELVIS and HEAD bindings and headPair = "NONE".
-        // FUN_004e8249 (004e8249.c:20-35) must collect ONLY HEAD-bound meshes (no PELVIS chest/body leak)
-        // and FUN_004e7902 (004e7902.c:165-179, 228-284) must pose HEAD upright in the fixed (76,45,122,125) window.
         bella.AnimatorBodyStringMode = 2;
         bella.PresentationCharacter = bella.SavedCharacter! with
         {
@@ -76,7 +71,6 @@ public sealed class Wave5ParityRegressionTests
 
         var catFace = SimPortrait.FaceBitmap(catMeshes);
         var catBounds = ForegroundBounds(catFace, 35, 41, (0, 0, 82));
-        // Cat head sits naturally smaller than human height, with clear margin above top & bottom borders (no neck reaching y=40!).
         Assert.InRange(catBounds.MinY, 4, 15);
         Assert.InRange(catBounds.MaxY, 28, 39);
         Assert.True(catBounds.MaxY - catBounds.MinY < bellaBounds.MaxY - bellaBounds.MinY,

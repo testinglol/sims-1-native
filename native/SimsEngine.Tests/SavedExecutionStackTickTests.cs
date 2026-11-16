@@ -92,8 +92,6 @@ public sealed class SavedExecutionStackTickTests
     {
         var world = new SimulationWorld();
         var owner = world.Add(new XObject(3, new short[XObject.DefinitionCount]));
-        // The saved VisitGenerator stack proves the source passes the running object's Temp 0 (450) to an
-        // all-0xFF Sleep gosub.
         owner.Temporaries[0] = 450;
         short seen = -1;
         ScriptedStack? stack = null;
@@ -116,7 +114,6 @@ public sealed class SavedExecutionStackTickTests
 
         Assert.True(TreeRunner.RunRestoredObjectStack(world, owner));
 
-        // The one-based manager vector's capacity reaches slot 5.
         Assert.Equal(10_075, stack.StepLimit);
     }
 
@@ -135,7 +132,8 @@ public sealed class SavedExecutionStackTickTests
 
         Assert.True(TreeRunner.RunRestoredObjectStack(world, owner));
 
-        // Five manager slots add 75; two qualifying neighbors contribute 2² × 15. Other slots do not count.
+        // Execution step limits add 15 per active manager slot and 15 times the square of qualifying
+        // neighbors.
         Assert.Equal(10_135, stack.StepLimit);
     }
 
@@ -341,7 +339,8 @@ public sealed class SavedExecutionStackTickTests
     {
         var world = new SimulationWorld();
         var owner = world.Add(new XObject(8, new short[XObject.DefinitionCount]));
-        // A live person with the queued key keeps the request pending for the picker instead of failing it.
+        // A live person matching the request key keeps the interaction request pending for the picker
+        // dialog.
         world.Add(new XPerson(9, new short[XObject.DefinitionCount]) { RequestKey = 4 });
         var requestId = world.GenericSimsCallRequests.Start(owner, 4, GenericSimsCallRequestKind.First);
         short? ageSeenByStack = null;
@@ -363,7 +362,8 @@ public sealed class SavedExecutionStackTickTests
     {
         var world = new SimulationWorld();
         var owner = world.Add(new XObject(8, new short[XObject.DefinitionCount]));
-        // A live person with the queued key keeps the request pending for the picker instead of failing it.
+        // A live person matching the request key keeps the interaction request pending for the picker
+        // dialog.
         world.Add(new XPerson(9, new short[XObject.DefinitionCount]) { RequestKey = 4 });
         owner[ObjectData.LockoutCount] = 2;
         var requestId = world.GenericSimsCallRequests.Start(owner, 4, GenericSimsCallRequestKind.First);
@@ -404,7 +404,6 @@ public sealed class SavedExecutionStackTickTests
         Assert.Empty(owner.SavedStack);
         Assert.Equal(0, owner.SavedStackSize);
         Assert.Equal((short)-1, world.ClockManager.WaitTicksAt(owner.ClockManagerIndex));
-        // Mac TickAllObjects returns false after HandleError, so SimulateOneTick does not advance time.
         Assert.Equal(0, world.Clock.Ticks);
     }
 
@@ -430,7 +429,6 @@ public sealed class SavedExecutionStackTickTests
         Assert.Empty(owner.SavedStack);
         Assert.Equal(0, owner.SavedStackSize);
         Assert.Equal((short)-1, world.ClockManager.WaitTicksAt(owner.ClockManagerIndex));
-        // Mac TickAllObjects returns false after HandleError, so SimulateOneTick does not advance time.
         Assert.Equal(0, world.Clock.Ticks);
     }
 
@@ -501,8 +499,8 @@ public sealed class SavedExecutionStackTickTests
         var world = new SimulationWorld();
         world.CaptureExecutionTrace = true;
         world.CaptureExecutionTrace = true;
-        // A multi-tile part (OBJD MasterId != 0) skips FUN_00431c90's function 0 and one-tick tail, so function 1
-        // stays queued for the next manager tick.
+        // Multi-tile parts with a non-zero MasterId defer secondary initialization, keeping function 1
+        // queued for the subsequent manager tick.
         var definition = new short[XObject.DefinitionCount];
         definition[(int)ObjdField.MasterId] = 1;
         var owner = world.Add(new XObject(3, definition)
@@ -550,8 +548,8 @@ public sealed class SavedExecutionStackTickTests
         owner.Position = position;
         owner[ObjectData.ParentId] = parent.ClockManagerIndex;
         owner[ObjectData.ContainerId] = parent.ClockManagerIndex;
-        // Slot numbers are one-based hierarchy values: entry 0 of the slot vector is the sentinel, and FUN_00432664
-        // reads a root container's hierarchy slot as -1.
+        // Hierarchy slot numbers are 1-based indices with entry 0 reserved as a sentinel, while root
+        // containers use slot -1.
         parent[ObjectData.SlotHierNumber] = -1;
         owner[ObjectData.SlotHierNumber] = 1;
         owner[ObjectData.SlotNumber] = 1;
@@ -577,8 +575,8 @@ public sealed class SavedExecutionStackTickTests
     [Fact]
     public void ScriptErrorResetClimbsHierarchySlotZeroLinksToTheRootAndDropsTheStaleLink()
     {
-        // FUN_00432664 climbs from a hierarchy slot 0 link to the first object whose slot is not 0; a root there means
-        // the reset re-places the object without a container, and the old parent's slot-0 link is cleared.
+        // When resolving slot-0 links, traversal climbs to the first object with a non-zero slot;
+        // encountering a root clears the container link and re-places the object uncontained.
         var world = new SimulationWorld();
         var root = world.Add(new XObject(1, new short[XObject.DefinitionCount]));
         var position = new ObjectPosition(20 * 16 + 8, 20 * 16 + 8, 1);

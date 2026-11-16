@@ -11,16 +11,16 @@ public class RelativeArrivalFacingTests
     {
         var (context, _, _) = PrimitiveTestWorld.Create(stackObject: 2);
         var person = (XPerson)context.Me;
-        person[ObjectData.Direction] = 5; // Sim transit heading (5)
+        person[ObjectData.Direction] = 5;
 
         var anchor = context.World.Add(new XObject(2, PrimitiveTestWorld.Definition()));
-        anchor[ObjectData.Direction] = 2; // Anchor direction (2)
+        anchor[ObjectData.Direction] = 2;
 
         var slot = new RoutingSlotRequest { Facing = -3, Flags = 0xA0FF };
         var facing = RouteExecutor.RelativeArrivalFacing(
             context.World, person, anchor, slot, new ObjectPosition(100, 100, 1), null);
 
-        // Mac XRouting.s:1280 and Sims.exe FUN_00483fc1 return immediately on Facing -3, preserving heading
+        // A facing requirement of -3 preserves the Sim's transit heading.
         Assert.Equal(5, facing);
     }
 
@@ -35,27 +35,22 @@ public class RelativeArrivalFacingTests
 
         var slot = new RoutingSlotRequest { Facing = -2, Flags = 0x1 };
 
-        // 1. Sim destination is South (+Y) of anchor at (10, 12). Direction from (10, 12) to (10, 10) is deltaY = -2 -> 0 (FUN_00452129)
         var destSouth = new ObjectPosition(10 * 16 + 8, 12 * 16 + 8, 1);
         var facingNorth = RouteExecutor.RelativeArrivalFacing(context.World, person, anchor, slot, destSouth, null);
         Assert.Equal(0, facingNorth);
 
-        // 2. Sim destination is West (-X) of anchor at (8, 10). Direction from (8, 10) to (10, 10) is deltaX = +2 -> 2 (FUN_00452129)
         var destWest = new ObjectPosition(8 * 16 + 8, 10 * 16 + 8, 1);
         var facingEast = RouteExecutor.RelativeArrivalFacing(context.World, person, anchor, slot, destWest, null);
         Assert.Equal(2, facingEast);
 
-        // 3. Sim destination is North (-Y) of anchor at (10, 8). Direction from (10, 8) to (10, 10) is deltaY = +2 -> 4 (FUN_00452129)
         var destNorth = new ObjectPosition(10 * 16 + 8, 8 * 16 + 8, 1);
         var facingSouth = RouteExecutor.RelativeArrivalFacing(context.World, person, anchor, slot, destNorth, null);
         Assert.Equal(4, facingSouth);
 
-        // 4. Sim destination is East (+X) of anchor at (12, 10). Direction from (12, 10) to (10, 10) is deltaX = -2 -> 6 (FUN_00452129)
         var destEast = new ObjectPosition(12 * 16 + 8, 10 * 16 + 8, 1);
         var facingWest = RouteExecutor.RelativeArrivalFacing(context.World, person, anchor, slot, destEast, null);
         Assert.Equal(6, facingWest);
 
-        // 5. Sim destination is on the exact anchor tile (10, 10). Falls back to opposite anchor direction: (2 + 4) & 7 = 6
         var destCenter = new ObjectPosition(10 * 16 + 8, 10 * 16 + 8, 1);
         var facingOpposite = RouteExecutor.RelativeArrivalFacing(context.World, person, anchor, slot, destCenter, null);
         Assert.Equal(6, facingOpposite);
@@ -78,7 +73,6 @@ public class RelativeArrivalFacingTests
             {
                 anchor[ObjectData.Direction] = anchorDir;
 
-                // Test arbitrary destination points and search directions
                 var dest = new ObjectPosition((simDir + 10) * 16, (anchorDir + 10) * 16, 1);
                 var facing = RouteExecutor.RelativeArrivalFacing(
                     context.World, person, anchor, slot, dest, routeSearchDirection: (short)((simDir + 3) & 7));
@@ -101,7 +95,6 @@ public class RelativeArrivalFacingTests
 
         var slot = new RoutingSlotRequest { Facing = -2, Flags = 0x1 };
 
-        // Test all 8 cardinal/diagonal relative offsets from destination towards anchor (FUN_00452129)
         var testCases = new (int OffsetX, int OffsetY, short ExpectedFacing, string Label)[]
         {
             (0, -32, 4, "North of anchor -> faces South (4)"),

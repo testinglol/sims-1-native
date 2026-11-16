@@ -1,24 +1,14 @@
 using System.Buffers.Binary;
 namespace SimsEngine.Formats;
 
-/// <summary>One stored budget day (FUN_0046d38c): eight values when <see cref="Valid"/>, seven otherwise.</summary>
+/// <summary>Represents a stored budget day, containing eight expense values when valid and seven otherwise.</summary>
 public sealed record BudgetDay(bool Valid, IReadOnlyList<int> Values);
 
-/// <summary>The simulation record (SIMI) of a lot file, as Sims.exe FUN_0046d0cf reads it from the resource stream.
-/// <para>Fields in stream order: the simulation globals as s16s (16 before version 18, 32 before 65, then 64; before
-/// version 18 a u32 follows that Sims.exe keeps as global 16); a u32 kept at +0x98; an s16 kept at +0x1a8; from
-/// version 2 a u32 kept at +0x90; from version 14 two u32s (+0xac and a time value Sims.exe replaces with the current
-/// time unless FUN_004074bc holds); from version 15 a u32 that Sims.exe adds to +0x90 and clears; from version 37 three
-/// u32s at +0x9c, +0xa0 and +0xa4 (4500, 0 and 0 before); from version 38 six budget days (FUN_0046d38c: a u32 that
-/// selects eight values when nonzero and seven when zero, then the values), the first kept at +0x184 and the other
-/// five from +0xe4.</para>
-/// <para>Sims.exe also rewrites some globals after reading old versions (below 6, 17 and 21); this reader keeps the
-/// stored values. Inferred, not traced: that +0x9c, +0xa0 and +0xa4 are the lot, furnishings and architecture
-/// values.</para></summary>
+/// <summary>Represents a lot simulation record (SIMI), storing simulation globals, lot and architecture
+/// valuations, and daily expense histories across chunk versions.</summary>
 public sealed class SimulationState
 {
     public int Version { get; }
-    /// <summary>Whether the resource stream stores its numeric fields big-endian.</summary>
     public bool Swap { get; }
     public IReadOnlyList<short> Globals { get; }
     public int? StoredGlobal16 { get; }
@@ -33,12 +23,10 @@ public sealed class SimulationState
     public int Field0xA4 { get; }
     public IReadOnlyList<BudgetDay> BudgetDays { get; }
 
-    /// <summary>Returns this SIMI record with updated daily expense history, preserving all other source fields.</summary>
     public SimulationState WithBudgetDays(IReadOnlyList<BudgetDay> budgetDays) => new(Version, Swap, Globals,
         StoredGlobal16, Field0x98, Field0x1A8, Field0x90, Field0xAC, StoredTime, Field0x94, Field0x9C,
         Field0xA0, Field0xA4, budgetDays);
 
-    /// <summary>Returns this SIMI record with updated furnishings (+0xA0) and architecture (+0xA4) valuation fields.</summary>
     public SimulationState WithValuation(int fieldA0, int fieldA4) => new(Version, Swap, Globals,
         StoredGlobal16, Field0x98, Field0x1A8, Field0x90, Field0xAC, StoredTime, Field0x94, Field0x9C,
         fieldA0, fieldA4, BudgetDays);
@@ -102,10 +90,8 @@ public sealed class SimulationState
             field9C, fieldA0, fieldA4, days);
     }
 
-    /// <summary>Serializes this SIMI resource stream as Sims.exe's FUN_0046d0cf field order, preserving its byte order
-    /// and version. <paramref name="randomState"/> replaces the stored +0xac value when a native simulation tick has
-    /// advanced it, and <paramref name="globals"/> replaces the stored global table (the first version-sized values
-    /// are written). FUN_0046d0cf uses the same resource-stream fields to restore and save the record.</summary>
+    /// <summary>Serializes the SIMI chunk data, optionally updating the stored RNG state and simulation
+    /// globals while preserving format version and byte order.</summary>
     public byte[] WriteChunkData(uint? randomState = null, ReadOnlySpan<short> globals = default)
     {
         if (Version < 0) throw new InvalidDataException($"Invalid SIMI version {Version}.");
@@ -122,8 +108,8 @@ public sealed class SimulationState
         using var output = new MemoryStream();
         output.WriteByte(Swap ? (byte)1 : (byte)0);
         output.Write([0, 0, 0]);
-        WriteLittleInt32(output, Version); // The resource-stream header version is always little-endian.
-        output.Write("IMIS"u8); // Persist-stream type tag, reversed as FUN_00464faf stores it.
+        WriteLittleInt32(output, Version); // The resource stream header version is always stored little-endian.
+        output.Write("IMIS"u8);
 
         for (var index = 0; index < globalCount; index++)
             WriteInt16(output, globals.IsEmpty ? Globals[index] : globals[index]);

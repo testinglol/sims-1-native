@@ -1,20 +1,17 @@
 namespace SimsEngine.Simulation;
 
-/// <summary>The lot table's dialog words, read and written by the Dialog primitive: the table's words at +0xea to +0xfc
-/// (inferred name: the lot's dialog state). <see cref="this[int]"/> takes the byte offset in the table. The holders at
-/// +0xf8, +0xfc and +0x104 are dword object pointers in Sims.exe; here they are object ids, 0 for none.</summary>
+/// <summary>Tracks shared lot dialog synchronization words and object reservations accessed by the Dialog
+/// primitive.</summary>
 public sealed class DialogWords
 {
     private readonly short[] _words = new short[0x90];
 
     public DialogWords()
     {
-        // FUN_00415c5b initializes lot word +0x100 (pet adoption choice index) to -1 so MakeNewCharacter (FUN_0044ae48)
-        // draws a random breed unless Dialog case 9 wrote a player-selected breed index.
+        // Initializes pet adoption choice to -1 so a random breed is selected unless chosen via dialog.
         _words[0x100 >> 1] = -1;
     }
 
-    /// <summary>The word at byte <paramref name="offset"/> of the lot table (an even offset below 0x120).</summary>
     public short this[int offset]
     {
         get => _words[offset >> 1];
@@ -22,42 +19,9 @@ public sealed class DialogWords
     }
 }
 
-/// <summary>The Dialog primitive (opcode 0x24), after Sims.exe 0x451592. The name is inferred: the handler works on the
-/// lot's dialog words and on a dialog record the owner keeps in the lot table's dialog list (+0x64).
-/// <para>Order, as the handler runs it:</para>
-/// <list type="number">
-/// <item>The owner's dialog record is looked up (FUN_0044439c, <see cref="ISimulationHost.DialogRecordState"/>). A record
-/// in state 1 is dismissed through FUN_004370fd before processing the primitive operand.</item>
-/// <item>Operand byte 7 bit 0 runs FUN_004443eb, which creates and registers a record of a type the byte 5 selects.</item>
-/// <item>Otherwise operand byte 5 (masked with 0x7f) selects the case.</item>
-/// </list>
-/// <para>Cases ported here:</para>
-/// <list type="bullet">
-/// <item>5, 7, 8 and 0xb take a lock word of the lot table (+0xea, +0xec, +0xf2, +0xee). A zero word becomes -1 and the
-/// primitive answers <see cref="PrimitiveResult.Stop"/>. Otherwise the running object's temporary 0 takes the word, the
-/// word becomes 0 and the primitive answers true.</item>
-/// <item>0xd takes the lock word +0xf0 the same way when it is not zero. With a zero word, the global byte at
-/// DAT_006f2a08 +0xf8 determines whether the word becomes -1; the primitive stops either way.</item>
-/// <item>6 and 0xe hold the dialog for the running object, a person (definition type 2; any other object raises error 28,
-/// "Object referred to must be a person."). Holder +0xf8 (case 6) or +0xfc (case 0xe) is 0: the holder takes the running
-/// object and the saved word (+0xf4 for case 6, +0xf6 for case 0xe) takes the temporary 0, and the primitive answers
-/// <see cref="PrimitiveResult.Stop"/>. The running object already holds it: the temporary 0 takes +0xf6, the holder and the
-/// saved word are cleared, and the primitive answers true when +0xf4 is -2 (0xfffe) and false otherwise. Another object
-/// holds it: the holder and the saved word are cleared, the temporary 0 becomes 0, and the primitive answers false.</item>
-/// <item>9 uses the stack object's object-table entry, which must be a person, as a second holder at +0x104. The first
-/// caller reserves it and stops. The holder later releases it: temporary 0 receives +0x100, and +0x108 == -2 selects
-/// true; otherwise +0x100 becomes -1. A different holder clears the reservation and answers false.</item>
-/// <item>0xa, for a person, exchanges temporary 0 with the lot's +0xe8 word. A nonzero word is consumed (positive
-/// values are returned in temporary 0 and true; negative values answer false without changing the temporary). An
-/// empty word stores the negated neighbor id and stops.</item>
-/// </list>
-/// <para>Record kinds 0–4 and specialized kinds 5–11, 13, and 14 create UI records. The client dispatches travel,
-/// wardrobe/pet selection, and phone-book records to their corresponding native screens. Cases 0xc and 0xf present
-/// dialog styles 0 and 1 through the host, or create matching native book-dialog records without a host. Specialized
-/// travel state changes outside the dialog manager remain separate from these records. Generic record creation and the
-/// record-state branch (0x4519ee) run the same way with or without a host; the host's
-/// <see cref="ISimulationHost.CreateDialogRecord"/> family of members replaces the world's own record list.</para>
-/// <para>Inferred: the dword holders are kept as object ids, and the -2 mark is the one the handler tests (0xfffe).</para></summary>
+/// <summary>Implements the Dialog primitive (opcode 0x24), which creates modal UI dialog records (message,
+/// travel, wardrobe, phone book) and manages lot-level synchronization lock words and person-to-person
+/// dialog reservations.</summary>
 public static class DialogPrimitive
 {
     private const int DefinitionTypeField = 9;
@@ -73,18 +37,11 @@ public static class DialogPrimitive
         {
             if (host is not null) host.DismissDialogRecord(me);
             else world.DismissDialogRecord(me);
-            // FUN_00451592 aborts a state-1 record, clears its local pointer, and
-            // continues processing this same Dialog instruction. The native
-            // record must be removed as well so a replacement record can be found
-            // by owner on the next tick.
             if (host is null && world.DialogRecord(me) is { } dismissedAfterAbort) world.CompleteDialogRecord(dismissedAfterAbort);
             state = null;
         }
         else if (state == 5)
         {
-            // State 5 is already dismissed (FUN_004370fd). The source clears its
-            // current-record pointer and falls through to the instruction's
-            // normal handling instead of treating dismissal as a response.
             if (host is null && world.DialogRecord(me) is { } terminalRecord) world.CompleteDialogRecord(terminalRecord);
             state = null;
         }
@@ -127,8 +84,6 @@ public static class DialogPrimitive
             ? $"This dialog operation needs a simulation host for {operation} ({location})."
             : $"This dialog operation needs a simulation host for {operation}.");
 
-    /// <summary>Native implementation of Dialog records created by
-/// FUN_004443eb/FUN_004360c1. Text IDs are one-based in the Dialog operand and resolved through STR# 301 in code-owner scope.</summary>
     private static PrimitiveResult NativeMessageDialog(in TreeContext context, ReadOnlySpan<byte> operand, int? state)
     {
         var (world, me, frame) = context;
@@ -164,7 +119,6 @@ public static class DialogPrimitive
                     var tempIndex = (operand[7] >> 4) & 7;
                     me.Temporaries[tempIndex] = state.Value == 3 ? (short)0 : (short)1;
                 }
-                // State 3 (declined) also resets the lot table's +0x100 release word to -1 before answering false.
                 if (state.Value == 3) world.Dialog[0x100] = Reserved;
                 CompleteRecord(world, record);
                 return PrimitiveResult.False;
@@ -185,23 +139,15 @@ public static class DialogPrimitive
     {
         var (world, me, frame) = context;
         var kind = (byte)(operand[5] & 0x7f);
-        // FUN_004443eb gives every kind except 5, 7, 8, 0xb and 0xd the generic message record, including 12, 15 and
-        // the unused values above 15. Kinds 12 and 15 mean Spellbook/Cookbook screens only in the non-record
-        // primitive cases handled by ShowDialog above.
         var stackIcon = world.ObjectByStackObject(me, frame.StackObject);
         if (kind is 5 or 7 or 8 or 0xb or 0xd)
         {
-            // Those five kinds construct their own screen record (FUN_00549f7f, FUN_00568898, FUN_004425e8 or
-            // FUN_005569af, FUN_00564664, FUN_00551513) with no constructor arguments: the operand's strings are never
-            // read, so a missing STR# 301 entry cannot fail the instruction, and the record carries only its kind. The
-            // screen reports through the per-kind word of the lot table (TakeOrReserve), not through a message answer.
             return world.Host is { } screenHost
                 ? screenHost.CreateDialogRecord(world, me, stackIcon, "", "", null, null, null, kind, blocking, awaitsResponse)
                 : world.CreateMessageDialog(me, stackIcon, "", "", null, null, null, kind, blocking, awaitsResponse);
         }
-        // FUN_004360c1 (004360c1.c:87-149) seeds default button labels from UIText.iff STR# 142 (FUN_00435ff3:
-        // 1="OK", 2="Cancel", 3="Yes", 4="No"), overrides with non-empty STR# 301 entries (FUN_00436a83), and
-        // expands Yes, No, Cancel, Title, Message in order through FUN_0044bf5a, updating local_7c (auto-icon).
+        // Seeds default button labels from UIText.iff STR# 142 (OK, Cancel, Yes, No) and overrides them
+        // with any non-empty STR# 301 entries.
         var autoToken = AutoIconToken.None;
         var yes = NonEmptyOrNull(ReadDialogString(frame, world, stackIcon, me, operand[3], ref autoToken))
             ?? (kind is 1 or 2
@@ -260,26 +206,26 @@ public static class DialogPrimitive
     private static NeighborState? ResolveNeighborByIdOrSlot(SimulationWorld world, short idOrSlot) =>
         world.NeighborManagerEntry(idOrSlot) ?? (world.Neighbors.TryGetValue(idOrSlot, out var byId) ? byId : null);
 
-    /// <summary>FUN_004360c1 (004360c1.c:155-192): resolves the dialog icon selector for modes 0 (Auto), 1 (None),
-    /// 2 (Neighbor / FUN_00425b48), 3 (Indexed), and 4 (Dynamic STR# 301).</summary>
+    /// <summary>Resolves the dialog icon selector for modes 0 (Auto), 1 (None), 2 (Neighbor), 3 (Indexed),
+    /// and 4 (Dynamic STR# 301).</summary>
     private static XObject? ResolveDialogIcon(SimulationWorld world, XObject me, StackFrame frame, XObject? stackIcon,
         int iconMode, AutoIconToken autoToken, out string? neighborSpec)
     {
         neighborSpec = null;
         switch (iconMode)
         {
-            case 0: // Auto (004360c1.c:156-166)
+            case 0:
                 if (autoToken == AutoIconToken.Neighbor && ResolveNeighborByIdOrSlot(world, frame.StackObject) is { } autoNeighbor)
                 {
                     neighborSpec = $"dialog-neighbor:{autoNeighbor.TypeRecordKey:X8}:{autoNeighbor.Name}";
                     return FindPersonForNeighbor(world, frame.StackObject, autoNeighbor);
                 }
                 return ResolveMasterObject(world, stackIcon);
-            case 1: // None (004360c1.c:167-168)
-            case 3: // Indexed (004360c1.c:175-182: local_98 remains 0)
-            case 4: // Dynamic STR# 301 (004360c1.c:315-503: local_98 remains 0)
+            case 1:
+            case 3:
+            case 4:
                 return null;
-            case 2: // Neighbor (004360c1.c:169-174: FUN_00425b48(frame.StackObject))
+            case 2:
                 if (ResolveNeighborByIdOrSlot(world, frame.StackObject) is { } neighbor)
                 {
                     neighborSpec = $"dialog-neighbor:{neighbor.TypeRecordKey:X8}:{neighbor.Name}";
@@ -302,8 +248,8 @@ public static class DialogPrimitive
 
     private static Formats.IffFile CreateSpecIff(string specSource) => new(EmptyIffHeader, specSource);
 
-    /// <summary>FUN_004360c1 (004360c1.c:175-518): populates ImageFile and ImageBitmapId for mode 3 (Indexed 5000 + operand[1]),
-    /// mode 4 (Dynamic STR# 301 command spec: my, gz, gzi, guid, rel, job), and off-lot neighbor portraits.</summary>
+    /// <summary>Populates dialog image metadata for indexed icons (5000 + operand offset), dynamic STR# 301
+    /// command specs, and off-lot neighbor portraits.</summary>
     private static void ApplyDialogImageMetadata(SimulationDialogRecord created, SimulationWorld world, XObject me,
         StackFrame frame, XObject? stackIcon, int iconMode, byte iconOperand, string? neighborSpec)
     {
@@ -408,9 +354,8 @@ public static class DialogPrimitive
         byte oneBasedIndex, ref AutoIconToken autoToken)
     {
         if (oneBasedIndex == 0) return null;
-        // FUN_004360c1 obtains STR# 301 through the frame's code-owner resource
-        // (Mac reference: the current stack frame's resource). A shared BHAV can run on a stack
-        // whose object resource differs from the Sim that owns the current thread.
+        // Resolves STR# 301 through the frame's code-owner resource, which may differ from the Sim running
+        // the thread in shared routines.
         string? value = null;
         if (frame.Table is Content.BehaviorScope scope)
         {
@@ -425,9 +370,8 @@ public static class DialogPrimitive
         else value = world.StringTableEntry(icon, me, 301, oneBasedIndex - 1);
         if (value is null) return null;
         TrackAutoIconTokens(value, world, me, frame, ref autoToken);
-        // FUN_004360c1 runs every string through FUN_0044bf5a. $Me is the object's assigned name, then CTSS entry 0,
-        // then the OBJD label; the other commands are the dynamic string table of that
-        // routine. PersonCharacter.Names stores three appearance-related strings, not a Sim name.
+        // Expands $Me using the object's assigned name, falling back to CTSS entry 0, then the OBJD catalog
+        // label.
         return new InteractionMenuContext(world).Expand(value, me, frame);
     }
 
@@ -455,8 +399,6 @@ public static class DialogPrimitive
         }
     }
 
-    /// <summary>Cases 0xc/0xf (0x451922/0x451986): Sims.exe resolves the running object as a person, constructs dialog
-    /// style 0/1, presents it with FUN_004f6c41 and hands it to FUN_005da4c7. Both branches answer true.</summary>
     private static PrimitiveResult ShowDialog(ISimulationHost? host, SimulationWorld world, XObject me, byte style)
     {
         if (me is not XPerson person)
@@ -478,8 +420,8 @@ public static class DialogPrimitive
     private static bool IsLotScreenDialogPending(SimulationWorld world, byte kind) =>
         world.Host is null && world.DialogRecords.Any(record => record.Kind == kind && record.State < 2);
 
-    /// <summary>Cases 5, 7, 8, 0xb and 0xd: a free lock is reserved (-1, Stop); a held lock gives its value to the
-    /// temporary 0 and is freed (true).</summary>
+    /// <summary>Acquires or releases a lot dialog lock word: an available lock is reserved (-1, yielding
+    /// execution), while a held lock transfers its value to temporary 0 and is released.</summary>
     private static PrimitiveResult TakeOrReserve(in TreeContext context, DialogWords words, int offset, byte kind)
     {
         var (world, me, _) = context;
@@ -495,9 +437,6 @@ public static class DialogPrimitive
         return PrimitiveResult.True;
     }
 
-    /// <summary>Cases 6 and 0xe: <paramref name="holderOffset"/> is the holder and <paramref name="savedOffset"/> the word the
-    /// set and release use (+0xf4 for case 6, +0xf6 for case 0xe). The release always reads the temporary from +0xf6 and
-    /// tests +0xf4, as the handler does.</summary>
     private static PrimitiveResult Holder(in TreeContext context, DialogWords words, int holderOffset, int savedOffset, byte kind)
     {
         var (world, me, _) = context;
@@ -525,8 +464,6 @@ public static class DialogPrimitive
         return PrimitiveResult.False;
     }
 
-    /// <summary>Case 9 (0x451864): the +0x104 holder is a person selected by the running object's frame stack key.
-    /// The +0x100 release mark is retained on success and reset to -1 on either failed release.</summary>
     private static PrimitiveResult StackObjectHolder(in TreeContext context, DialogWords words)
     {
         var selected = context.World.ObjectByStackObject(context.Me, context.Frame.StackObject);
@@ -561,8 +498,8 @@ public static class DialogPrimitive
         return PrimitiveResult.False;
     }
 
-    /// <summary>Case 0xa (0x451800): the person posts its negative neighbor id into +0xe8, or consumes the posted
-    /// word. Nonpositive consumed words do not overwrite temporary 0.</summary>
+    /// <summary>Manages neighbor ID exchange on the lot: posts the person's negated neighbor ID if empty,
+    /// or consumes a posted positive ID into temporary 0.</summary>
     private static PrimitiveResult NeighborIdExchange(in TreeContext context, DialogWords words)
     {
         var (world, me, _) = context;

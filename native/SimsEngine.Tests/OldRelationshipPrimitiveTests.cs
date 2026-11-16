@@ -12,7 +12,6 @@ public sealed class OldRelationshipPrimitiveTests
         return definition;
     }
 
-    // The running object is 1 and the stack object is 2; both are plain objects. The frame's parameters are given.
     private static (TreeContext Context, SimulationWorld World, XObject Me, XObject Stack) ObjectWorld(short[]? parameters = null)
     {
         var world = new SimulationWorld();
@@ -21,7 +20,6 @@ public sealed class OldRelationshipPrimitiveTests
         return (new TreeContext(world, me, new StackFrame(2, parameters ?? new short[] { 0, 0 }, [])), world, me, stack);
     }
 
-    // The running person is 1 with neighbor record 1, the stack object is person 2 with neighbor record 2.
     private static (TreeContext Context, SimulationWorld World, XPerson Me) PersonWorld()
     {
         var world = new SimulationWorld();
@@ -34,8 +32,9 @@ public sealed class OldRelationshipPrimitiveTests
         return (new TreeContext(world, me, new StackFrame(2, new short[] { 0, 0 }, [])), world, me);
     }
 
-    // Byte 0 is the write flag, byte 1 the value index (signed), byte 2 the parameter index (signed), byte 3 the mode
-    // (signed) and byte 4 the flags: bit 0 forbids growing a missing slot, bit 1 uses the neighbor records.
+    // Operand layout: byte 0 is the write flag, byte 1 the value index, byte 2 the parameter index, byte 3
+    // the mode, and byte 4 flags where bit 0 prevents allocating missing slots and bit 1 targets neighbor
+    // records.
     private static byte[] Operand(byte write = 0, sbyte index = 0, sbyte parameter = 0, sbyte mode = 0, byte flags = 0) =>
         [write, (byte)index, (byte)parameter, (byte)mode, flags, 0, 0, 0];
 

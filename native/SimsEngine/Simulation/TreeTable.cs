@@ -2,11 +2,7 @@ using SimsEngine.Formats;
 
 namespace SimsEngine.Simulation;
 
-/// <summary>
-/// A mutable representation of an object's interaction table (TTAB) entry,
-/// allowing dynamic tuning overrides to be bound per Sims.exe FUN_0043cc48
-/// and Mac ObjectFolder::ImportConstants (ObjectFolder.s:2568-3190).
-/// </summary>
+/// <summary>Represents a mutable interaction table (TTAB) entry, supporting dynamic tuning overrides.</summary>
 public sealed class TreeTableEntry
 {
     public ushort ActionTree { get; init; }
@@ -51,14 +47,8 @@ public sealed class TreeTableEntry
         Name);
 }
 
-/// <summary>
-/// Utility methods for TTAB interaction tables and tuning override binding.
-/// </summary>
 public static class TreeTable
 {
-    /// <summary>
-    /// Applies tuning overrides to the given interaction table.
-    /// </summary>
     public static InteractionTable ApplyOverrides(uint guid, InteractionTable table) =>
         Content.TuningOverrideImporter.ApplyGuidOverrides(guid, table);
 }

@@ -21,9 +21,6 @@ public sealed class Wave8ParityRegressionTests
         Assert.Equal((4, 3), PanelImages.PersonFaceSheetGrid(180, 135));
         Assert.Equal((1, 1), PanelImages.PersonFaceSheetGrid(32, 32));
 
-        // Construct a synthetic 105x41 3-column BMP_ #2002 strip:
-        // Column 0 (x=0..34): green neutral face (10, 200, 20)
-        // Columns 1..2 (x=35..104): bright red neighboring expressions (240, 10, 10)
         var stripRgba = new byte[105 * 41 * 4];
         for (var y = 0; y < 41; y++)
         {
@@ -37,7 +34,6 @@ public sealed class Wave8ParityRegressionTests
             }
         }
 
-        // Construct a 45x45 PeopleTemplate.bmp with a distinct blue outer bevel (0, 30, 180)
         var templateRgba = new byte[45 * 45 * 4];
         for (var i = 0; i < 45 * 45; i++)
         {
@@ -52,7 +48,6 @@ public sealed class Wave8ParityRegressionTests
         Assert.Equal(45, outW);
         Assert.Equal(45, outH);
 
-        // Verify outer 2px bevel is intact all around and zero red neighbor-column pixels bled in.
         for (var y = 0; y < 45; y++)
         {
             for (var x = 0; x < 45; x++)
@@ -69,7 +64,6 @@ public sealed class Wave8ParityRegressionTests
             }
         }
 
-        // Also verify real shipped Bella Goth dialog thumbnail via PanelImages.DialogImage
         var gameDir = LocateGameDirectory();
         var house05Path = gameDir is null ? null : Path.Combine(gameDir, "UserData", "Houses", "House05.iff");
         if (gameDir is null || !File.Exists(house05Path))
@@ -122,8 +116,8 @@ public sealed class Wave8ParityRegressionTests
             var slot = bella.RuntimeSlots[0];
             Assert.Equal(2.0f, BitConverter.Int32BitsToSingle(slot.ReadWord(0x08)));
             slot.SetSelectorSprite(unchecked((int)fireEntry!.Guid));
-            slot.WriteWord(0x2c, 104); // Scream balloon (SPR# #104 in Sprites.iff)
-            slot.WriteWord(0x38, 1);   // Public balloon flag (TrySetBalloon)
+            slot.WriteWord(0x2c, 104);
+            slot.WriteWord(0x38, 1);
             slot.ActivateForTicks(120);
 
             var scenePath = SceneExporter.Export(boot.Lot, boot.World, boot.Registry, gameDir, tempDir, 5, 1);
@@ -135,7 +129,6 @@ public sealed class Wave8ParityRegressionTests
                 .ToArray();
             Assert.True(bellaSprites.Length >= 2, $"Expected scream balloon + Fire speech icon on Sim {bella.Id}, got {bellaSprites.Length}.");
 
-            // Find Bella's highest avatar mesh vertex Y (minimum screen Y = top of head/hair)
             var bellaMinMeshY = root.GetProperty("meshes").EnumerateArray()
                 .Where(m => m.TryGetProperty("objectID", out var oid) && oid.GetInt32() == bella.Id)
                 .SelectMany(m => m.GetProperty("vertices").EnumerateArray())
@@ -147,18 +140,15 @@ public sealed class Wave8ParityRegressionTests
                 textures[s.GetProperty("texture").GetInt32()].GetProperty("file").GetString()!.Contains("runtime-slot-", StringComparison.Ordinal) &&
                 !textures[s.GetProperty("texture").GetInt32()].GetProperty("file").GetString()!.Contains("speech", StringComparison.Ordinal));
 
-            // Both balloon and speech icon must be unlit (room == null) and have Near zoom images
             Assert.True(!balloonSprite.TryGetProperty("room", out var balloonRoom) || balloonRoom.ValueKind == JsonValueKind.Null);
             Assert.True(!speechSprite.TryGetProperty("room", out var speechRoom) || speechRoom.ValueKind == JsonValueKind.Null);
             Assert.Equal(JsonValueKind.Object, balloonSprite.GetProperty("near").ValueKind);
             Assert.Equal(JsonValueKind.Object, speechSprite.GetProperty("near").ValueKind);
 
-            // Speech icon center must sit strictly above the top of Bella's head mesh (smaller screen Y = higher on screen)
             var speechCenterY = speechSprite.GetProperty("y").GetSingle() + speechSprite.GetProperty("height").GetSingle() * 0.5f;
             Assert.True(speechCenterY < bellaMinMeshY,
                 $"Balloon speech icon center Y ({speechCenterY}) must float above Sim's top head vertex Y ({bellaMinMeshY}).");
 
-            // Verify Fire speech icon BMP_ #4000 corner (0, 0) background (248, 252, 248) is color-keyed transparent (alpha == 0)
             var speechTexFile = textures[speechSprite.GetProperty("texture").GetInt32()].GetProperty("file").GetString()!;
             var speechRgba = File.ReadAllBytes(Path.Combine(tempDir, speechTexFile));
             Assert.Equal(0, speechRgba[3]);
@@ -192,7 +182,6 @@ public sealed class Wave8ParityRegressionTests
             var vox = bank.ResolveVoice("fire_panic_vox", 'f', 1);
             Assert.NotNull(vox);
 
-            // Verify sting_fire is non-positional (kArgsNormal) while fire_burning_small is positional
             var stingRes = bank.Resolve("sting_fire")!;
             var burnRes = bank.Resolve("fire_burning_small")!;
             Assert.False(stingRes.IsPositionalObjectTrack);
@@ -216,7 +205,6 @@ public sealed class Wave8ParityRegressionTests
             Assert.Equal(fireId, burnPlay.GetProperty("ownerID").GetInt32());
             Assert.True(burnPlay.GetProperty("spatial").GetBoolean());
 
-            // Fire.iff BHAV #4123 calls StopAllSounds(fireId) when transitioning burn stages; sting_fire must NOT be stopped!
             events.Clear();
             router.RemoveOwner(fireId);
             var stoppedVoices = events
@@ -236,7 +224,6 @@ public sealed class Wave8ParityRegressionTests
     [Fact]
     public void VitaboyDressUndressAndPerMotionFrameClamp_AttachesHandheldPropsAndSamplesMixedLengthTracks()
     {
-        // 1. Per-motion FrameCount clamp in Pose.Sample (00597c54.c): 10-frame primary track + 1-frame static secondary track
         var skeleton = new Skeleton("adult", [
             new Bone("ROOT", "NULL", [], Vector3.Zero, Quaternion.Identity, [0, 0, 0], [0, 0]),
             new Bone("R_HAND", "ROOT", [], new Vector3(1, 0, 0), Quaternion.Identity, [0, 0, 1], [0, 0]),
@@ -257,7 +244,6 @@ public sealed class Wave8ParityRegressionTests
         Assert.Equal(7.5f, sampled[0].LocalTranslation.X, 3);
         Assert.Equal(4.5f, sampled[1].LocalTranslation.Y, 3);
 
-        // 2. "dress" / "undress" time properties + FallbackWhiteTexture prop rendering
         var gameDir = LocateGameDirectory();
         var house05Path = gameDir is null ? null : Path.Combine(gameDir, "UserData", "Houses", "House05.iff");
         if (gameDir is null || !File.Exists(house05Path))
@@ -277,12 +263,10 @@ public sealed class Wave8ParityRegressionTests
         Assert.True(dressedPartCount > basePartCount,
             $"Expected handheld prop coffeecupbigfull to add mesh part(s): base={basePartCount}, dressed={dressedPartCount}.");
 
-        // Undress removes matching extra part case-insensitively even when suffixed with .apr
         Assert.True(SimulationWorld.ApplyAnimationTimeProperty(
             bella, playback, new AvatarAnimationSoundEvent(0, "", "undress", "COFFEECUPBIGFULL.APR", false, false)));
         Assert.Empty(bella.TransientExtraParts);
 
-        // Superstar animations (e.g. a2a-soc-photo-op-start.cmx.bcf) pass "accessory-paparazzicamera.cmx"
         Assert.True(SimulationWorld.ApplyAnimationTimeProperty(
             bella, playback, new AvatarAnimationSoundEvent(0, "", "dress", "accessory-paparazzicamera.cmx", false, false)));
         Assert.True(geometry.Build(bella, 1, 0, (_, _) => 0f, camera).Count > basePartCount);

@@ -3,10 +3,8 @@ using SimsEngine.Formats;
 
 namespace SimsEngine.World;
 
-/// <summary>The build catalog's wall patterns and their prices. FUN_004c4f65 fills the pattern map from Build.iff's
-/// STR# 0x83: ids 0 to 30 and 0xf8 to 0xff each take a map entry whose price is the numeric string at 1-based index
-/// 3 id - 2 (so id p takes 0-based index 3(p - 1), as the floor patterns do; id 0 has no string). FUN_004c6571 returns
-/// that price, or 0 for an id the map lacks or whose string is missing.</summary>
+/// <summary>Loads wallpaper pattern prices from Build.iff STR# 0x83, where price strings are stored at
+/// 3-string intervals (index 3*(id - 1)). Missing patterns default to a price of zero.</summary>
 public sealed class WallpaperCatalog
 {
     private readonly Dictionary<int, int> prices = [];
@@ -29,7 +27,6 @@ public sealed class WallpaperCatalog
         return catalog;
     }
 
-    /// <summary>Reads Build.iff from the game's GameData folder (or the game root of a flat install).</summary>
     public static WallpaperCatalog Open(string game, byte language = 1, IEnumerable<KeyValuePair<int, int>>? dynamicWalls = null)
     {
         foreach (var folder in new[] { ObjectRegistry.Resolve(game, "GameData"), game })
@@ -71,6 +68,5 @@ public sealed class WallpaperCatalog
 
     public bool Contains(int pattern) => prices.ContainsKey(pattern);
 
-    /// <summary>FUN_004c6571: the pattern's price, 0 when it is not in the catalog.</summary>
     public int Price(int pattern) => prices.GetValueOrDefault(pattern);
 }

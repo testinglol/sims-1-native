@@ -2,10 +2,8 @@ using System.Globalization;
 
 namespace SimsSDL.Client;
 
-/// <summary>
-/// Exports neighborhood manifests and artwork directly in-process using <c>SimsSimulation</c>, with post-export caching
-/// keyed on game content, neighborhood mode, profile files, and export flags.
-/// </summary>
+/// <summary>Exports neighborhood manifests and artwork in-process, caching results based on game content,
+/// neighborhood mode, profile files, and export flags.</summary>
 public static class NeighborhoodExport
 {
     private sealed record Cached(string Session, string Manifest, string[] Fingerprint);
@@ -84,9 +82,7 @@ public static class NeighborhoodExport
         global::ProfileBootstrap.ValidateProfileId(profileId);
 
         var storageRoot = dataRoot ?? workspace;
-        // An unchanged map is shown again from its earlier export: an export walks and renders lot artwork, and a session
-        // keeps its manifest and images after its content mount is discarded, so callers that discard the mount share it.
-        // Edits always export, and any change to the profile's files misses the cache.
+        // Unchanged maps reuse cached exports; profile edits invalidate the cache.
         var key = edit is null && discardsContent
             ? CacheKey(content, workspace, storageRoot, mode, profileId, neighborhood, includeWebScenes)
             : null;
@@ -162,7 +158,6 @@ public static class NeighborhoodExport
         }
         finally
         {
-            // The export only reads the mount; its images and manifest live beside it in the session.
             if (discardsContent && ownsMount)
             {
                 SessionSweeper.DeleteEntrySafely(mount);
@@ -175,7 +170,7 @@ public static class NeighborhoodExport
             throw new ContentError("Neighborhood export did not write its manifest");
         }
 
-        // The fingerprint is taken after the export, so files the export itself writes into the profile do not miss the next lookup.
+        // Fingerprint after export so files written by export do not bust the cache.
         if (key is not null)
         {
             Store(key, new Cached(session, manifest, Fingerprint(profile)));
@@ -184,9 +179,6 @@ public static class NeighborhoodExport
         return (session, manifest);
     }
 
-    /// <summary>
-    /// Looks up an earlier neighborhood export whose profile files have not changed.
-    /// </summary>
     public static (string Session, string Manifest)? LookupCached(
         GameContent content,
         string workspace,
@@ -212,9 +204,6 @@ public static class NeighborhoodExport
         return (hit.Session, hit.Manifest);
     }
 
-    /// <summary>
-    /// Stores a neighborhood export alongside the profile's post-export file fingerprint.
-    /// </summary>
     public static void StoreCached(
         GameContent content,
         string workspace,
@@ -237,9 +226,6 @@ public static class NeighborhoodExport
         Store(key, new Cached(session, manifest, Fingerprint(profile)));
     }
 
-    /// <summary>
-    /// Forgets every earlier export, for callers that change what the export reads outside the profile folder.
-    /// </summary>
     public static void InvalidateCache()
     {
         lock (CacheLock)
@@ -303,9 +289,6 @@ public static class NeighborhoodExport
         return string.Join('\n', parts);
     }
 
-    /// <summary>
-    /// Every file under the profile with its size and modification time, which change whenever a save or edit writes there.
-    /// </summary>
     private static string[] Fingerprint(string profile)
     {
         if (!Directory.Exists(profile))
@@ -354,7 +337,6 @@ public static class NeighborhoodExport
         }
         catch
         {
-            // Best-effort diagnostics log.
         }
     }
 }

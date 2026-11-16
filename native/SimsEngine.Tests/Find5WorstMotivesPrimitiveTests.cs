@@ -12,7 +12,6 @@ public sealed class Find5WorstMotivesPrimitiveTests
         return definition;
     }
 
-    // Me is person 1 and the stack object is person 2 unless the test replaces them.
     private static (TreeContext Context, XPerson Me, XPerson Stack) World(short stackObject = 2)
     {
         var world = new SimulationWorld();
@@ -22,7 +21,8 @@ public sealed class Find5WorstMotivesPrimitiveTests
         return (new TreeContext(world, me, frame), me, stack);
     }
 
-    // Bytes 0 to 3 are unused. Subject at 4 and search type at 6.
+    // In the find worst motives operand, bytes 0 through 3 are unused, byte 4 specifies the subject, and
+    // byte 6 specifies the search type.
     private static byte[] Operand(short subject, ushort searchType) =>
         [0, 0, 0, 0, (byte)subject, (byte)(subject >> 8), (byte)searchType, (byte)(searchType >> 8)];
 
@@ -49,7 +49,6 @@ public sealed class Find5WorstMotivesPrimitiveTests
         me.Temporaries[6] = 99;
 
         Assert.Equal(PrimitiveResult.True, Find5WorstMotivesPrimitive.Execute(context, Operand(0, 0)));
-        // Comfort 10, Bladder 20, Social 30, Hunger 50, Fun 60.
         Assert.Equal(new short[] { 6, 9, 14, 7, 15 }, me.Temporaries[..5]);
         Assert.Equal(0, me.Temporaries[5]);
         Assert.Equal(99, me.Temporaries[6]);
@@ -58,8 +57,8 @@ public sealed class Find5WorstMotivesPrimitiveTests
     [Fact]
     public void EqualMotivesFollowTheTracedSortOrder()
     {
-        // The sort moves the greatest of the rest to the end each pass, so equal motives come out as
-        // Comfort, Hunger, Hygiene, Bladder, Room (the eight start as 5, 6, 7, 8, 9, 13, 14, 15).
+        // When motives have equal values, the selection sort moves the maximum remaining value to the end
+        // each pass, resolving ties in initial motive index order.
         var (context, me, _) = World();
         SetAll(me, 50);
         Assert.Equal(PrimitiveResult.True, Find5WorstMotivesPrimitive.Execute(context, Operand(0, 0)));
@@ -69,8 +68,6 @@ public sealed class Find5WorstMotivesPrimitiveTests
     [Fact]
     public void MotivesWithinTheToleranceCompareEqual()
     {
-        // Comfort (10) and Bladder (10.005) are within 0.01, so the comparison does not order them.
-        // The other six are 90. The traced sort gives Comfort, Bladder, Hygiene, Hunger, Room.
         var (context, me, _) = World();
         SetAll(me, 90);
         me[Motive.Comfort] = 10;
@@ -126,7 +123,6 @@ public sealed class Find5WorstMotivesPrimitiveTests
         var (missing, _, _) = World(stackObject: 77);
         Assert.Equal(SimulationError.ReferenceToTreeParameterWhenNoParameterExists, Fails(() => Find5WorstMotivesPrimitive.Execute(missing, Operand(1, 0))));
 
-        // A stack object that is not a person (type 0) is refused the same way.
         var (chairContext, _, _) = World(stackObject: 3);
         chairContext.World.Add(new XObject(3, Definition(0)));
         Assert.Equal(SimulationError.ReferenceToTreeParameterWhenNoParameterExists, Fails(() => Find5WorstMotivesPrimitive.Execute(chairContext, Operand(1, 0))));

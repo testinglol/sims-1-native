@@ -1,32 +1,18 @@
 namespace SimsSDL.Core;
 
-/// <summary>
-/// Exact Sims.exe cWinMessage &amp; cTSWinTextEdit layout solver
-/// (00524112.c, 00524386.c, 00523434.c, 00524b60.c, 005353fa.c, 00535494.c, 00535213.c).
-/// </summary>
 public static class OriginalMessageDialogLayout
 {
-    /// <summary>PopupInfoTiles.bmp (36x36) 9-slice border 36 / 3 = 12px (FUN_00524b60, 00524b60.c:15-16).</summary>
     public const double Border = 12;
-    /// <summary>Inner dialog margin 9px (00524112.c:23, 28, 00524386.c:60, 68, 83, 126).</summary>
     public const double Margin = 9;
-    /// <summary>Total content inset border + margin = 21px (outerWidth = bodySpan + 42).</summary>
     public const double Pad = Border + Margin;
-    /// <summary>Horizontal gap between icon/portrait and header/side text (0x12 = 18px, 00524112.c:35, 00524386.c:32, 78).</summary>
     public const double ImageGap = 18;
-    /// <summary>Vertical gap between title bottom and body text top (0x1b - 9 = 18px, 00524112.c:26, 00524386.c:81).</summary>
     public const double TitleGap = 18;
-    /// <summary>WinBtn.bmp (260x33, 4 cells of 65x33) height and minimum width (0052386b.c:16-18, 005e7b7d.c:33-35).</summary>
     public const double ButtonHeight = 33;
     public const double MinButtonWidth = 100;
     public const double ButtonLabelPadding = 20;
-    /// <summary>Minimum per-button spacing reserve (0x1e = 30px, 00524386.c:42).</summary>
     public const double ButtonReserveSpacing = 30;
-    /// <summary>cWinTextEdit single-line entry height for kind == 3 dialogs.</summary>
     public const double InputHeight = 28;
-    /// <summary>Vertical scrollbar right-edge wrap reservation (005f4e36.c:37).</summary>
     public const int ScrollbarReservedWidth = 20;
-    /// <summary>cWinMessage target outer width / height aspect ratio (0x40000000 = 2.0f, 00523434.c:58).</summary>
     public const double TargetAspect = 2.0;
 
     public readonly record struct WrappedLine(string Text, bool Side);
@@ -141,10 +127,6 @@ public static class OriginalMessageDialogLayout
         }
     }
 
-    /// <summary>
-    /// cTSWinTextEdit::SetExclusion (005353fa.c:15-24): rounds pixel exclusion height to the nearest
-    /// integer multiple of lineHeight ((q + 1) * lineH - px &lt; px - q * lineH).
-    /// </summary>
     public static int NearestExclusionLines(int pixels, int lineHeight)
     {
         if (pixels <= 0 || lineHeight <= 0)
@@ -155,12 +137,9 @@ public static class OriginalMessageDialogLayout
         return lines;
     }
 
-    /// <summary>
-    /// cTSWinTextEdit two-width exclusion flow (00535494.c:26-71 + 00535213.c:35-50):
-    /// wraps the first sideLineLimit lines at sideWidth and remaining lines at fullWidth, keeping all lines in
-    /// the side column if the entire text already fits in &lt;= sideLineLimit lines (00535494.c:29-32) or if a single
-    /// short trailing line fits within sideWidth (00535213.c:35-50).
-    /// </summary>
+    /// <summary>Wraps text around an exclusion zone using a side width for initial lines and full width
+    /// below. All lines remain in the side column if the entire text fits within the limit or if a single
+    /// trailing line fits within the side width.</summary>
     public static IReadOnlyList<WrappedLine> FlowWrappedLines(
         string text,
         SimsBitmapFont font,
@@ -195,7 +174,6 @@ public static class OriginalMessageDialogLayout
             }
             catch (ContentError)
             {
-                // Fall through to two-width wrapping flow.
             }
         }
 
@@ -248,8 +226,6 @@ public static class OriginalMessageDialogLayout
         if (lines.Count > 512)
             throw new ContentError("Bitmap font paragraph has too many lines");
 
-        // FUN_00535213 (00535213.c:35-50): if only one line overflows past sideLineLimit and fits in sideWidth,
-        // keep it aligned with the side column instead of jumping left under the icon.
         if (sideLineLimit < int.MaxValue &&
             lines.Count == sideLineLimit + 1 &&
             font.TextWidth(lines[sideLineLimit].Text) <= clampedSide)
@@ -272,16 +248,9 @@ public static class OriginalMessageDialogLayout
 
         bool hasTitle = input.TitleText.Length > 0;
         double titleHeight = hasTitle ? Math.Max(1, input.TitleLineHeight) : 0;
-        // FUN_00524112 (00524112.c:26) + FUN_00524386 (00524386.c:81):
-        // rawBodyTop = borderTop + 0x1b + titleHeight = 21 + titleHeight + 18 when titled, else 21.
         double rawBodyTop = hasTitle ? Pad + titleHeight + TitleGap : Pad;
         int bodyLineHeight = Math.Max(1, input.BodyFont.LineHeight);
 
-        // FUN_00524112 (00524112.c:35) + FUN_005353fa (005353fa.c:15-24):
-        // When an icon extends < 1 body line below rawBodyTop (e.g. 45x45 PeopleTemplate with title: 66 - 62 = 4px,
-        // which rounds to 0 exclusion lines in 005353fa.c), treat the icon as a header element, start full-width body
-        // text 9px below the icon, and avoid any 1-line chin staircase jump. When the icon extends >= 1 body line into
-        // the body (e.g. untitled portrait or tall 42x63 / 120x120 preview), wrap sideLineLimit >= 2 lines beside it.
         double iconOverlapBelowTitle = hasImage ? (Pad + imageHeight) - rawBodyTop : 0;
         int sideLineLimit;
         double bodyTopInset;
@@ -302,7 +271,6 @@ public static class OriginalMessageDialogLayout
             bodyTopInset = rawBodyTop;
         }
 
-        // FUN_00524386 (00524386.c:37-49, 84-131): button sizing and bottom chrome.
         var buttonWidths = new double[input.ButtonLabelWidths.Count];
         double sumOfButtonWidths = 0;
         for (int i = 0; i < input.ButtonLabelWidths.Count; i++)
@@ -315,16 +283,13 @@ public static class OriginalMessageDialogLayout
         double bottomExtent;
         if (input.HasTextInput)
         {
-            // 12px gap + 28px input + (18px gap + 33px button + 21px pad if buttons else 21px pad)
             bottomExtent = hasButtons ? (12 + InputHeight + 18 + ButtonHeight + Pad) : (12 + InputHeight + Pad);
         }
         else
         {
-            // Exact 00524386.c:85, 126, 131: +18px + 33px button + 9px margin + 12px border = 72px (30px without buttons)
             bottomExtent = hasButtons ? (18 + ButtonHeight + Pad) : (18 + Border);
         }
 
-        // FUN_00524386 (00524386.c:21-57): exact header & button minimum bodySpan (no 300px floor!).
         double minButtonSpan = hasButtons
             ? sumOfButtonWidths + buttonWidths.Length * ButtonReserveSpacing
             : 0;
@@ -369,8 +334,6 @@ public static class OriginalMessageDialogLayout
             return (h, w / Math.Max(1, h));
         }
 
-        // FUN_00524112 (00524112.c:44-89): solve bodySpan across [minBodySpan, maxSolverSpan] so outer width/height
-        // converges to targetAspect (2.0), allowing both narrowing below 300px and widening above 300px.
         int lowSpan = (int)minBodySpan;
         int highSpan = (int)maxSolverSpan;
         int chosenIntSpan;
@@ -510,7 +473,6 @@ public static class OriginalMessageDialogLayout
             ? new CGRect(rect.MinX + Pad, rect.MinY + Pad, imageWidth * fit, imageHeight * fit)
             : CGRect.Zero;
 
-        // FUN_00524386 (00524386.c:98-124): evenly distribute buttons across bodySpan.
         double spacing = Math.Floor((bodySpan - sumOfButtonWidths) / (buttonWidths.Length + 1));
         if (spacing < 0) spacing = 9;
         double currentX = rect.MinX + Pad + spacing;

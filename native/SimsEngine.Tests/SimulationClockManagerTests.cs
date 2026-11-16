@@ -148,7 +148,8 @@ public sealed class SimulationClockManagerTests
 
         world.AdvanceSimulationTick(new SimulationClockControl(0, 0, 1), 0, 1, (_, _) => true);
 
-        // cSimulator +0x98 counts every completed object-manager pass; only the calendar clock is held.
+        // Simulation ticks increment on every completed object-manager pass, even when the calendar clock
+        // is paused.
         Assert.Equal(1, world.Clock.Ticks);
         Assert.Equal(0, world.Clock.Second);
     }

@@ -5,12 +5,10 @@ using SimsEngine.World;
 
 namespace SimsSimulation;
 
-/// <summary>Catalog entries whose native placement tools consume a style or roof pattern rather than a floor/wall
-/// pattern. Mac Catalog.s creates these as special catalog products: wall styles dispatch to the wall placer with
-/// (pattern, style) and roof entries dispatch to the roofer with the roof pattern id.</summary>
+/// <summary>Identifies catalog entries that supply a wall style or roof pattern rather than a floor or
+/// wallpaper index when dispatched to placement tools.</summary>
 internal static class SpecialBuildCatalogPage
 {
-    // Mac Catalog.s UICatalog wall-style ordering and pattern IDs (the same five style resources installed by the game).
     private static readonly int[] WallStyleIds = [1, 2, 13, 12, 14];
     private static readonly int[] WallStylePatterns = [0, 248, 250, 249, 251];
 
@@ -114,7 +112,7 @@ internal static class SpecialBuildCatalogPage
         };
     }
 
-    // Sims.exe FUN_00529cbc + FUN_004cbd1c (case 5, tiled=true): tiles the roof bitmap across the 168x127 preview box inset by 16px on all 4 sides (136x95).
+    // Tiles the roof bitmap across a 168x127 preview box inset by 16 pixels on all four sides.
     private static object? RoofPatternPreview(byte[]? bmp, string session)
     {
         if (bmp is not { Length: >= 54 } || bmp[0] != 'B' || bmp[1] != 'M') return null;

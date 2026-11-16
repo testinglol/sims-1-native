@@ -4,12 +4,6 @@ using SimsSDL;
 
 namespace SimsSDL.UI;
 
-/// <summary>
-/// Native view of the Sims.exe GenericSimsCall kind-1 chooser candidate list, styled with the original lot dialog chrome:
-/// 9-slice <c>PopupInfoTiles.bmp</c>, <c>PeopleTemplate.bmp</c>-framed Sim portraits, <c>WinScrol.bmp</c>, 14pt title font,
-/// 12pt button font, 10pt row labels, and a 3-slice <c>WinBtn.bmp</c> OK button. Candidate rows without a live person remain
-/// visible as disabled.
-/// </summary>
 public sealed class GenericSimsCallChooserOverlay
 {
     public sealed record Candidate(
@@ -59,7 +53,7 @@ public sealed class GenericSimsCallChooserOverlay
 
     private const int MaxVisibleRows = 6;
     private const double RowHeight = 49.0;
-    private const double ScrollbarWidth = 17.0; // WinScrol.bmp is 204x20 across 12 cells (005f3a06.c:199).
+    private const double ScrollbarWidth = 17.0; // Scrollbar texture contains 12 horizontal cells of 17x20 pixels each.
     private const double ScrollbarButtonHeight = 20.0;
     private const double ScrollbarReservedWidth = 20.0;
 
@@ -106,8 +100,6 @@ public sealed class GenericSimsCallChooserOverlay
         ArgumentNullException.ThrowIfNull(font);
         _candidates = candidates;
 
-        // Match cWinMessage / WinBtn proportionate .ffn sizing: variablesans_12.ffn (23px / 13px cap) for title
-        // and variablesans_10.ffn (19px / 10px cap) for the 33px WinBtn.bmp OK button.
         SimsBitmapFont loadedTitleFont = font;
         if (content is not null)
         {
@@ -124,8 +116,6 @@ public sealed class GenericSimsCallChooserOverlay
         ButtonFont = font;
         TitleFont = loadedTitleFont;
 
-        // FUN_004ff397 color palette: default/normal RGB(195, 205, 205), selected/pressed RGB(0, 255, 255),
-        // hover RGB(255, 255, 255), disabled RGB(64, 93, 95).
         (byte R, byte G, byte B) normalColor = (195, 205, 205);
         (byte R, byte G, byte B) selectedColor = (0, 255, 255);
         (byte R, byte G, byte B) hoverColor = (255, 255, 255);
@@ -210,7 +200,6 @@ public sealed class GenericSimsCallChooserOverlay
                 }
                 catch
                 {
-                    // Ignore missing/invalid individual portraits cleanly.
                 }
             }
         }
@@ -463,7 +452,7 @@ public sealed class GenericSimsCallChooserOverlay
 
     private void AppendTileButton(CGRect bounds, int frameIndex, List<DrawItem> items)
     {
-        // FUN_005f730f (cWinTileBtn::OnPaint): 3-slice horizontal button from WinBtn.bmp (7px left cap, stretched 2px center, 7px right cap).
+        // Slices button textures horizontally using 7px end caps with a 2px stretchable center segment.
         float framePx = _buttonSheetWidth / 4f;
         float basePx = frameIndex * framePx;
         float capPx = (float)_buttonCapWidth;

@@ -1,33 +1,9 @@
 namespace SimsEngine.Simulation;
 
-/// <summary>The Find Best Object for Function primitive (opcode 0x0e), after Sims.exe 0x44f2ff. It searches the lot for the
-/// best object for a function, scores each candidate, and writes the best one's id into the frame's stack object.
-/// <para>Operand: word 0 is the selector, word 2 and word 4 are the data owner and the data (the owner is read with
-/// <see cref="Variables.Get"/> as FUN_00453181 reads it), and byte 6 is the flags.</para>
-/// <para>Selectors: 0 to 3 and 6, 7, 10 to 14 each map to a score field (the object's Data word, 31, 32, 33, 36, 37, 38,
-/// 61, 39, 64, 65 and 15) and a function number (18 to 21, 24, 25, 14, 28, 16, 17, 29). Selector 8 (sit) needs a person
-/// running it whose field at +0x60e is at most 1, and then uses function 26 with score 50. Selector 15 scores 50 for each
-/// candidate whose object data <see cref="ObjectData.Category"/> is 4 and uses no function. Any other selector answers false.</para>
-/// <para>Order: a selector outside the table answers false, as does a sit selector the running object cannot take. With
-/// flag 8 the owner is the object with the id that the owner variable gives (<see cref="SimulationWorld.ObjectById"/>); a
-/// missing one raises "Could not find object reference." (23). Flag 4 then takes the room to match: the owner's room with
-/// flag 8, the running object's otherwise.</para>
-/// <para>Each candidate in the world's walk order (<see cref="SimulationWorld.WalkOrder"/>) is kept only when its LockoutCount
-/// data is below 1 and its object Flags data lacks bit 0x200 (the two direct tests at +0x7c/+0x5a in Sims.exe), and it
-/// passes the room flags: flag 1 skips an object in a room that
-/// exists and is not outside (an object with no room, -5, is kept); flag 2 skips an object with no room and one in an
-/// outside room; flag 4, when neither is set, keeps only objects in the match room. A room exists when its field 0 is
-/// nonzero. Flag 1 takes precedence over flag 2, and flag 4 is tested only when both are clear.</para>
-/// <para>For the other selectors the candidate needs a function entry with a tree id, and its score field (the candidate's
-/// Data word; 50 for selector 8) must be nonzero. A nonzero check tree is run on the candidate (its type's behavior scope,
-/// <see cref="TreeStack.RunToReturn"/>, with the self-removal flag cleared as FUN_00474b22 does) and must answer true. The
-/// score is the field minus 3 times the distance from the running object (<see cref="GetDistanceToPrimitive.DistanceBetween"/>),
-/// with the distance halved for selector 11 when it is above 1, and at least 1. The candidate with the highest score wins;
-/// a tie keeps the earlier one. The primitive answers true and sets the stack object, or false when no candidate scores.</para>
-/// <para>Inferred: the candidates are walked in <see cref="SimulationWorld.WalkOrder"/> (Sims.exe walks the object list's
-/// links); the distance is from the running object (the call's ECX is not traced); a candidate whose type has no behavior
-/// scope is skipped (Sims.exe would dereference it); the running object's score field is kept in a local, not in its
-/// memory. The check tree's result is read as the tree's return, as the other nested runs do.</para></summary>
+/// <summary>Searches the lot for the best object matching a function selector, scoring candidates by their
+/// score field minus three times the distance to the caller. Candidates are filtered by lockout count,
+/// visibility flags, room matching rules, and validation check trees, with the highest-scoring object
+/// placed on the stack.</summary>
 public static class FindBestObjectForFunctionPrimitive
 {
     private const int FlagOutside = 1;
@@ -65,8 +41,8 @@ public static class FindBestObjectForFunctionPrimitive
 
         XObject? best = null;
         var bestScore = 0f;
-        // RunCheck executes an object-owned BHAV. That script can add/remove lot objects,
-        // so enumerate the candidate set captured when this search began.
+        // Snapshots the candidate set before evaluation because running a candidate's check script can add
+        // or remove objects on the lot.
         foreach (var candidate in world.WalkOrder.ToArray())
         {
             if (candidate[ObjectData.LockoutCount] >= 1 ||
@@ -108,8 +84,6 @@ public static class FindBestObjectForFunctionPrimitive
         return PrimitiveResult.True;
     }
 
-    /// <summary>The score field and the function number of a selector, or null when the selector refuses. Function 15 has
-    /// no function (0) and the field -1.</summary>
     private static (short Field, short Function)? Criterion(XObject me, short selector) => selector switch
     {
         0 => (31, 0x12),
@@ -128,7 +102,6 @@ public static class FindBestObjectForFunctionPrimitive
         _ => null,
     };
 
-    /// <summary>The room flags: the candidate is kept (true) when it passes the room test the flags pick.</summary>
     private static bool PassesRooms(SimulationWorld world, XObject candidate, byte flags, short matchRoom)
     {
         if ((flags & (FlagOutside | FlagOutsideSkip | FlagSameRoom)) == 0) return true;
@@ -141,10 +114,8 @@ public static class FindBestObjectForFunctionPrimitive
         return true;
     }
 
-    // FUN_004670a4 returns null on a missing room-tree key; the native manager map preserves that key lookup.
     private static bool RoomExists(SimulationWorld world, short room) => world.HasRoomRecord(room);
 
-    /// <summary>Runs the candidate's check tree on the stack (FUN_00474b22) and answers its result.</summary>
     private static bool RunCheck(in TreeContext context, XObject candidate, short check)
     {
         var world = context.World;
@@ -163,8 +134,8 @@ public static class FindBestObjectForFunctionPrimitive
         }
     }
 
-    /// <summary>The score: the points minus 3 times the distance, with the distance halved for selector 11 above 1, and
-    /// at least 1.</summary>
+    /// <summary>Calculates candidate score as the base points minus three times distance, halving distance
+    /// for selector 11 when greater than one, with a minimum score of one.</summary>
     private static double Score(XObject me, XObject candidate, short points, short selector)
     {
         var distance = GetDistanceToPrimitive.DistanceBetween(me, candidate);

@@ -25,7 +25,8 @@ public sealed class CareerCatalogTests
         Assert.Equal((short?)-5, careers.JobData(42, 0, 19));
         Assert.Equal((short?)6, careers.JobData(42, 0, 20));
         Assert.Equal((short?)3, careers.JobData(42, 0, 21));
-        // FUN_00403647 field 22 reports whether the level's male uniform mesh string is non-empty.
+        // Job data field 22 indicates whether the career level defines a non-empty male uniform mesh
+        // string.
         Assert.Equal((short?)1, careers.JobData(42, 0, 22));
         Assert.Null(careers.JobData(42, 1, 12));
         Assert.Null(careers.JobData(41, 0, 12));
@@ -46,7 +47,6 @@ public sealed class CareerCatalogTests
         Assert.Null(careers.JobText(41, 0, JobTextKind.Title, female: false, 1));
     }
 
-    /// <summary>Appends a format 0 STR# chunk of 24 entries, <paramref name="entries"/> placed at their zero-based index.</summary>
     private static IffFile WithStrings(IffFile career, ushort id, params (string Text, int Index)[] entries)
     {
         var strings = new string[24];
@@ -61,7 +61,7 @@ public sealed class CareerCatalogTests
     private static IffFile CareerFile(ushort id, int[] requirements, int[] motives, int salary, int start, int end, int car)
     {
         var body = new List<byte>(new byte[12]) { 1 };
-        body.AddRange(Encoding.Latin1.GetBytes("Test\0")); // even-sized payload including terminator
+        body.AddRange(Encoding.Latin1.GetBytes("Test\0"));
         var bits = new CareerFieldWriter(body);
         bits.Write(1);
         foreach (var value in requirements) bits.Write(value);

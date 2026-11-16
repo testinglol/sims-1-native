@@ -2,15 +2,13 @@ using SimsEngine.Formats;
 
 namespace SimsEngine.Tests;
 
-/// <summary>Unit tests for A17 non-Latin-1 codepage decoding (Cyrillic, Polish, Hebrew, CJK, Thai) and round-trip preservation.</summary>
 public class StringTableCodepageTests
 {
     [Fact]
     public void PreservesByteFidelityForCyrillicStrings()
     {
-        // Russian (LanguageCode 13, Windows-1251)
         var encoding = ResourceReader.EncodingForLanguage(13);
-        var originalText = "Привет, мир!"; // "Hello, world!" in Russian
+        var originalText = "Привет, мир!";
         var encodedBytes = encoding.GetBytes(originalText);
 
         var builder = new ChunkBuilder().S16(-3).S16(1)
@@ -27,9 +25,8 @@ public class StringTableCodepageTests
     [Fact]
     public void PreservesByteFidelityForPolishCentralEuropeanStrings()
     {
-        // Polish (LanguageCode 16, Windows-1250)
         var encoding = ResourceReader.EncodingForLanguage(16);
-        var originalText = "Zażółć gęślą jaźń"; // Standard Polish pangram with diacritics
+        var originalText = "Zażółć gęślą jaźń";
         var encodedBytes = encoding.GetBytes(originalText);
 
         var builder = new ChunkBuilder().S16(-3).S16(1)
@@ -46,9 +43,8 @@ public class StringTableCodepageTests
     [Fact]
     public void PreservesByteFidelityForJapaneseShiftJisStrings()
     {
-        // Japanese (LanguageCode 15, CP932 / Shift-JIS)
         var encoding = ResourceReader.EncodingForLanguage(15);
-        var originalText = "こんにちは"; // "Konnichiwa"
+        var originalText = "こんにちは";
         var encodedBytes = encoding.GetBytes(originalText);
 
         var builder = new ChunkBuilder().S16(-3).S16(1)
@@ -65,9 +61,8 @@ public class StringTableCodepageTests
     [Fact]
     public void PreservesByteFidelityForTraditionalChineseStrings()
     {
-        // Traditional Chinese (LanguageCode 17, CP950 / Big5)
         var encoding = ResourceReader.EncodingForLanguage(17);
-        var originalText = "模擬市民"; // "The Sims" (Traditional Chinese canonical title)
+        var originalText = "模擬市民";
         var encodedBytes = encoding.GetBytes(originalText);
 
         var builder = new ChunkBuilder().S16(-3).S16(1)
@@ -84,9 +79,8 @@ public class StringTableCodepageTests
     [Fact]
     public void PreservesByteFidelityForSimplifiedChineseStrings()
     {
-        // Simplified Chinese (LanguageCode 18, CP936 / GB2312)
         var encoding = ResourceReader.EncodingForLanguage(18);
-        var originalText = "模拟人生"; // "The Sims" (Simplified Chinese canonical title)
+        var originalText = "模拟人生";
         var encodedBytes = encoding.GetBytes(originalText);
 
         var builder = new ChunkBuilder().S16(-3).S16(1)
@@ -103,7 +97,6 @@ public class StringTableCodepageTests
     [Fact]
     public void WriteWithValuePreservesMultiByteCharacterEncoding()
     {
-        // Japanese (LanguageCode 15)
         var encoding = ResourceReader.EncodingForLanguage(15);
         var initialText = "初期テキスト";
         var updatedText = "更新されたテキスト";
@@ -115,7 +108,6 @@ public class StringTableCodepageTests
         var table = StringTable.Read(file, iff);
         var rewrittenBytes = table.WriteWithValue(1, updatedText, 15);
 
-        // Read back the rewritten table
         var reloadedIff = new IffFile(ChunkBuilder.File(("STR#", 100, rewrittenBytes)), "reloaded.iff");
         var reloadedChunk = reloadedIff.Find(ResourceType.Parse("STR#"), 100)!;
         var reloadedTable = StringTable.Read(reloadedIff, reloadedChunk);
@@ -128,7 +120,6 @@ public class StringTableCodepageTests
     [Fact]
     public void DecodesWindows1252PunctuationAcrossFormats()
     {
-        // Bytes 0x92 (right single quote ’), 0x93/0x94 (“ ”), 0x97 (em dash —), 0x99 (trademark ™)
         byte[] cp1252Bytes = [(byte)'B', (byte)'o', (byte)'b', 0x92, (byte)'s', (byte)' ', 0x93, (byte)'T', (byte)'V', 0x94, 0x97, 0x99];
         const string expected = "Bob\u2019s \u201CTV\u201D\u2014\u2122";
 

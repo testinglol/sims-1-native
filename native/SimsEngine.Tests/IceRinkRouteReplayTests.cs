@@ -4,7 +4,6 @@ using Xunit;
 
 namespace SimsEngine.Tests;
 
-/// <summary>Headless reproduction of EP5 Ice Rink route-slot occupancy against its authored 11x9 tile grid.</summary>
 public sealed class IceRinkRouteReplayTests
 {
     [Theory]
@@ -88,15 +87,12 @@ public sealed class IceRinkRouteReplayTests
         sim[ObjectData.PlacementFlags] = 0x0801;
         world.PlaceObject(sim, new ObjectPosition(8 * 16 + 8, 10 * 16 + 8, 1));
 
-        // The source 11x9 rink's lead is (0,0), with every tile occupied by a linked part.
         var rink = world.Add(new XObject(2, PrimitiveTestWorld.Definition(0))
         {
             RuntimeClass = SimsEngine.Formats.ObjectClass.MultiTileObject,
             TypeRecord = new TypeRecord(2),
         });
         for (var i = 0; i <= 26; i++) rink.RoutingSlots.Add(new RoutingSlotRequest());
-        // Skate Get In (0x2010) requests explicit SLOT IDs 13/14. They are route_ring_1_e/w,
-        // and the centered CRES-root inference places both within the 11x9 linked footprint.
         rink.RoutingSlots[slotIndex] = new RoutingSlotRequest { X = slotX, Y = slotY, Flags = 0 };
         var parts = new List<XObject> { rink };
         short nextId = 200;

@@ -121,10 +121,8 @@ public sealed record SceneLighting
         public Vector4 Multiplier => new(R / 255f, G / 255f, B / 255f, 1f);
     }
 
-    /// <summary>
-    /// A lit lamp: its scene position (medium-zoom pixels), its distance toward the camera in units of camera x + y,
-    /// and its lighting contribution.
-    /// </summary>
+    /// <summary>Represents a light source, storing its position in medium-zoom pixels, depth in camera
+    /// projection units, and lighting contribution.</summary>
     public readonly record struct Light
     {
         [JsonConstructor]
@@ -156,9 +154,8 @@ public sealed record SceneLighting
         public required int Level { get; init; }
     }
 
-    /// <summary>
-    /// A tile holding part of a window, in lot tiles: a window has a part on each side of its wall.
-    /// </summary>
+    /// <summary>Represents a window tile in lot coordinates, accounting for wall components on both sides
+    /// of the wall.</summary>
     public readonly record struct Window
     {
         [JsonConstructor]
@@ -210,9 +207,6 @@ public sealed record SceneLighting
     [JsonPropertyName("rooms")]
     public required IReadOnlyList<Room> Rooms { get; init; }
 
-    /// <summary>
-    /// The game clock in minutes after midnight and the time of day (0 day, 1 dawn, 2 night, 3 dusk), when exported.
-    /// </summary>
     [JsonPropertyName("minutes")]
     public int? Minutes { get; init; }
 
@@ -225,9 +219,6 @@ public sealed record SceneLighting
     [JsonPropertyName("windows")]
     public IReadOnlyList<Window>? Windows { get; init; }
 
-    /// <summary>
-    /// The colour Sims.exe fills the screen with before drawing the lot (FUN_004aabcd), by time of day.
-    /// </summary>
     [JsonPropertyName("backdrop")]
     public RGB? Backdrop { get; init; }
 
@@ -247,18 +238,24 @@ public sealed record SceneLighting
         }
     }
 
+    internal const int PoolAttachmentRoom = 65534;
+
     public Vector4 Multiplier(int? room)
     {
-        if (room is not int index || index == 65535 || index < 0 || index >= Rooms.Count)
+        if (room is not int index || index == 65535)
+            return Vector4.One;
+        if (index == PoolAttachmentRoom)
+            return (Phase ?? 0) == 0 ? Vector4.One : new Vector4(204f / 255f, 204f / 255f, 204f / 255f, 1f);
+        if (index < 0 || index >= Rooms.Count)
             return Vector4.One;
         return Rooms[index].Multiplier;
     }
 
     internal void ValidateRoom(int? room)
     {
-        // Sims.exe's room fill (FUN_00479f0c) uses 0xFF for tiles outside every room; the native scene exporter
-        // preserves that value on outdoor sprites. 0xFFFF is also retained as the scene format's no-room sentinel.
-        if (room is int index && index != 255 && index != 65535 && (index < 0 || index >= Rooms.Count))
+        // Outdoor tiles use index 255, no-room sentinels use 65535, and pools use 65534.
+        if (room is int index && index != 255 && index != PoolAttachmentRoom && index != 65535 &&
+            (index < 0 || index >= Rooms.Count))
             throw new ContentError("Material references missing room lighting");
     }
 }
@@ -297,27 +294,43 @@ public sealed record SceneAnimation
         [JsonPropertyName("vertices")]
         public required byte[] Vertices { get; init; }
 
+        [JsonPropertyName("tint")]
+        public IReadOnlyList<float>? Tint { get; init; }
+
+        [JsonIgnore]
+        internal LotScene.MeshVertex[]? DirectVertices { get; init; }
+
         internal LotScene.Mesh Unpack()
         {
-            if (Vertices is null || Vertices.Length == 0 || Vertices.Length % 96 != 0 || Vertices.Length > 32_000_000)
-                throw new ContentError("Invalid packed animation triangle count");
-
-            int vertexCount = Vertices.Length / 32;
-            var unpacked = new LotScene.MeshVertex[vertexCount];
-            ReadOnlySpan<byte> bytes = Vertices;
-
-            for (int i = 0; i < vertexCount; i++)
+            LotScene.MeshVertex[] unpacked;
+            if (DirectVertices is { } directVertices)
             {
-                int offset = i * 32;
-                unpacked[i] = new LotScene.MeshVertex(
-                    BinaryPrimitives.ReadSingleLittleEndian(bytes.Slice(offset, 4)),
-                    BinaryPrimitives.ReadSingleLittleEndian(bytes.Slice(offset + 4, 4)),
-                    BinaryPrimitives.ReadSingleLittleEndian(bytes.Slice(offset + 8, 4)),
-                    BinaryPrimitives.ReadSingleLittleEndian(bytes.Slice(offset + 12, 4)),
-                    BinaryPrimitives.ReadSingleLittleEndian(bytes.Slice(offset + 16, 4)),
-                    BinaryPrimitives.ReadSingleLittleEndian(bytes.Slice(offset + 20, 4)),
-                    BinaryPrimitives.ReadSingleLittleEndian(bytes.Slice(offset + 24, 4)),
-                    BinaryPrimitives.ReadSingleLittleEndian(bytes.Slice(offset + 28, 4)));
+                if (directVertices.Length == 0 || directVertices.Length % 3 != 0)
+                    throw new ContentError("Invalid direct animation triangle count");
+                unpacked = directVertices;
+            }
+            else
+            {
+                if (Vertices is null || Vertices.Length == 0 || Vertices.Length % 96 != 0 || Vertices.Length > 32_000_000)
+                    throw new ContentError("Invalid packed animation triangle count");
+
+                int vertexCount = Vertices.Length / 32;
+                unpacked = new LotScene.MeshVertex[vertexCount];
+                ReadOnlySpan<byte> bytes = Vertices;
+
+                for (int i = 0; i < vertexCount; i++)
+                {
+                    int offset = i * 32;
+                    unpacked[i] = new LotScene.MeshVertex(
+                        BinaryPrimitives.ReadSingleLittleEndian(bytes.Slice(offset, 4)),
+                        BinaryPrimitives.ReadSingleLittleEndian(bytes.Slice(offset + 4, 4)),
+                        BinaryPrimitives.ReadSingleLittleEndian(bytes.Slice(offset + 8, 4)),
+                        BinaryPrimitives.ReadSingleLittleEndian(bytes.Slice(offset + 12, 4)),
+                        BinaryPrimitives.ReadSingleLittleEndian(bytes.Slice(offset + 16, 4)),
+                        BinaryPrimitives.ReadSingleLittleEndian(bytes.Slice(offset + 20, 4)),
+                        BinaryPrimitives.ReadSingleLittleEndian(bytes.Slice(offset + 24, 4)),
+                        BinaryPrimitives.ReadSingleLittleEndian(bytes.Slice(offset + 28, 4)));
+                }
             }
 
             return new LotScene.Mesh
@@ -330,7 +343,8 @@ public sealed record SceneAnimation
                 Texture = Texture,
                 ObjectID = ObjectID,
                 Depth = Depth,
-                Vertices = unpacked
+                Vertices = unpacked,
+                Tint = Tint
             };
         }
     }
@@ -368,6 +382,9 @@ public sealed record SceneAnimation
     [JsonPropertyName("censorRects")]
     public IReadOnlyList<LotScene.CensorRect>? CensorRects { get; init; }
 
+    [JsonIgnore]
+    internal bool IsTrustedInProcess { get; init; }
+
     public static SceneAnimation FromJson(string json) =>
         JsonSerializer.Deserialize<SceneAnimation>(json) ?? throw new ContentError("Scene animation JSON decoded to null");
 
@@ -388,24 +405,29 @@ public sealed record SceneAnimation
         long revision,
         long after)
     {
+        bool trusted = IsTrustedInProcess;
         if (SchemaVersion != 1 || BaseRevision != revision || Sequence <= after || Updates < 0
             || Textures is null || Sprites is null || Meshes is null
-            || TextureStart != scene.Textures.Count || Textures.Count + TextureStart > 10000
-            || Sprites.Count > 100000 || Meshes.Count > 10000
-            || !Sprites.All(s => (s.ObjectID ?? 0) > 0)
-            || !Meshes.All(m => m.ObjectID > 0))
+            || TextureStart < 0 || TextureStart > scene.Textures.Count
+            || (!trusted && (Textures.Count + TextureStart > 10000
+                || Sprites.Count > 100000 || Meshes.Count > 10000
+                || !Sprites.All(s => (s.ObjectID ?? 0) > 0)
+                || !Meshes.All(m => m.ObjectID > 0))))
         {
             throw new ContentError("Animation does not match the current scene");
         }
 
-        long vertexBytes = 0;
-        foreach (var mesh in Meshes)
+        if (!trusted)
         {
-            if (mesh.Vertices is null)
-                throw new ContentError("Invalid packed animation triangle count");
-            vertexBytes += mesh.Vertices.Length;
-            if (vertexBytes > 32_000_000)
-                throw new ContentError("Animation vertex memory limit exceeded");
+            long vertexBytes = 0;
+            foreach (var mesh in Meshes)
+            {
+                if (mesh.Vertices is null && mesh.DirectVertices is null)
+                    throw new ContentError("Invalid packed animation triangle count");
+                vertexBytes += mesh.DirectVertices is { } direct ? direct.Length * 32L : mesh.Vertices!.Length;
+                if (vertexBytes > 32_000_000)
+                    throw new ContentError("Animation vertex memory limit exceeded");
+            }
         }
 
         var updatedSprites = new List<LotScene.Sprite>(retainedSprites.Count + Sprites.Count);
@@ -418,14 +440,15 @@ public sealed record SceneAnimation
             updatedMeshes.Add(mesh.Unpack());
 
         IReadOnlyList<LotScene.Texture> updatedTextures;
-        if (Textures.Count == 0)
+        if (Textures.Count == 0 && TextureStart == scene.Textures.Count)
         {
             updatedTextures = scene.Textures;
         }
         else
         {
-            var combinedTextures = new List<LotScene.Texture>(scene.Textures.Count + Textures.Count);
-            combinedTextures.AddRange(scene.Textures);
+            var combinedTextures = new List<LotScene.Texture>(TextureStart + Textures.Count);
+            for (int i = 0; i < TextureStart; i++)
+                combinedTextures.Add(scene.Textures[i]);
             combinedTextures.AddRange(Textures);
             updatedTextures = combinedTextures;
         }
@@ -439,12 +462,12 @@ public sealed record SceneAnimation
             Meshes = updatedMeshes
         };
 
-        // The snapshot was validated when it loaded; its static sprites, meshes and textures are kept as they were.
-        // Animated object sprites may extend past the static scene rectangle as their frame changes. Sims.exe clips
-        // each SPR2 draw to the active viewport (FUN_004c828c -> FUN_004c8728), so the GPU viewport should clip these
-        // too instead of rejecting the entire avatar/object frame.
+        if (trusted)
+            return result;
+
+        // Viewport clipping handles animated sprites extending past static scene bounds.
         result.Validate(
-            new LotScene.ValidatedState(scene.Textures.Count, retainedSprites.Count, retainedMeshes.Count, Architecture: true),
+            new LotScene.ValidatedState(TextureStart, retainedSprites.Count, retainedMeshes.Count, Architecture: true),
             allowSpriteOverhang: true);
         return result;
     }
@@ -539,16 +562,11 @@ public sealed record AudioEvent
     }
 }
 
-/// <summary>
-/// Positional sound maths shared by the clients: where a sound's owner sits in the view, how much a floor other than
-/// the viewed one takes off it, and the pan and distance falloff from the owner's point on screen.
-/// </summary>
+/// <summary>Calculates positional audio panning, distance falloff, and vertical floor obstruction.</summary>
 public static class PositionalSound
 {
-    /// <summary>
-    /// The gain for an owner on <paramref name="sourceLevel"/> while the view shows <paramref name="viewedLevel"/>:
-    /// quarter attenuation from floors above the view and half from floors below.
-    /// </summary>
+    /// <summary>Calculates audio attenuation across stories, applying one-quarter gain for sources above
+    /// the current view and one-half gain for sources below.</summary>
     public static float FloorGain(int sourceLevel, int viewedLevel)
     {
         if (sourceLevel > viewedLevel)
@@ -556,10 +574,8 @@ public static class PositionalSound
         return sourceLevel == viewedLevel ? 1f : 0.5f;
     }
 
-    /// <summary>
-    /// A sound owner's point in scene units (the frame of the sprites), projected with the scene's camera from the
-    /// host's tile and altitude. Null when the scene carries no origin or lot size.
-    /// </summary>
+    /// <summary>Projects an audio source position from tile coordinates and altitude into medium-zoom scene
+    /// units using the scene camera.</summary>
     public static Vector2? ScenePoint(LotScene.SoundSource source, LotScene scene)
     {
         if (scene.LotWidth is not int lotWidth || scene.LotHeight is not int lotHeight
@@ -575,9 +591,6 @@ public static class PositionalSound
         return projected - new Vector2(originX, originY);
     }
 
-    /// <summary>
-    /// The pan and falloff for a source at <paramref name="screen"/> (view pixels) in a view of <paramref name="size"/>.
-    /// </summary>
     public static (float Pan, float Gain) Mix(Vector2 screen, Vector2 size, bool panned)
     {
         float width = MathF.Max(1f, size.X);

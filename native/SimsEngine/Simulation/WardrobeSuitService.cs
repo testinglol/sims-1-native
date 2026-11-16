@@ -5,10 +5,6 @@ using SimsEngine.Formats;
 
 namespace SimsEngine.Simulation;
 
-/// <summary>
-/// Native counterpart of Sims.exe's character wardrobe/body-strings scope (FUN_00408b9d, FUN_00409377, FUN_004094f4,
-/// FUN_00408c57, FUN_004096c5, FUN_0040a3c6, FUN_00409953..FUN_0040a1af, FUN_0040a5ea, FUN_0040afbd, FUN_00587bed).
-/// </summary>
 public static class WardrobeSuitService
 {
     public sealed record SuitChoice(string Appearance, string BodyTexture, string HandTexture);
@@ -34,8 +30,8 @@ public static class WardrobeSuitService
 
     public static bool HasCatalog(ObjectRegistry? registry) => GetCatalog(registry) is not null;
 
-    /// <summary>FUN_00409377: loads the person's BodyStrings STR# resource into <paramref name="scope"/>'s 1-based
-    /// runtime context (padded to 35 entries) and populates any missing category defaults (0x1f, 0x22, 0x23).</summary>
+    /// <summary>Loads a Sim's BodyStrings STR# resource into a 1-based runtime context padded to 35
+    /// entries, populating missing defaults for formal, winter, and high-fashion outfits.</summary>
     public static InteractionBehaviorRuntimeContext BeginPersonScope(
         SimulationWorld world,
         XPerson person,
@@ -70,8 +66,7 @@ public static class WardrobeSuitService
         for (var i = 1; i <= count; i++)
             context.SetString(i, i <= values.Count ? values[i - 1] : string.Empty);
 
-        // FUN_00409377 lines 17-68: initialize empty formal (0x1f), winter (0x22), and high-fashion (0x23) entries
-        // for human Sims whose everyday suit (0x02) is populated.
+        // Initializes formal, winter, and high-fashion suits from the everyday outfit.
         var body2 = (context.StringAt(0x02) ?? string.Empty).Trim();
         var genderMode = ResolveGenderMode(context, null);
         if (body2.Length == 0 || genderMode is < 0 or > 1) return;
@@ -121,9 +116,8 @@ public static class WardrobeSuitService
             PersistContextToEntry(registry, entry, language, context);
     }
 
-    /// <summary>FUN_004094f4 / FUN_0040a5ea / FUN_0040afbd / FUN_00587bed: recomputes dependent body strings
-    /// (nude, undies, handgroups, body-build category sync), writes the updated STR# back to the registry entry,
-    /// and refreshes the live XPerson's SavedCharacter/PresentationCharacter parts.</summary>
+    /// <summary>Recomputes dependent body strings including nude, underwear, handgroups, and body build,
+    /// saving the updated STR# and refreshing character mesh parts.</summary>
     public static void EndPersonScope(
         SimulationWorld world,
         XPerson? person,
@@ -174,8 +168,8 @@ public static class WardrobeSuitService
             RefreshPersonCharacterFromContext(person, context);
     }
 
-    /// <summary>FUN_00408c57 / FUN_004096c5 / FUN_0040a3c6 / FUN_00409953..FUN_0040a1af: builds the ordered
-    /// action list for wardrobe suit category <paramref name="listIndex"/> (0..5 = b, f, s, l, w, h) or heads ('c').</summary>
+    /// <summary>Builds the ordered action list for wardrobe categories (0-5 corresponding to b, f, s, l, w,
+    /// h outfits) or heads ('c').</summary>
     public static InteractionBehaviorActionList? GetActionList(
         SimulationWorld world,
         XPerson? person,
@@ -231,8 +225,6 @@ public static class WardrobeSuitService
         return new InteractionBehaviorActionList(actions);
     }
 
-    /// <summary>Enumerates wardrobe/pet choices using the exact same appearance and texture ordering as
-    /// <see cref="GetActionList"/>, including handgroup texture resolution for preview rendering.</summary>
     public static SuitChoice[] GetChoices(
         ObjectRegistry registry,
         byte language,
@@ -279,8 +271,8 @@ public static class WardrobeSuitService
         var expectedGender = genderMode == 0 ? 'm' : 'f';
         var expectedAge = isChild ? 'c' : 'a';
 
-        // FUN_0040a3c6: matches 'c' + 3 chars (excluding 't'/'T' at index 1) + [m|f|u] + [c|a],
-        // then pairs with every installed texture starting with appearance[..6] + skin.
+        // Matches child appearance prefixes (excluding 't' at index 1) and pairs each with textures
+        // matching the appearance prefix and skin tone.
         foreach (var appearance in catalog.Appearances)
         {
             if (appearance.Length < 6) continue;
@@ -310,7 +302,6 @@ public static class WardrobeSuitService
         var result = new List<SuitChoice>();
         if (genderMode is >= 2 and <= 5)
         {
-            // FUN_004096c5 lines 41-50: pets only populate category 'b' ("dog" for 2..3, "cat" for 4..5).
             if (category != 'b') return result;
             var species = genderMode < 4 ? "dog" : "cat";
             foreach (var appearance in catalog.Appearances)
@@ -331,8 +322,8 @@ public static class WardrobeSuitService
         var expectedGender = genderMode == 0 ? 'm' : 'f';
         var expectedAge = isChild ? 'c' : 'a';
 
-        // FUN_004096c5 / FUN_00409953..FUN_0040a1af: matches <category> + 3 chars + [m|f|u] + [c|a] + 3 chars,
-        // then pairs with every installed texture starting with appearance[..9] + skin.
+        // Matches appearance names by category, gender, and age, pairing each model with installed textures
+        // matching its prefix and skin tone.
         foreach (var appearance in catalog.Appearances)
         {
             if (appearance.Length < 9 || FoldAscii(appearance[0]) != category) continue;
@@ -356,7 +347,6 @@ public static class WardrobeSuitService
         var genderMode = ResolveGenderMode(context, null);
         if (genderMode is >= 2 and <= 5)
         {
-            // FUN_0040a5ea lines 214-247: dog/cat bodies clear head and human outfit/hand slots to "NONE".
             context.SetString(0x03, "NONE");
             for (var idx = 0x10; idx <= 0x23; idx++)
                 context.SetString(idx, "NONE");
@@ -376,7 +366,6 @@ public static class WardrobeSuitService
         var handMeshGender = isChild ? 'u' : genderChar;
         var handTextureSuffix = ResolveHandSuffix(catalog, bodyAppearance, skin);
 
-        // FUN_0040afbd lines 186-234: open (0x12/0x13), pointing (0x14/0x15), clenched (0x16/0x17) hands.
         var openTex = ResolveHandTextureName(catalog, "huao", handTextureSuffix, skin);
         var pointTex = ResolveHandTextureName(catalog, "huap", handTextureSuffix, skin);
         var fistTex = ResolveHandTextureName(catalog, "huac", handTextureSuffix, skin);
@@ -389,7 +378,6 @@ public static class WardrobeSuitService
 
         if (isChild)
         {
-            // FUN_0040afbd lines 153-185: child nude (0x10) and swimwear/undies fallback (0x11).
             var nudeApp = catalog.AppearanceSet.Contains("nuchd_01") ? "nuchd_01" : null;
             var nudeTex = FindMatchingTexture(catalog, $"nuchd{skin}_") ?? FindMatchingTexture(catalog, $"nuchd{skin}");
             if (nudeApp is not null && nudeTex is not null)
@@ -417,7 +405,6 @@ public static class WardrobeSuitService
             if (catalog.AppearanceSet.Contains(undiesCandidate) && undiesTex is not null)
                 context.SetString(0x11, $"{undiesCandidate},BODY={undiesTex}");
 
-            // FUN_0040a5ea: keep adult category outfits aligned with skin/gender when empty or from a different build.
             SyncAdultCategorySlot(catalog, context, 0x1f, 'f', genderMode, build, skin, fallbackAdded: true);
             SyncAdultCategorySlot(catalog, context, 0x20, 's', genderMode, build, skin, fallbackAdded: false);
             SyncAdultCategorySlot(catalog, context, 0x21, 'l', genderMode, build, skin, fallbackAdded: false);
@@ -448,8 +435,8 @@ public static class WardrobeSuitService
             current.Equals("NONE", StringComparison.OrdinalIgnoreCase))
             return;
 
-        // Only replace an existing category outfit if its gender or skin no longer matches the Sim;
-        // purchased outfits of another adult body build (skn/fit/fat) remain valid in Hot Date+ wardrobes!
+        // Only replace an existing category outfit if its gender or skin tone no longer matches the Sim.
+        // Outfits from another adult body build remain valid.
         var app = ExtractAppearanceName(current);
         if (app.Length < 9) return;
         var expectedGender = genderMode == 0 ? 'm' : 'f';
@@ -693,7 +680,7 @@ public static class WardrobeSuitService
 
     private static CatalogCache BuildCatalog(string gameRoot, ObjectRegistry registry)
     {
-        // FUN_005837c0 + FUN_0059f6cf + FUN_005a009d: load appearances from both .cmx and .bcf across Skins and Animation paths.
+        // Loads character appearances from both CMX and BCF files across Skins and Animation directories.
         var skinsPath = CharacterSearchPath.Skins(gameRoot, registry);
         var animPath = CharacterSearchPath.Animation(gameRoot, registry);
         var appearances = new List<string>();
@@ -721,7 +708,6 @@ public static class WardrobeSuitService
             foreach (var appearance in data.Appearances)
             {
                 var name = appearance.Name.Trim();
-                // FUN_004092b7 lines 20-23 skip "suit-" accessory/interaction suits.
                 if (name.Length == 0 || name.StartsWith("suit-", StringComparison.OrdinalIgnoreCase))
                     continue;
                 if (appearanceSet.Add(name))
@@ -729,7 +715,6 @@ public static class WardrobeSuitService
             }
         }
 
-        // FUN_004089ca: ordered .bmp and .tga character textures.
         var texturesPath = CharacterSearchPath.Textures(gameRoot, registry);
         var textures = new List<string>();
         var textureSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);

@@ -1,11 +1,7 @@
 namespace SimsEngine.Formats;
 
-/// <summary>The stored attributes of every object type on a lot (TATT), as Sims.exe FUN_0043e1d5 reads them from the
-/// resource stream: the field-coding flag, a u32 type count, then per type its GUID, a u32 attribute count and that
-/// many s16 attributes.
-/// <para>Sims.exe copies the values into the loaded type with that GUID (or into a 128-value scratch buffer when no
-/// such type is loaded), clears the attributes the chunk does not cover, and stops reading the chunk when the stored
-/// count is larger than the type's own. This reader keeps every stored value.</para></summary>
+/// <summary>Parses lot object type attributes (TATT), decoding stored attribute arrays for each object
+/// GUID.</summary>
 public sealed class TypeAttributes
 {
     public int Version { get; }
@@ -42,7 +38,6 @@ public sealed class TypeAttributes
     public static TypeAttributes Read(ReadOnlyMemory<byte> chunkData) =>
         Read(new IffChunk(ResourceType.Parse("TATT"), 1, 0, string.Empty, 0, chunkData));
 
-    /// <summary>Writes the TATT resource stream as Sims.exe FUN_0043e1a3 / FUN_0043e1d5 serializes it.</summary>
     public byte[] Write(bool coded = true, bool swap = false) =>
         Write(AttributesByGuid, Version, coded, swap);
 

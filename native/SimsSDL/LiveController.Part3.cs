@@ -73,16 +73,13 @@ internal sealed partial class LiveController
     public bool RightScrollActive => _rightScrolling;
     public bool RightButtonHeld => _rightOrigin is not null;
 
-    /// <summary>The anchored scroll's velocity in pixels per second, 5 * (press - pointer).</summary>
     private Vector2? RightScrollVelocity =>
         _rightScrolling && _rightOrigin is { } origin && _rightCurrent is { } current
             ? new Vector2((float)(origin.X - current.X), (float)(origin.Y - current.Y)) * 5f
             : (Vector2?)null;
 
-    /// <summary>
-    /// <c>EdgeDetectScroller::Classify</c>: the arrow for the scroll direction, the anchor cursor under a speed of 100, and 15 degrees
-    /// either side of an axis counting as that axis.
-    /// </summary>
+    /// <summary>Determines the scroll cursor by mapping directions within 15 degrees of an axis to that
+    /// cardinal direction, showing the stationary anchor cursor at speeds below 100.</summary>
     public string RightScrollCursor
     {
         get
@@ -116,7 +113,6 @@ internal sealed partial class LiveController
         }
     }
 
-    /// <summary>A mouse wheel turn: zooms a whole level per notch, or scrolls an open dialog.</summary>
     public void Wheel(float notches)
     {
         if (Ui.HelpVisible)
@@ -182,8 +178,10 @@ internal sealed partial class LiveController
             return;
         }
 
-        // Skip wall-cutaway recalculation while actively dragging or edge-scrolling the camera.
+        // Suspends wall cutaway recalculation during camera dragging, edge scrolling, or smooth zoom
+        // interpolation.
         if (_rightOrigin is not null
+            || Renderer.IsZoomInterpolating
             || (Ui.OptionsPanel.PlayOptions.EdgeScrolling && Ui.ShowsLot && EdgeScrollRegion(point) is not null))
         {
             return;
@@ -223,6 +221,14 @@ internal sealed partial class LiveController
         }
     }
 
+    public void OnSmoothZoomSettled()
+    {
+        if (Pointer is { } pointer && string.Equals(Ui.WallMode, "cutaway", StringComparison.Ordinal))
+        {
+            UpdateCutaway(pointer);
+        }
+    }
+
     private void ClearCutawayTracking()
     {
         _desiredCutaway = null;
@@ -239,8 +245,6 @@ internal sealed partial class LiveController
 
         _lastCutawayTile = null;
     }
-
-    // Keys
 
     public abstract record Key
     {
@@ -261,7 +265,6 @@ internal sealed partial class LiveController
         public sealed record Character(string Value) : Key;
     }
 
-    /// <summary>A key press; returns false for keys the live game does not use (the window handles those).</summary>
     public bool HandleKeyDown(Key key)
     {
         if (Ui.BudgetReportVisible)
@@ -327,7 +330,6 @@ internal sealed partial class LiveController
                         }
                         catch
                         {
-                            // Ignore caption edit errors.
                         }
                         break;
                 }
@@ -442,7 +444,6 @@ internal sealed partial class LiveController
                     || Ui.Build.SelectedObjectGUID is not null;
                 if (!hasMenuOrSelection && _pictureInPicture is not null)
                 {
-                    // cWinPictureInPicture::OnKeyDown (0x004c3b20): Escape closes PiP without panning.
                     ClosePictureInPicture();
                 }
                 else
@@ -491,7 +492,6 @@ internal sealed partial class LiveController
                 break;
             }
 
-            // cWinPeople's key switch (WinPeople.s 0x10283FB8) sends Space to ObjectModule::AdvanceSelectedPerson.
             case Key.Character { Value: " " }:
                 NextSim();
                 break;
@@ -563,8 +563,8 @@ internal sealed partial class LiveController
             }
 
             case Key.Tab:
-                // cLiveModePanel::Message (0051b86b.c lines 519-531) + cSimsPieMenu::Track (0048d6b6.c lines 323-326):
-                // While a pie menu is open, Tab advances its 12-item page instead of switching the selected Sim.
+                // While a pie menu is open, Tab cycles through 12-item pages instead of advancing to the
+                // next Sim.
                 if (Ui.PieMenu is { } menu)
                 {
                     bool advanced;
@@ -627,6 +627,7 @@ internal sealed partial class LiveController
                 }
 
                 Ui.Buy.Rotate();
+                _snappedPlacementDirection = null;
                 PlayUISound("ui_object_rotate");
                 if (Pointer is { } rotatePointer)
                 {
@@ -634,7 +635,8 @@ internal sealed partial class LiveController
                 }
                 break;
 
-            // With an object in hand, ,/< and ./> turn it (00486cd1.c lines 12-24); otherwise ,/< and ./> turn the camera.
+            // Rotates the held object when dragging a placement, or rotates the camera view when no object
+            // is held.
             case Key.Character { Value: "," or "<" or "." or ">" } mark:
             {
                 int steps = mark.Value is "," or "<" ? -1 : 1;
@@ -645,6 +647,7 @@ internal sealed partial class LiveController
                 }
 
                 Ui.Buy.Rotate(steps);
+                _snappedPlacementDirection = null;
                 PlayUISound("ui_object_rotate");
                 if (Pointer is { } stepRotatePointer)
                 {
@@ -751,8 +754,6 @@ internal sealed partial class LiveController
             return false;
         }
 
-        // Mac ObjectDialog::SetupDialog gives a buttonless dialog its close box (button 2) and binds Enter, Esc and
-        // Space to it; non-blocking tutorial banners let all other keys reach the live game.
         if (dialog.TutorialCloseBox is not null && dialog.Dialog.Buttons.Count == 0)
         {
             switch (key)
@@ -938,7 +939,6 @@ internal sealed partial class LiveController
         return true;
     }
 
-    /// <summary>Typed text, for the name-entry dialog.</summary>
     public void Text(string text)
     {
         if (Ui.Album.Visible && Ui.Album.EditingCaption)
@@ -949,7 +949,6 @@ internal sealed partial class LiveController
             }
             catch
             {
-                // Ignore caption edit errors.
             }
 
             return;
@@ -997,12 +996,8 @@ internal sealed partial class LiveController
         || (Ui.GameDialog?.AcceptsTextInput == true
             && !string.Equals(_localDialogToken, Ui.GameDialog?.Dialog.Token, StringComparison.Ordinal));
 
-    // Pack plugins
-
-    /// <summary>
-    /// Asks once per launch, in a system message box outside the original-game UI, before any untrusted plugin may run.
-    /// "Keep Disabled" is the default; trust applies only to the exact files that were reviewed.
-    /// </summary>
+    /// <summary>Prompts once per launch before executing untrusted plugins, defaulting to disabled and
+    /// scoping trust strictly to the reviewed files.</summary>
     private void ReviewPluginTrust()
     {
         string dataRoot = Options.DataRoot ?? Workspace;
@@ -1075,7 +1070,6 @@ internal sealed partial class LiveController
         }
     }
 
-    /// <summary>Every pack-declared panel, in pack then panel ID order; the macOS client lists them in its Simulation menu.</summary>
     private List<(string PackID, PanelDescription Description)> PluginPanels =>
         Content.Packs.PanelDescriptions()
             .OrderBy(static pack => pack.Key, StringComparer.Ordinal)
@@ -1084,7 +1078,6 @@ internal sealed partial class LiveController
                 .Select(panel => (pack.Key, panel.Value)))
             .ToList();
 
-    /// <summary>Opens the panel after the open one (the first when none is open); past the last panel it closes.</summary>
     public void OpenNextPluginPanel()
     {
         if (!HasActiveLot || !Ui.ShowsLot || HasBlockingDialog || Ui.OutfitPicker is not null)
@@ -1132,7 +1125,6 @@ internal sealed partial class LiveController
         return null;
     }
 
-    /// <summary>Opens one declared panel, from the E key or when a plugin answers a menu choice with it.</summary>
     private void OpenPluginPanel(string packID, PanelDescription description, int? anchorID = null)
     {
         try
@@ -1161,10 +1153,8 @@ internal sealed partial class LiveController
         }
     }
 
-    /// <summary>
-    /// Keeps an anchored plugin panel beside its object as the view pans, zooms and the object moves; closes it once the
-    /// object is gone from the lot.
-    /// </summary>
+    /// <summary>Tracks an anchored panel to its target object during camera pans, zooms, and object
+    /// movement, closing the panel if the object leaves the lot.</summary>
     private void FollowPanelAnchor()
     {
         if (Ui.PluginPanel is not { } panel || panel.AnchorId is not int id)
@@ -1242,8 +1232,6 @@ internal sealed partial class LiveController
         }
     }
 
-    // Buy and build editing
-
     private bool CanEditBuildObject(EditableLotObject obj)
     {
         if (!Ui.BuildMode)
@@ -1277,8 +1265,30 @@ internal sealed partial class LiveController
         }
 
         if (Ui.Buy.Selection.Target is { } target
-            && Renderer.GroundTileAt(Simd(point), SimdCanvas) is { } tile)
+            && ResolveObjectPlacementTarget(point, target) is { } resolved)
         {
+            GroundTile tile = resolved.Tile;
+            int placementDirection = Ui.Buy.Direction;
+            if (resolved.WallDirection is int wallDir)
+            {
+                if (_snappedPlacementDirection is { } snapped
+                    && snapped.Key.Target == target
+                    && snapped.Key.Tile == tile
+                    && snapped.Key.WallDirection == wallDir)
+                {
+                    placementDirection = snapped.Direction;
+                }
+                else
+                {
+                    int primaryDir = wallDir switch { 1 => 1, 2 => 4, 3 => 16, _ => 64 };
+                    int oppositeDir = wallDir switch { 1 => 16, 2 => 64, 3 => 1, _ => 4 };
+                    if (placementDirection != primaryDir && placementDirection != oppositeDir)
+                    {
+                        placementDirection = primaryDir;
+                    }
+                }
+            }
+
             if (!target.IsPlaced)
             {
                 if (Ui.SelectedCatalogPrice is { } price && price <= (Ui.Gameplay.State?.Budget ?? 0))
@@ -1291,7 +1301,7 @@ internal sealed partial class LiveController
                             ["x"] = tile.PlacementX,
                             ["y"] = tile.PlacementY,
                             ["level"] = Renderer.ViewLevel,
-                            ["direction"] = Ui.Buy.Direction,
+                            ["direction"] = placementDirection,
                         });
                     PlayUISoundOnResponse(request, "ui_buy_place");
                 }
@@ -1305,7 +1315,6 @@ internal sealed partial class LiveController
                     }
                     catch
                     {
-                        // Ignore placement error tooltip failures.
                     }
 
                     PlayUISound("ui_error");
@@ -1321,7 +1330,7 @@ internal sealed partial class LiveController
                         ["x"] = tile.PlacementX,
                         ["y"] = tile.PlacementY,
                         ["level"] = Renderer.ViewLevel,
-                        ["direction"] = Ui.Buy.Direction,
+                        ["direction"] = placementDirection,
                     });
                 PlayUISoundOnResponse(request, "ui_object_move_place");
             }
@@ -1425,20 +1434,18 @@ internal sealed partial class LiveController
         SyncDisposePanel();
         _desiredPlacement = null;
         _checkedPlacement = null;
+        _snappedPlacementDirection = null;
         try
         {
             Renderer.UpdatePlacement(null);
         }
         catch
         {
-            // Ignore transient placement clear errors.
         }
     }
 
-    /// <summary>
-    /// "To delete doors, select the Door Tool and hold down the CTRL key... click to remove it" (build tips 21 and 93, also
-    /// windows and placed build objects in their corresponding build subpanels): sells the build object under the pointer.
-    /// </summary>
+    /// <summary>Sells the architectural object under the pointer when clicked with the Control key held
+    /// while using its matching build tool.</summary>
     private bool DeleteBuildObject(CGPoint point)
     {
         if (!Ui.BuildMode
@@ -1534,7 +1541,6 @@ internal sealed partial class LiveController
         }
         catch
         {
-            // Ignore transient brush clear errors.
         }
 
         _ = SendWithBuildSound(
@@ -1590,7 +1596,6 @@ internal sealed partial class LiveController
                     }
                     catch
                     {
-                        // Ignore transient brush clear errors.
                     }
                 }
 
@@ -1604,11 +1609,8 @@ internal sealed partial class LiveController
         }
     }
 
-    /// <summary>
-    /// Asks the host for the build cursor at the vertex or tile under <paramref name="point"/>: the terrain tool's, the wallpaper tool's
-    /// (cNewWallpaperTool graphic 2 at tile center in 0048a06a.c / 0048a1d1.c), or before a wall stroke, the wall tool's
-    /// (its graphic follows the modifiers: 1 deletes with Ctrl or Alt, 3 draws a rectangle with Shift).
-    /// </summary>
+    /// <summary>Updates the build cursor for the active tool at the targeted location, switching wall
+    /// cursor graphics to deletion with Control or Alt and rectangle drawing with Shift.</summary>
     private void UpdateBuildCursor(CGPoint point)
     {
         TerrainBrushMode? terrain = Ui.Build.TerrainMode;
@@ -1758,7 +1760,6 @@ internal sealed partial class LiveController
             }
             catch
             {
-                // Ignore transient cursor clear errors.
             }
         }
 
@@ -1770,7 +1771,6 @@ internal sealed partial class LiveController
             }
             catch
             {
-                // Ignore transient preview clear errors.
             }
         }
     }
@@ -1816,7 +1816,6 @@ internal sealed partial class LiveController
         }
     }
 
-    /// <summary>The original drag tools' answer to a press or drag outside the buildable area (<c>FUN_00492c37</c>).</summary>
     private void RefuseBuild()
     {
         ulong now = SDL_GetTicks();
@@ -2055,7 +2054,6 @@ internal sealed partial class LiveController
         }
         catch
         {
-            // Ignore transient brush clear errors.
         }
     }
 
@@ -2100,7 +2098,7 @@ internal sealed partial class LiveController
                 bool shiftHeld = (mods & SDL_KMOD_SHIFT) != 0 || ScriptShiftModifier;
                 bool ctrlHeld = (mods & SDL_KMOD_CTRL) != 0 || ScriptDeleteModifier;
                 short grassStep = (shiftHeld || ctrlHeld) ? (short)32 : (short)-32;
-                // "Hold down the CTRL key when raising terrain to make some nice curvy hills" (build tips); the host's smooth raise.
+                // Holding Control while raising or lowering terrain applies smooth elevation changes.
                 bool smooth = (mode == TerrainBrushMode.Raise || mode == TerrainBrushMode.Lower) && ctrlHeld;
                 List<ArchitectureCommandRequest> requests;
                 if ((mode == TerrainBrushMode.Raise || mode == TerrainBrushMode.Lower)
@@ -2227,10 +2225,8 @@ internal sealed partial class LiveController
         return true;
     }
 
-    /// <summary>
-    /// The stroke's wall from its start to the vertex under <paramref name="point"/>; past the buildable area the wall stops where it
-    /// last was, with the error sound, as the original drag tools do.
-    /// </summary>
+    /// <summary>Computes a wall segment from the start vertex to the pointer, clamping to the last valid
+    /// position and playing an error sound if dragged beyond the buildable area.</summary>
     private WallBrushSelection? WallLine(CGPoint point)
     {
         if (!BuildToolsReady
@@ -2264,8 +2260,7 @@ internal sealed partial class LiveController
                 stroke.Completed.Add(new WallStrokeSegment(previous, stroke.Style, stroke.Pattern));
             }
 
-            // cNewWallTool resets its wall undo planner and establishes the current cursor as a new origin when the
-            // Control/Shift mode changes mid-drag (Drag, 10177854..1017789C).
+            // Resets the wall origin to the current cursor position when modifier keys change mid-drag.
             stroke.Start = vertex;
             stroke.Mode = mode;
         }

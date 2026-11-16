@@ -1,6 +1,5 @@
 namespace SimsEngine.Simulation;
 
-/// <summary>Native placement for Sims.exe FUN_004549b6/FUN_004550e0's snap-target branch.</summary>
 internal static class SnapshotExecutor
 {
     public static PrimitiveResult PlaceAtFreePosition(SimulationWorld world, XObject me, ObjectPosition position,
@@ -83,8 +82,6 @@ internal static class SnapshotExecutor
             return PrimitiveResult.False;
         }
 
-        // FUN_004550e0 delegates both validation and application to the running object's
-        // +0x54/+0x58 callbacks, with the target and footprint slot as relative-placement data.
         if (!world.CanPlaceRouteCandidate(me, target.Position, target, slotIndex))
             return PrimitiveResult.False;
         if (checkWallFootprint && !PassesSlotWallCheck(world, me, target.Position, directionMask))
@@ -99,8 +96,6 @@ internal static class SnapshotExecutor
         return PrimitiveResult.True;
     }
 
-    // FUN_004550e0 updates direction, invalidates SAnimator root grid on people (vtable +0x20(1)),
-    // and clears cXObject +0xb2 (ObjectData.PrimitiveResult) after any successful placement.
     private static void CompletePlacement(XObject me)
     {
         if (me is XPerson person)
@@ -118,9 +113,6 @@ internal static class SnapshotExecutor
         me[ObjectData.PrimitiveResult] = 0;
     }
 
-    // FUN_004550e0 compares the projected room with the actor's retained room, skips the directional
-    // wall test when the actor is currently off-lot (FUN_00433136), and otherwise checks FUN_00435a8f
-    // in both directions along the proposed move before invoking the placement callback.
     private static bool SameRoomAndUnblocked(SimulationWorld world, SimsEngine.World.RoomMap map,
         XObject me, ObjectPosition destination)
     {
@@ -142,7 +134,6 @@ internal static class SnapshotExecutor
                !world.BlocksRouteDirectionAt(map, toX, toY, (direction + 4) & 7);
     }
 
-    // FUN_004550e0's later wall test is gated by its operand flag and a non-null target object.
     private static bool PassesSlotWallCheck(SimulationWorld world, XObject me, ObjectPosition destination,
         int directionMask)
     {

@@ -67,7 +67,7 @@ public sealed class OriginalGameplayOverlay
     private readonly record struct MotiveBarCacheKey(int Width, uint GreenRgb, uint RedRgb);
     private readonly record struct MotiveArrowStripCacheKey(bool Rising, uint C0, uint C1, uint C2, uint C3, uint C4);
 
-    private static readonly (byte R, byte G, byte B) LivePopupTextColor = (195, 205, 205); // DAT_006f2a44 (004ff397.c:26-27, 005081d5.c:23-24)
+    private static readonly (byte R, byte G, byte B) LivePopupTextColor = (195, 205, 205);
     private static readonly Subpanel[] MainTabSubpanels =
     [
         Subpanel.Needs,
@@ -182,6 +182,10 @@ public sealed class OriginalGameplayOverlay
     private readonly Dictionary<string, Image> _personTips = new(StringComparer.Ordinal);
     private string? _suppressedTooltipIdentity;
     private bool _quickTips = true;
+    private HashSet<UITexture>? _hoverTextures;
+    private (string Text, Image Image)? _cachedClockText;
+    private (string Text, Image Image)? _cachedFriendsText;
+    private (string Text, Image Image)? _cachedBudgetText;
 
     private readonly CGPoint[] _buttonPositions =
     [
@@ -203,9 +207,8 @@ public sealed class OriginalGameplayOverlay
     public int RelationshipPage { get; private set; }
     public OriginalGameplayLayout.RelationshipFilter RelationshipFilter { get; private set; } = OriginalGameplayLayout.RelationshipFilter.All;
     public int InterestPage { get; private set; }
-    /// <summary>
-    /// The selected Sim's head for the pie menu centre: nine frames, facing the player then each spoke clockwise from the top.
-    /// </summary>
+    /// <summary>The selected Sim head sprite for the pie menu center, arranged in nine frames: facing the
+    /// player, followed by each radial spoke clockwise from the top.</summary>
     public Image? PieHead { get; private set; }
     public bool InterfaceEffects { get; set; } = true;
     public GameplayPanelState? State { get; private set; }
@@ -214,9 +217,8 @@ public sealed class OriginalGameplayOverlay
     public CGPoint? HoveredPanelPoint { get; set; }
     public PluginEnvironment? Environment { get; set; }
 
-    /// <summary>
-    /// The tutorial controller compares the enabled live-popup client's name, not the selected subpanel.
-    /// </summary>
+    /// <summary>The tutorial controller checks the active popup client's name rather than the selected
+    /// subpanel.</summary>
     public string? TutorialPopupName
     {
         get
@@ -276,9 +278,6 @@ public sealed class OriginalGameplayOverlay
         }
     }
 
-    /// <summary>
-    /// <c>cWinMotive</c> gives each row a Live popup client named <c>motives</c>, with paired <c>STR# 130</c> title and description.
-    /// </summary>
     public int? HoveredNeed
     {
         get => _hoveredNeed;
@@ -295,9 +294,6 @@ public sealed class OriginalGameplayOverlay
         }
     }
 
-    /// <summary>
-    /// The portrait under the pointer and the name assigned to its original <c>cWinPeople</c> widget.
-    /// </summary>
     public (int Id, string Name, CGRect Rect)? HoveredPerson
     {
         get => _hoveredPerson;
@@ -312,9 +308,6 @@ public sealed class OriginalGameplayOverlay
         }
     }
 
-    /// <summary>
-    /// Quick Tips timing follows <c>cOptionsMgr::SetQuickTips</c> and the default tooltip window's unfurl ramp.
-    /// </summary>
     public bool QuickTips
     {
         get => _quickTips;
@@ -377,8 +370,6 @@ public sealed class OriginalGameplayOverlay
         _unknown = Bitmap("Buttons/UnknownFace.bmp");
 
         var iconFrameBitmap = new SimsBitmap(content.Read("UIGraphics/cpanel/Buttons/IconFrame.bmp"));
-        // FUN_004cad42 (004cad42.c:167-170): resource 0x1068 (IconFrame.bmp) uses UI color 0x10 = RGB(0, 0, 255) as its
-        // transparent key while its outer corners use RGB(255, 0, 255) to mask the 45x45 composite buffer.
         _iconFrame = CreateImage(device, iconFrameBitmap.Width, iconFrameBitmap.Height, iconFrameBitmap.Rgba, magenta: true, blue: true);
 
         var thumbTemplateBitmap = new SimsBitmap(content.Read("UIGraphics/cpanel/Catalog/ThumbTemplate.bmp"));
@@ -437,7 +428,6 @@ public sealed class OriginalGameplayOverlay
         _personalityBackground = Bitmap("Backgrounds/PersBkg.bmp");
         _personalityBars = Bitmap("HouseSubBars.bmp");
         _houseBarsOff = Bitmap("Backgrounds/HouseSubBarsOff.BMP");
-        // cSimsApp::SetupWinCtrlMgr assigns resource 3008 to system bitmap 5; cWinLivePopup uses it as its tiler.
         _livePopupBackground = Bitmap("Backgrounds/PopupInfoTiles.bmp");
         _bevelDivider = TryBitmap(Bitmap, "Backgrounds/OptionsToothpkVert.bmp")
             ?? CreateImage(device, 2, 1, [0, 0, 42, 255, 74, 90, 148, 255]);
@@ -460,7 +450,6 @@ public sealed class OriginalGameplayOverlay
 
         _skillBars = Bitmap("JobSubBars.bmp");
         _skillBarsOff = Bitmap("Backgrounds/JobSubBarsOff.bmp");
-        // FUN_004ff397 (004ff397.c:26-27): DAT_006f2a44 = RGB(0xc3, 0xcd, 0xcd), used for 1px skill requirement L-brackets.
         _skillHighlight = CreateImage(device, 1, 1, [0xc3, 0xcd, 0xcd, 0xff]);
         _jobIcons = Bitmap("Buttons/JobIconMultiButton.BMP");
         _salaryButton = Bitmap("Buttons/SalaryButton.bmp");
@@ -511,12 +500,9 @@ public sealed class OriginalGameplayOverlay
         return new Image(new UITexture(width, height, rgba), new CGSize(width, height));
     }
 
-    /// <summary>
-    /// <c>FUN_004cad42</c> (<c>004cad42.c:167-177</c>) blits <c>IconFrame.bmp</c> (transparent key RGB(0,0,255)) into a
-    /// 45x45 buffer whose transparent key is RGB(255,0,255), so <c>IconFrame.bmp</c>'s 24 magenta outer corner pixels
-    /// overwrite and mask the 45x45 icon's square corners. Likewise, <c>PeopleTemplate.bmp</c> (180x45, 4x1 of 45x45) has
-    /// 4 inner bevel corner pixels at (5, 2), (39, 2), (5, 42), (39, 42) surrounding the 35x41 portrait area.
-    /// </summary>
+    /// <summary>Masks square icon corners by blitting the icon frame using blue transparency over a
+    /// magenta-keyed composite buffer. Also preserves the four inner bevel corner pixels surrounding the
+    /// portrait frame.</summary>
     public static byte[] MaskIconFrameCorners(byte[] pixels, int width, int height, int columns, int rows)
     {
         ArgumentNullException.ThrowIfNull(pixels);
@@ -585,9 +571,6 @@ public sealed class OriginalGameplayOverlay
         return maskedCell;
     }
 
-    /// <summary>
-    /// The funds readout is sized for "$9,999,999" (0x005382a4), so thousands carry a comma.
-    /// </summary>
     public static string Grouped(int value)
     {
         string digits = Math.Abs((long)value).ToString(CultureInfo.InvariantCulture);
@@ -615,7 +598,6 @@ public sealed class OriginalGameplayOverlay
     public static Image Text(string value, SimsBitmapFont font, UIDevice device, (byte R, byte G, byte B) color)
     {
         ArgumentNullException.ThrowIfNull(font);
-        // The rasterizer pads labels by 3 pixels on every side; the panel positions text by its glyph cell, as the original does.
         var raster = font.Rasterize(value, color);
         const int pad = 3;
         int width = Math.Max(1, raster.Width - 2 * pad);
@@ -655,7 +637,6 @@ public sealed class OriginalGameplayOverlay
 
     public void RecordPieChoice(CGPoint point)
     {
-        // FUN_004d2a7e (004d2a7e.c line 110): newly queued pie-menu action starts at (clickX - 16, clickY - 16).
         _pendingPieChoiceOrigin = new CGPoint(point.X - 16, point.Y - 16);
     }
 
@@ -726,7 +707,6 @@ public sealed class OriginalGameplayOverlay
         bool selectedIsPet = ((next.Selected?.Gender ?? 0) & 6) != 0;
         for (int index = 0; index < _buttons.Length; index++)
         {
-            // cWinPeople::SetPerson (0051c61b.c:46-156) hides Interests (5) and Inventory (6) when a pet is selected.
             if ((selectedIsPet || next.Selected is null) && index is 5 or 6)
             {
                 continue;
@@ -947,8 +927,6 @@ public sealed class OriginalGameplayOverlay
                     }
                     else
                     {
-                        // FUN_0050e555 assigns resource 0x256 (BackCTwo.bmp) when the GUID has no catalog bitmap.
-                        // FUN_0050e78c centers half the source width and places the count three pixels below it.
                         var iconSize = new CGSize(_missingInventoryIcon.Size.Width / 2.0, _missingInventoryIcon.Size.Height);
                         iconHeight = iconSize.Height;
                         parts.Add(new Part(
@@ -1261,16 +1239,26 @@ public sealed class OriginalGameplayOverlay
 
         int hour = next.Hours % 12 == 0 ? 12 : next.Hours % 12;
         string meridiem = _strings.PanelTip(next.Hours < 12 ? 21 : 22, next.Hours < 12 ? "AM" : "PM");
-        // The clock paint (0x00539fe8) centres the time in the 56x7 rect at (95,118) with font slot DAT_006f2a94 (size 8) in
-        // palette entry 0x29e65e; the funds control (0x005382a4) uses the size-10 font and the same palette.
         var statusParts = new List<Part>();
-        var clockImg = Text($"{hour}:{next.Minutes:D2} {meridiem}", _clockFont, Device, (0x29, 0xe6, 0x5e));
+        string clockText = $"{hour}:{next.Minutes:D2} {meridiem}";
+        if (_cachedClockText is not { } cachedClock || !string.Equals(cachedClock.Text, clockText, StringComparison.Ordinal))
+        {
+            cachedClock = (clockText, Text(clockText, _clockFont, Device, (0x29, 0xe6, 0x5e)));
+            _cachedClockText = cachedClock;
+        }
+        var clockImg = cachedClock.Image;
         statusParts.Add(new Part(clockImg, new CGRect(123.0 - clockImg.Size.Width / 2.0, 85.0, clockImg.Size.Width, clockImg.Size.Height)));
 
         if (next.FamilyFriends is { } familyFriends)
         {
             var bounds = FamilyFriendsRect(familyFriends);
-            var countLabel = Text(familyFriends.ToString(CultureInfo.InvariantCulture), Font, Device, (0x29, 0xe6, 0x5e));
+            string friendsText = familyFriends.ToString(CultureInfo.InvariantCulture);
+            if (_cachedFriendsText is not { } cachedFriends || !string.Equals(cachedFriends.Text, friendsText, StringComparison.Ordinal))
+            {
+                cachedFriends = (friendsText, Text(friendsText, Font, Device, (0x29, 0xe6, 0x5e)));
+                _cachedFriendsText = cachedFriends;
+            }
+            var countLabel = cachedFriends.Image;
             statusParts.Add(new Part(
                 countLabel,
                 new CGRect(bounds.X + bounds.Width - countLabel.Size.Width, bounds.Y, countLabel.Size.Width, countLabel.Size.Height)));
@@ -1278,7 +1266,13 @@ public sealed class OriginalGameplayOverlay
 
         if (next.Budget is { } budget)
         {
-            var money = Text("§" + Grouped(budget), Font, Device, (0x29, 0xe6, 0x5e));
+            string budgetText = "§" + Grouped(budget);
+            if (_cachedBudgetText is not { } cachedBudget || !string.Equals(cachedBudget.Text, budgetText, StringComparison.Ordinal))
+            {
+                cachedBudget = (budgetText, Text(budgetText, Font, Device, (0x29, 0xe6, 0x5e)));
+                _cachedBudgetText = cachedBudget;
+            }
+            var money = cachedBudget.Image;
             statusParts.Add(new Part(money, new CGRect(178.0 - money.Size.Width, 125.0, money.Size.Width, money.Size.Height)));
         }
 
@@ -1532,10 +1526,6 @@ public sealed class OriginalGameplayOverlay
         ClearInventoryHover();
     }
 
-    /// <summary>
-    /// <c>cWinSubpanelJob::TSOnCommand</c> (<c>00530bbd.c</c>) opens summary popup indices 0 (<c>job</c>),
-    /// 1 (<c>salary</c>), 2 (<c>perf</c>), and 3 (<c>friends</c>).
-    /// </summary>
     public bool ClickCareerSummary(CGPoint point, CGSize canvas)
     {
         Prepare(canvas);
@@ -1603,10 +1593,6 @@ public sealed class OriginalGameplayOverlay
         return false;
     }
 
-    /// <summary>
-    /// <c>cWinSubpanelHouse</c> (<c>005315ef.c</c>) creates nine buttons and selects <c>STR# 0x87</c>
-    /// title/description pairs by button index.
-    /// </summary>
     public bool ClickHouseHint(CGPoint point, CGSize canvas)
     {
         Prepare(canvas);
@@ -1684,10 +1670,6 @@ public sealed class OriginalGameplayOverlay
         return false;
     }
 
-    /// <summary>
-    /// <c>cWinPeople::TSOnCommand</c> (<c>0051b86b</c>) toggles the current trait's Live popup, changes its client to
-    /// the clicked trait, or toggles the Zodiac sign popup from <c>UIText.iff STR# 165</c> (<c>SignPopups</c>).
-    /// </summary>
     public bool ClickPersonality(CGPoint point, CGSize canvas)
     {
         Prepare(canvas);
@@ -1871,9 +1853,6 @@ public sealed class OriginalGameplayOverlay
         return false;
     }
 
-    /// <summary>
-    /// A click on a Job panel skill label toggles that skill's Live popup (the Windows "skill" popup), or switches it to the clicked skill.
-    /// </summary>
     public bool ClickSkill(CGPoint point, CGSize canvas)
     {
         Prepare(canvas);
@@ -1912,9 +1891,6 @@ public sealed class OriginalGameplayOverlay
         return true;
     }
 
-    /// <summary>
-    /// Mac CatSkills and DogSkills expose each of the three skill buttons as Live popups backed by <c>STR# 0xab/0xac</c>.
-    /// </summary>
     public bool ClickPetSkill(CGPoint point, CGSize canvas)
     {
         Prepare(canvas);
@@ -1954,10 +1930,6 @@ public sealed class OriginalGameplayOverlay
         return true;
     }
 
-    /// <summary>
-    /// <c>cWinSubpanelFame::Init</c> (<c>00531ea0.c</c>) uses the six skill popup pairs in <c>Live.iff STR# 0x89</c>
-    /// and <c>fame.iff STR# 1</c> for the level and friends popups.
-    /// </summary>
     public bool ClickFameSkill(CGPoint point, CGSize canvas)
     {
         Prepare(canvas);
@@ -2446,10 +2418,6 @@ public sealed class OriginalGameplayOverlay
         }
     }
 
-    /// <summary>
-    /// Universal Control Panel status readouts (<c>clock</c>, <c>familyFriends</c>, <c>budget</c>, and <c>CycleIndicator</c>),
-    /// shared across all modes (<c>005382a4.c</c>).
-    /// </summary>
     public IReadOnlyList<Part> UniversalStatusParts(CGSize canvas)
     {
         double top = canvas.Height - 150.0;
@@ -2467,23 +2435,27 @@ public sealed class OriginalGameplayOverlay
     {
         TryPrepare(canvas);
         double top = canvas.Height - 150.0;
-        var hoverTextures = new HashSet<UITexture>(ReferenceEqualityComparer.Instance)
+        var hoverTextures = _hoverTextures;
+        if (hoverTextures is null)
         {
-            _people.Texture,
-            _salaryButton.Texture,
-            _performanceButton.Texture,
-            _jobFriendSmiley.Texture,
-            _fameFriendSmiley.Texture,
-            _jobIcons.Texture,
-            _fameIcons.Texture
-        };
-        foreach (var img in ScrollArrows) hoverTextures.Add(img.Texture);
-        foreach (var img in _interestArrows) hoverTextures.Add(img.Texture);
-        foreach (var img in _buttons) hoverTextures.Add(img.Texture);
-        foreach (var img in _relationshipFilters) hoverTextures.Add(img.Texture);
-        foreach (var img in _inventorySorts) hoverTextures.Add(img.Texture);
+            hoverTextures = new HashSet<UITexture>(ReferenceEqualityComparer.Instance)
+            {
+                _people.Texture,
+                _salaryButton.Texture,
+                _performanceButton.Texture,
+                _jobFriendSmiley.Texture,
+                _fameFriendSmiley.Texture,
+                _jobIcons.Texture,
+                _fameIcons.Texture
+            };
+            foreach (var img in ScrollArrows) hoverTextures.Add(img.Texture);
+            foreach (var img in _interestArrows) hoverTextures.Add(img.Texture);
+            foreach (var img in _buttons) hoverTextures.Add(img.Texture);
+            foreach (var img in _relationshipFilters) hoverTextures.Add(img.Texture);
+            foreach (var img in _inventorySorts) hoverTextures.Add(img.Texture);
+            _hoverTextures = hoverTextures;
+        }
 
-        // HoveredPanelPoint is in panel-local coordinates (y in 0..<150), matching part.Rect in _body.
         CGPoint? panelHover = null;
         if (HoveredPanelPoint is { } raw)
         {
@@ -2534,8 +2506,8 @@ public sealed class OriginalGameplayOverlay
                 double width = image.Size.Width / reference.Columns;
                 double height = image.Size.Height / reference.Rows;
                 double scale = Math.Min(1.0, Math.Min(45.0 / width, 45.0 / height));
-                // FUN_004e93e4 composites Sim portraits (including 35x41 1x1 or 3x1 face bitmaps and 4x3 UnknownFace.bmp)
-                // onto PeopleTemplate.bmp; FUN_004ccc2f composites < 45x45 object icons centered over ThumbTemplate (resource 4301).
+                // Distinguishes Sim portraits (single faces, 3x1 emotion strips, or 4x3 fallback grids) to
+                // composite them onto the portrait frame rather than centering as object icons.
                 bool isSimPortrait = reference.Columns == 3 || reference.Rows == 3 ||
                                      (reference.Columns == 4 && reference.Rows == 3) ||
                                      ((int)Math.Round(width, MidpointRounding.AwayFromZero) == 35 &&
@@ -2549,8 +2521,8 @@ public sealed class OriginalGameplayOverlay
                     parts.Add(new Part(_thumbTemplate, actionRect, new Vector4(0f, 0f, 0.25f, 1f)));
                 }
 
-                // FUN_004cad42 (004cad42.c lines 41-44, 150-151): single-column 3-row zoom sheets select row 1 (neutral);
-                // 4x3 UnknownFace.bmp uses top-left row 0.
+                // Single-column three-row portrait sheets select row 1 for the neutral expression, whereas
+                // 4x3 fallback face sheets use row 0.
                 float row = reference.Columns == 1 && reference.Rows == 3 ? 1f : 0f;
                 parts.Add(new Part(
                     image,
@@ -2563,8 +2535,6 @@ public sealed class OriginalGameplayOverlay
             }
             else
             {
-                // FUN_004cbf52 (004cbf52.c:297-300) & FUN_004cd130 (004cd130.c:13-25): falls back to resource 0x256
-                // (598, CPanel/CatalogUnknown.bmp, 90x45, 2 columns x 1 row) when an action's product has no icon.
                 parts.Add(new Part(_catalogUnknown, actionRect, new Vector4(0f, 0f, 0.5f, 1f)));
             }
 
@@ -2610,7 +2580,6 @@ public sealed class OriginalGameplayOverlay
 
             if (_personalityPopupPortrait is (var portrait, var reference))
             {
-                // Frame the 35x41 Sim portrait inside the 45x45 PeopleTemplate.bmp bevel cell centered in the 168px left pane.
                 var frameRect = new CGRect(Math.Floor(rect.X + (168.0 - 45.0) / 2.0), Math.Floor(MidY(rect) - 22.5), 45, 45);
                 parts.Add(new Part(_people, frameRect, new Vector4(0f, 0f, 0.25f, 1f)));
                 var faceSize = new CGSize(portrait.Size.Width / reference.Columns, portrait.Size.Height / reference.Rows);
@@ -2639,9 +2608,6 @@ public sealed class OriginalGameplayOverlay
         return parts;
     }
 
-    /// <summary>
-    /// The panel buttons' and the season indicator's tooltips, drawn over the rest of the panel (the speed buttons included).
-    /// </summary>
     public IReadOnlyList<Part> TooltipParts(CGSize canvas)
     {
         string? currentIdentity = CurrentTooltipIdentity;
@@ -2791,7 +2757,6 @@ public sealed class OriginalGameplayOverlay
         {
             if (PlacementTooltip.Progress(ref _indicatorHoverStartedAt, _quickTips) is { } progress)
             {
-                // The original's small-tooltip placement: the left edge at the control's middle, the bottom 1px above it.
                 var control = Offset(hover == CycleIndicator.Hover.Weather ? CycleIndicator.GlyphRect : CycleIndicator.ReelRect, 0, top);
                 return
                 [
@@ -3034,11 +2999,8 @@ public sealed class OriginalGameplayOverlay
         return controls;
     }
 
-    /// <summary>
-    /// The person panel button a Mac tutorial flash finds (<c>TutorialEffects.s</c>), when it is shown: a tab by its
-    /// <c>Res_CPanel</c> image id (<c>FindButton(cTSWin*, int)</c>), a household portrait by Sim
-    /// (<c>Tut_FlashPersonPanelButton</c>), or a relationship button by neighbor id (<c>FindRelButton</c>).
-    /// </summary>
+    /// <summary>Resolves the screen bounds for tutorial button highlights, mapping the target identifier to
+    /// a subpanel tab, household member portrait, or relationship button.</summary>
     public CGRect? TutorialButtonForImage(int imageId, CGSize canvas)
     {
         foreach (var panel in MainTabSubpanels)
@@ -3292,7 +3254,6 @@ public sealed class OriginalGameplayOverlay
         }
         catch
         {
-            // Swallow transient layout errors during read-only hit-testing/hover queries matching Swift `try?`.
         }
     }
 
@@ -3400,11 +3361,8 @@ public sealed class OriginalGameplayOverlay
         }
     }
 
-    /// <summary>
-    /// Updates per-Sim, per-motive <c>cRateOfChange(10, 5)</c> rolling buffers (<c>0051b3db.c</c>, <c>0051ceee.c:157-168</c>,
-    /// <c>004cf024.c</c> 1 Sim-minute Timer 1) and binds the selected Sim's <c>cWinMotive</c> / <c>cWinMotiveArrows</c> rows.
-    /// Paused updates (<c>simMinute</c> unchanged) never push duplicate samples, preserving active chevron indicators.
-    /// </summary>
+    /// <summary>Updates rolling rate-of-change buffers for motive trends sampled once per Sim-minute.
+    /// Paused states do not append duplicate samples, preserving active arrow indicator states.</summary>
     private void UpdateMotiveTracking(GameplayPanelState next, string resolvedRoot, ulong nowMs)
     {
         int motiveCount = OriginalGameplayLayout.Motives.Count;
@@ -3588,7 +3546,8 @@ public sealed class OriginalGameplayOverlay
 
     private void AppendNeedsDynamicParts(double top, ulong nowMs, List<Part> dynamic)
     {
-        // Quantize animated motive-pulse color sampling to ~30 Hz so 120+ Hz frame loops reuse cached GPU textures.
+        // Quantizes animated motive-pulse color sampling to approximately 30 Hz so high-refresh display
+        // loops can reuse cached textures.
         ulong sampledMs = (nowMs / 33UL) * 33UL;
         int motiveCount = OriginalGameplayLayout.Motives.Count;
         for (int index = 0; index < motiveCount; index++)
@@ -3709,12 +3668,6 @@ public sealed class OriginalGameplayOverlay
         }
     }
 
-    /// <summary>
-    /// <c>cWinPopupBase::Init</c> (<c>005081d5.c:23-24</c>) &amp; <c>cWinLivePopup::RebuildBuffer</c>
-    /// (<c>0050fcbb.c:38-73, 136-203</c>): title (<c>+0xd8</c>) uses 10pt (<c>DAT_006f2a9c</c>) and body (<c>+0xdc</c>)
-    /// uses 8pt (<c>DAT_006f2a94</c>; 10pt in Asian locales), both in <c>DAT_006f2a44 = RGB(195, 205, 205)</c>;
-    /// left text margin is 178 when left portrait pane is active, 15 otherwise.
-    /// </summary>
     private void SetLivePopup(string title, string description, (Image, GameplayPanelState.Image)? portrait = null)
     {
         int leftInset = portrait is not null ? PersonalityPopup.TextLeft : 15;
@@ -3768,7 +3721,6 @@ public sealed class OriginalGameplayOverlay
         }
         catch
         {
-            // Ignore transient font/texture failures on hover.
         }
     }
 
@@ -3958,7 +3910,6 @@ public sealed class OriginalGameplayOverlay
         }
         catch
         {
-            // Fall back to full path when link resolution fails.
         }
 
         return fullPath;
@@ -3985,10 +3936,6 @@ public static class OriginalGameplayOverlaySubpanelExtensions
         _ => 0
     };
 
-    /// <summary>
-    /// The tab's image id in <c>UIGraphics/Res_CPanel.h</c> (<c>kMoodBtn</c>, <c>kRelationshipBtn</c>,
-    /// <c>kJobBtn</c>, <c>kHouseBtn</c>, <c>kPersonalityBtn</c>, <c>kInterestBtn</c>, <c>kGiftBtn</c>, in the order of the tab bitmaps).
-    /// </summary>
     public static int ImageId(this OriginalGameplayOverlay.Subpanel subpanel) =>
         subpanel.ButtonIndex() switch
         {

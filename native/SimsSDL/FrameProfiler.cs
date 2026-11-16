@@ -3,10 +3,6 @@ using System.Globalization;
 
 namespace SimsSDL;
 
-/// <summary>
-/// Where a frame's time goes. With SIMS_PROFILE set, the main loop marks each phase, and every 120 frames the frame rate,
-/// the average milliseconds per phase and the resident memory are logged.
-/// </summary>
 public sealed class FrameProfiler
 {
     public bool Enabled { get; } = Environment.GetEnvironmentVariable("SIMS_PROFILE") is not null;
@@ -85,17 +81,12 @@ public sealed class FrameProfiler
         }
         catch
         {
-            // Fall back to Environment.WorkingSet on non-procfs platforms.
         }
 
         return (int)(Environment.WorkingSet / 1_048_576L);
     }
 }
 
-/// <summary>
-/// With SIMS_PROFILE set, the host events handled and the time spent per event type, logged every 120 frames with the
-/// frame profile. Used from the main thread only.
-/// </summary>
 public static class EventProfiler
 {
     public static bool Enabled { get; } = Environment.GetEnvironmentVariable("SIMS_PROFILE") is not null;

@@ -56,18 +56,15 @@ public sealed class WorldTests
         person[ObjectData.CurrentValue] = 100;
         world.Add(person);
 
-        // Day 1 rollover: CurrentValue == Price triggers InitialDepreciation (500 - 100 = 400).
         world.AdvanceClock();
         Assert.Equal(400, sofa[ObjectData.CurrentValue]);
         Assert.Equal(400, painting[ObjectData.CurrentValue]);
         Assert.Equal(100, person[ObjectData.CurrentValue]);
 
-        // Day 2 rollover: CurrentValue != Price triggers DailyDepreciation (400 - 40 = 360).
         world.Clock.Restore(23, 59, 59);
         world.AdvanceClock();
         Assert.Equal(360, sofa[ObjectData.CurrentValue]);
 
-        // Day 3 rollover: DailyDepreciation clamps to DepreciationLimit (max(360 - 40, 350) = 350).
         world.Clock.Restore(23, 59, 59);
         world.AdvanceClock();
         Assert.Equal(350, sofa[ObjectData.CurrentValue]);
@@ -264,7 +261,6 @@ public sealed class WorldTests
             Flags = 0x80,
         };
 
-        // Non-continuation enqueue with Flag 0x40 does NOT inherit from CurrentActionRecord when ActiveImmediateAction is null.
         var normalCandidate = new ActionQueueSlot
         {
             Owner = person,
@@ -275,7 +271,6 @@ public sealed class WorldTests
         Assert.Null(person.ActionQueue[0].ActionText);
         Assert.Equal(0x80, person.CurrentActionRecord.Flags & 0x80);
 
-        // Head-continuation enqueue with Flag 0x40 DOES inherit from CurrentActionRecord.
         var headCandidate = new ActionQueueSlot
         {
             Owner = person,
@@ -306,15 +301,12 @@ public sealed class WorldTests
         secondWindow[ObjectData.Direction] = 0;
         secondWindow.Definition[(int)ObjdField.BuildModeType] = 2;
 
-        // Same wall edge -> rejected with 0x16.
         Assert.False(world.CanPlaceObject(secondWindow, corner));
         Assert.Equal(0x16, world.LastPlacementFailureCode);
 
-        // Perpendicular wall edge (rotated 90 degrees -> Direction = 2) -> allowed!
         secondWindow[ObjectData.Direction] = 2;
         Assert.True(world.CanPlaceObject(secondWindow, corner));
 
-        // Non-window wall object (e.g. painting/sconce, BuildModeType = 0) on the same wall edge as a window -> allowed!
         var painting = world.Add(CreateObject(82, new ObjectPosition(0x38, 0x38, 1)));
         painting[ObjectData.Flags] = 4;
         painting[ObjectData.PlacementFlags] = 1;

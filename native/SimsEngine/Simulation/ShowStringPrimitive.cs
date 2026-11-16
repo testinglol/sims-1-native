@@ -3,19 +3,10 @@ using SimsEngine.Formats;
 
 namespace SimsEngine.Simulation;
 
-/// <summary>The Show String primitive (opcode 0x15), after Sims.exe FUN_00451af7. The Labels table names it "Show String
-/// ( UNUSED )", but the main dispatcher still has its case.
-/// <para>Operand: the string table id (a short at byte 0) and a one-based string number (a signed short at byte 2). The text is
-/// number <c>index</c> of table <c>table</c>.</para>
-/// <para>Behavior: when the text is missing or empty nothing happens. Otherwise the message is the running object's type
-/// record name, then " : ", then the text (format "%s : %s" at 0x6c4120), and it goes to the listeners as message 0xeb
-/// (<see cref="ISimulationHost.BroadcastString"/>). The primitive always answers true.</para>
-/// <para>Inferred: the type record's name is the object's name (the field at +0x18). A running object with no type record
-/// raises <see cref="InvalidOperationException"/>, because the original reads the record without a check. A null name
-/// prints as empty.</para></summary>
+/// <summary>Formats and broadcasts a string from a string table prefixed with the active object's name to
+/// UI listeners via message 0xEB.</summary>
 public static class ShowStringPrimitive
 {
-    /// <summary>The message FUN_00451af7 sends (0xeb).</summary>
     public const int UiMessage = 0xeb;
 
     public static PrimitiveResult Execute(in TreeContext context, ReadOnlySpan<byte> operand)
@@ -42,8 +33,8 @@ public static class ShowStringPrimitive
     {
         if (frame.Table is not BehaviorScope scope) return world.StringTableEntry(stackObject, me, table, index);
 
-        // FUN_00451af7 calls FUN_00470383 with string-scope flag 0: use the running BHAV's local scope.
-        // The object routine loader uses the semi-global resource for global-tree ids, otherwise its private resource.
+        // Resolves strings from the semi-global resource for subroutine IDs 8192 and above, or from private
+        // object resources otherwise.
         var file = frame.TreeId >= 8192 && scope.SemiGlobal is not null ? scope.SemiGlobal : scope.Private;
         var chunk = file.Find(ResourceType.Str, unchecked((ushort)table));
         if (chunk is null) return null;

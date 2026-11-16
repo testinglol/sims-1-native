@@ -6,10 +6,20 @@ using SimsEngine.Simulation;
 
 internal static class HouseholdAppearancePreview
 {
+    private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+
     private sealed record PreviewTexture(string File, int Width, int Height, string Encoding);
-    private sealed record PreviewVertex(float X, float Y, float Z, float U, float V, float Nx, float Ny, float Nz);
+    internal sealed record PreviewVertex(float X, float Y, float Z, float U, float V, float Nx, float Ny, float Nz);
     private sealed record PreviewMesh(int Texture, int ObjectID, float Depth, PreviewVertex[] Vertices, int Layer);
     private sealed record PreviewDocument(int SchemaVersion, float Width, float Height, PreviewTexture[] Textures, PreviewMesh[] Meshes);
+
+    internal sealed record DirectAppearancePreview(
+        DirectAppearancePreview.TextureEntry[] Textures,
+        DirectAppearancePreview.MeshEntry[] Meshes)
+    {
+        internal sealed record TextureEntry(string File, int Width, int Height, string Encoding, byte[] Bytes);
+        internal sealed record MeshEntry(int Texture, int ObjectID, float Depth, PreviewVertex[] Vertices, int Layer);
+    }
 
     internal static XPerson CreatePreviewPerson(string game, ObjectRegistry registry, string gender, string age, string skin, string headChoice, string bodyChoice)
     {
@@ -68,7 +78,6 @@ internal static class HouseholdAppearancePreview
         return Write(session, nativeParts, child);
     }
 
-    /// <summary>Normalizes avatar geometry into a unit square and writes preview.json plus its textures.</summary>
     internal static object Write(string session, IReadOnlyList<AvatarSceneGeometry.Part> parts, bool child = false)
     {
         var minX = parts.SelectMany(part => part.Vertices).Min(vertex => vertex.X);
@@ -83,10 +92,8 @@ internal static class HouseholdAppearancePreview
         var scale = MathF.Min(0.88f / rangeX, maxHeight / rangeY);
         var centerX = (minX + maxX) / 2;
 
-        var directory = Path.Combine(session, "cas-preview");
-        var textureDirectory = Path.Combine(directory, "textures");
-        Directory.CreateDirectory(textureDirectory);
         var textures = new List<PreviewTexture>();
+        var textureBytesList = new List<byte[]>();
         var textureIndices = new Dictionary<string, int>(StringComparer.Ordinal);
         var meshes = new List<PreviewMesh>();
         foreach (var part in parts)
@@ -97,44 +104,33 @@ internal static class HouseholdAppearancePreview
                 textureIndex = textures.Count;
                 textureIndices.Add(key, textureIndex);
                 var file = $"textures/{key}.{part.Encoding}";
-                File.WriteAllBytes(Path.Combine(directory, file), part.Texture);
                 textures.Add(new PreviewTexture(file, part.Width, part.Height, part.Encoding));
+                textureBytesList.Add(part.Texture);
             }
-            var vertices = part.Vertices.Select(vertex => new PreviewVertex(
-                0.5f + (vertex.X - centerX) * scale,
-                0.97f - (maxY - vertex.Y) * scale,
-                vertex.Z,
-                vertex.U,
-                vertex.V,
-                vertex.Nx,
-                vertex.Ny,
-                vertex.Nz)).ToArray();
+            var vertices = new PreviewVertex[part.Vertices.Length];
+            for (var i = 0; i < part.Vertices.Length; i++)
+            {
+                var vertex = part.Vertices[i];
+                vertices[i] = new PreviewVertex(
+                    0.5f + (vertex.X - centerX) * scale,
+                    0.97f - (maxY - vertex.Y) * scale,
+                    vertex.Z,
+                    vertex.U,
+                    vertex.V,
+                    vertex.Nx,
+                    vertex.Ny,
+                    vertex.Nz);
+            }
             meshes.Add(new PreviewMesh(textureIndex, 0, 0.5f, vertices, 1));
         }
 
-        var path = Path.Combine(directory, "preview.json");
-        var temporary = path + ".tmp";
-        var document = new PreviewDocument(1, 1, 1, textures.ToArray(), meshes.ToArray());
-        try
-        {
-            File.WriteAllText(temporary, JsonSerializer.Serialize(document, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }));
-            File.Move(temporary, path, true);
-        }
-        finally
-        {
-            if (File.Exists(temporary)) File.Delete(temporary);
-        }
-        return new { file = "cas-preview/preview.json", schemaVersion = 1, meshes = meshes.Count, textures = textures.Count };
+        return EmitPreview(session, textures.ToArray(), textureBytesList.ToArray(), meshes.ToArray());
     }
 
     private static object WritePortrait(string session, byte[] bitmap)
     {
-        var directory = Path.Combine(session, "cas-preview");
-        var textureDirectory = Path.Combine(directory, "textures");
-        Directory.CreateDirectory(textureDirectory);
         var hash = Convert.ToHexString(SHA256.HashData(bitmap));
         var file = $"textures/{hash}.bmp";
-        File.WriteAllBytes(Path.Combine(directory, file), bitmap);
         var texture = new PreviewTexture(file, 35, 41, "bmp");
         var vertices = new[]
         {
@@ -146,18 +142,53 @@ internal static class HouseholdAppearancePreview
             new PreviewVertex(0.075f, 0.95f, 0.5f, 0, 1, 0, 0, 1)
         };
         var mesh = new PreviewMesh(0, 0, 0.5f, vertices, 1);
+        return EmitPreview(session, [texture], [bitmap], [mesh]);
+    }
+
+    private static object EmitPreview(string session, PreviewTexture[] textures, byte[][] textureBytes, PreviewMesh[] meshes)
+    {
+        var directory = Path.Combine(session, "cas-preview");
         var path = Path.Combine(directory, "preview.json");
+        if (SimsSimulation.InMemorySessionAssets.IsInMemoryPath(path))
+        {
+            var directTextures = new DirectAppearancePreview.TextureEntry[textures.Length];
+            for (var i = 0; i < textures.Length; i++)
+            {
+                var tex = textures[i];
+                directTextures[i] = new DirectAppearancePreview.TextureEntry(tex.File, tex.Width, tex.Height, tex.Encoding, textureBytes[i]);
+            }
+            var directMeshes = new DirectAppearancePreview.MeshEntry[meshes.Length];
+            for (var i = 0; i < meshes.Length; i++)
+            {
+                var mesh = meshes[i];
+                directMeshes[i] = new DirectAppearancePreview.MeshEntry(mesh.Texture, mesh.ObjectID, mesh.Depth, mesh.Vertices, mesh.Layer);
+            }
+            var direct = new DirectAppearancePreview(directTextures, directMeshes);
+            SimsSimulation.InMemorySessionAssets.StoreScene(path, direct, () =>
+            {
+                for (var i = 0; i < textures.Length; i++)
+                    SimsSimulation.InMemorySessionAssets.StoreFile(Path.Combine(directory, textures[i].File), textureBytes[i]);
+                return JsonSerializer.SerializeToUtf8Bytes(new PreviewDocument(1, 1, 1, textures, meshes), JsonOptions);
+            });
+            return new { file = "cas-preview/preview.json", schemaVersion = 1, meshes = meshes.Length, textures = textures.Length };
+        }
+
+        var textureDirectory = Path.Combine(directory, "textures");
+        Directory.CreateDirectory(textureDirectory);
+        for (var i = 0; i < textures.Length; i++)
+            File.WriteAllBytes(Path.Combine(directory, textures[i].File), textureBytes[i]);
+
         var temporary = path + ".tmp";
-        var document = new PreviewDocument(1, 1, 1, [texture], [mesh]);
+        var document = new PreviewDocument(1, 1, 1, textures, meshes);
         try
         {
-            File.WriteAllText(temporary, JsonSerializer.Serialize(document, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }));
+            File.WriteAllText(temporary, JsonSerializer.Serialize(document, JsonOptions));
             File.Move(temporary, path, true);
         }
         finally
         {
             if (File.Exists(temporary)) File.Delete(temporary);
         }
-        return new { file = "cas-preview/preview.json", schemaVersion = 1, meshes = 1, textures = 1 };
+        return new { file = "cas-preview/preview.json", schemaVersion = 1, meshes = meshes.Length, textures = textures.Length };
     }
 }

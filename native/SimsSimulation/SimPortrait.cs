@@ -1,9 +1,7 @@
 using System.Numerics;
 
-/// <summary>
-/// Pure software 3D rasterizer for avatar head previews, including the 56×64 pie-head preview
-/// and speech icons. Rasterizes posed head meshes produced by <see cref="AvatarSceneGeometry"/>.
-/// </summary>
+/// <summary>Rasterizes posed 3D head meshes produced by <see cref="AvatarSceneGeometry"/> into head
+/// previews and speech icons.</summary>
 internal static class SimPortrait
 {
     public const int PieHeadWidth = 128, PieHeadHeight = 128;
@@ -21,18 +19,17 @@ internal static class SimPortrait
     private const float BufferPixelsPerBoneUnit = 118.35f;
     private static readonly (int Left, int Top, int Right, int Bottom) PortraitHeadWindow = (76, 45, 122, 125);
 
-    /// <summary>Creates the front-facing PersonFinder face image used in the Create a Family member slots.</summary>
     internal static byte[] FaceBitmap(IReadOnlyList<AvatarSceneGeometry.PosedHeadMesh> meshes) =>
         Strip(PrepareShot(meshes, 0, 0, useFixedHeadWindow: true), 35, 41, 1, _ => Navy);
 
-    /// <summary>Adds or replaces the portrait BMP_ chunks (2002..2006) in a Sim's character IFF file.</summary>
+    /// <summary>Adds or replaces character portrait BMP_ resource chunks (IDs 2002 through 2006) in a Sim
+    /// character file.</summary>
     internal static SimsEngine.Formats.IffFile WithPortraits(SimsEngine.Formats.IffFile iff, IReadOnlyList<AvatarSceneGeometry.PosedHeadMesh> meshes)
     {
-        // FUN_004e739b (004e739b.c:71-75), FUN_004e7584 (004e7584.c:79-83), FUN_004e77ad (004e77ad.c:28-31), and
-        // FUN_004e853c (004e853c.c:61-65) pass fixed crop rect (76, 45, 122, 125) around HEAD bone origin (100, 100).
-        // MakeSpeakingIcon passes cropRect = NULL so speech icons (2005/2006) auto-crop to head bounds.
+        // Portraits use a fixed crop rectangle of (76, 45, 122, 125) around the head bone origin (100,
+        // 100), whereas speech icons auto-crop to head mesh bounds.
         var front = PrepareShot(meshes, 0, 0, useFixedHeadWindow: true);
-        var turned = PrepareShot(meshes, -30, 0, useFixedHeadWindow: false);
+        var turned = PrepareShot(meshes, -5, 18, useFixedHeadWindow: false);
         var chunks = new (ushort Id, string Label, byte[] Data)[]
         {
             (2002, "faces", Strip(front, 35, 41, 3, _ => Navy)),
@@ -49,9 +46,8 @@ internal static class SimPortrait
         return iff;
     }
 
-    /// <summary>The pie menu head of a native Sim, from its head appearance posed by <see cref="AvatarSceneGeometry"/>.
-    /// cPieMenuHead::Draw (004623e6.c:181-313) rotates the HEAD mesh around a fixed 3D pivot at fixed head scale
-    /// without re-cropping or shifting the bounding box per yaw/pitch angle.</summary>
+    /// <summary>Renders the pie menu head preview by rotating the posed head mesh around a fixed 3D pivot
+    /// at a constant scale without shifting the bounding box for yaw or pitch.</summary>
     internal static byte[] PieHeadPreview(IReadOnlyList<AvatarSceneGeometry.PosedHeadMesh> meshes, float yaw, float pitch)
     {
         if (!float.IsFinite(yaw) || !float.IsFinite(pitch) || Math.Abs(yaw) > 60 || Math.Abs(pitch) > 75)
@@ -63,11 +59,8 @@ internal static class SimPortrait
         return rgba;
     }
 
-    /// <summary>Mac <c>PersonFinder::GetSpeechIcon</c>'s allow-generate path: <c>GenerateBitmaps(4, 0)</c> invokes
-    /// <c>MakeSpeakingIcon(2/3)</c>, which loads the white speech UI buffer (0x2328 medium, 0x2329 large) and renders
-    /// the posed head over it with <c>MakePersonHeadImage(person, -5, 18, ...)</c>
-    /// (<c>PeopleButtons.s</c> 0x102323F0; yaw -5.0 at <c>data.s</c> 0x105C0690, pitch 18.0 at 0x105C0694).
-    /// </summary>
+    /// <summary>Generates a speech icon by rendering the posed head at -5 degrees yaw and 18 degrees pitch
+    /// onto a speech bubble background.</summary>
     internal static (int Width, int Height, byte[] Rgba) SpeechIcon(IReadOnlyList<AvatarSceneGeometry.PosedHeadMesh> meshes, int size = 16)
     {
         if (size is < 1 or > 128) throw new ArgumentException("Invalid speech image size");
@@ -91,8 +84,8 @@ internal static class SimPortrait
         var headScale = meshes.Select(m => m.HeadScale).FirstOrDefault(s => s > 0f);
         if (headScale <= 0f) headScale = 1f;
         var pivot = headOrigin ?? ComputeBoundsCenter(unrotatedHead);
-        // MakePersonHeadImage (004e7902.c:105-126) & cPieMenuHead::Draw (004623e6.c:286-305) apply local pitch first, then vertical yaw.
-        // Positive pitch in Sims.exe tilts the head UP (+Y); System.Numerics CreateRotationX(+a) maps +Z to -Y, so negate pitchRad.
+        // Applies local pitch before vertical yaw, negating pitch so positive values tilt the head upward
+        // along the positive Y axis.
         var yawRad = yaw * MathF.PI / 180f;
         var pitchRad = pitch * MathF.PI / 180f;
         var view = Matrix4x4.CreateRotationX(-pitchRad) * Matrix4x4.CreateRotationY(yawRad);
@@ -172,9 +165,8 @@ internal static class SimPortrait
         var pivot = bonePivot ?? ComputeBoundsCenter(unrotatedHead);
         var headHeight = boneHeight > 0f ? boneHeight : unrotatedHead.Max(p => p.Y) - unrotatedHead.Min(p => p.Y);
 
-        // cPieMenuHead::Draw (004623e6.c:286-305) pitches around the head's ear-to-ear axis (+0x17) first,
-        // then yaws around the upright vertical neck axis (+0x18) second so diagonal turns never introduce gimbal roll.
-        // Positive pitch in Sims.exe (+cos(theta), case 0 +0.6 rad, +8 deg neutral) tilts UP (+Y), so negate pitchRad for CreateRotationX.
+        // Pitches around the ear-to-ear axis before yawing around the vertical neck axis to prevent gimbal
+        // roll, negating pitch to tilt upward along positive Y.
         var yawRad = yaw * MathF.PI / 180f;
         var pitchRad = pitch * MathF.PI / 180f;
         var view = Matrix4x4.CreateRotationX(-pitchRad) * Matrix4x4.CreateRotationY(yawRad);
@@ -206,7 +198,6 @@ internal static class SimPortrait
     {
         var unrotatedHead = ExtractHeadPoints(meshes);
         var pivot = ComputeBoundsCenter(unrotatedHead);
-        // Posed without the Sim's facing, the head looks toward the player already; negate pitchRad so positive pitch tilts UP (+Y).
         var yawRad = yaw * MathF.PI / 180f;
         var pitchRad = pitch * MathF.PI / 180f;
         var view = Matrix4x4.CreateRotationX(-pitchRad) * Matrix4x4.CreateRotationY(yawRad);
@@ -233,9 +224,8 @@ internal static class SimPortrait
         return Rasterize(triangles, headPoints)(width, height);
     }
 
-    /// <summary>Implements MakePersonHeadImage's fixed HEAD-bone window crop (004e7902.c:91-104, 228-294):
-    /// projects into the 200x200 offscreen buffer centered at (100, 100), expands (76, 45, 122, 125) symmetrically
-    /// to match the target width/height aspect ratio, and scales into the output frame.</summary>
+    /// <summary>Projects into a 200x200 buffer centered at (100, 100), symmetrically expands the (76, 45,
+    /// 122, 125) crop window to match the target aspect ratio, and scales into the output frame.</summary>
     private static Shot RasterizeFixedHeadWindow(List<Triangle> triangles, float headScale)
     {
         var worldToBuffer = (BufferPixelsPerBoneUnit * 3f) / Math.Max(1e-4f, headScale);
@@ -301,7 +291,8 @@ internal static class SimPortrait
         {
             const int Samples = 4;
             int w = width * Samples, h = height * Samples;
-            // Crown to chin fills the frame height unless wide pet ears/snouts require width clamping; keep human portraits top-aligned and center shorter width-clamped heads vertically.
+            // Crown to chin fills frame height unless wide pet features enforce width clamping, keeping
+            // human portraits top-aligned while centering width-clamped heads vertically.
             var heightSpan = Math.Max(1e-4f, top - chin);
             var widthSpan = Math.Max(1e-4f, right - left);
             var scale = Math.Min(h / (heightSpan * 1.04f), w / (widthSpan * 1.08f));
@@ -376,7 +367,8 @@ internal static class SimPortrait
         rgba[offset + 3] = 255;
     }
 
-    /// <summary>Avatar textures are BMPs or uncompressed/RLE truecolour TGAs.</summary>
+    /// <summary>Decodes avatar textures formatted as BMP or uncompressed and run-length encoded truecolor
+    /// TGA images.</summary>
     private static Texture Decode(byte[] data)
     {
         if (data.Length >= 2 && data[0] == 'B' && data[1] == 'M')

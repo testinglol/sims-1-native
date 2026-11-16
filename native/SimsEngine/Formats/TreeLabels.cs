@@ -1,13 +1,7 @@
 namespace SimsEngine.Formats;
 
-/// <summary>The parameter and local variable names of a behaviour tree (TPRP), read as Sims.exe FUN_004742c6 does: a
-/// u32 zero, a u32 version, the tag "PRPT", a u32 parameter count and a u32 local count, then the parameter names and
-/// the local names as zero-terminated strings padded to an even offset. Version 1 adds a u32 flag, 2 one byte per
-/// parameter (1 when absent, FUN_004744ca), 3 a u32 at structure offset 0x1fc and 4 a u32 at offset 8.
-/// <para>Version 5 occurs only in The Sims Online objects, sometimes without the tag; Sims.exe does not read it
-/// differently, but those files store the names as UTF-8 strings with a 7-bit variable-length size and the flag as one
-/// byte (layout inferred from the files). It is decoded so converted objects keep their names, and
-/// <see cref="ReadBySimsExe"/> is false.</para></summary>
+/// <summary>Parses behaviour tree parameter and local variable names (TPRP), handling versioned headers,
+/// parameter flags, and variable-length string encodings.</summary>
 public sealed class TreeParameterNames
 {
     public int Version { get; }
@@ -18,7 +12,6 @@ public sealed class TreeParameterNames
     public uint Value1fc { get; }
     public uint Value08 { get; }
 
-    /// <summary>False for the version 5 layout of The Sims Online.</summary>
     public bool ReadBySimsExe => Version < 5;
 
     private TreeParameterNames(int version, string[] parameters, string[] locals, bool flag, byte[] parameterFlags,
@@ -60,22 +53,16 @@ public sealed class TreeParameterNames
     }
 }
 
-/// <summary>One named constant of a TRCN chunk. <see cref="Flags"/> and <see cref="Value"/> are the two u32s Sims.exe
-/// stores at entry offsets +4 and +8; the range applies when <see cref="RangeEnabled"/> is set.</summary>
+/// <summary>Represents a named constant in a TRCN chunk, including optional range validation bounds.</summary>
 public sealed record ConstantLabel(uint Flags, uint Value, string Label, string Comment, bool RangeEnabled, short Low, short High);
 
-/// <summary>The labels of a constant table (TRCN), read as Sims.exe FUN_00473b0f and FUN_00473984 do: a u32 zero, a
-/// u32 version, the tag "NCRT" and a u32 count, then per entry two u32s and the label and comment as zero-terminated
-/// strings padded to an even offset. Version 1 adds a range-enabled byte and a 16-bit low and high bound (0, 0 and 100
-/// when absent).
-/// <para>Version 2 occurs only in The Sims Online objects, which store the strings with a 7-bit variable-length size
-/// and no padding (layout inferred from the files); <see cref="ReadBySimsExe"/> is false for it.</para></summary>
+/// <summary>Parses constant table labels (TRCN), decoding constant values, names, comments, and versioned
+/// range limit fields.</summary>
 public sealed class ConstantLabels
 {
     public int Version { get; }
     public IReadOnlyList<ConstantLabel> Entries { get; }
 
-    /// <summary>False for the version 2 layout of The Sims Online.</summary>
     public bool ReadBySimsExe => Version < 2;
 
     private ConstantLabels(int version, ConstantLabel[] entries)

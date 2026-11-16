@@ -82,11 +82,9 @@ public sealed class LiveStatePersistenceTests
             var (savedLot, _) = world.WriteSavedLotObjectsTo(empty);
             var savedWithSimi = world.WriteSavedSimulationStateTo(savedLot);
 
-            // Verify genuine IFF lot save contains standard SIMI and ObjM chunks
             Assert.Contains(savedWithSimi.Chunks, chunk => chunk.Type == ResourceType.Parse("ObjM"));
             Assert.Contains(savedWithSimi.Chunks, chunk => chunk.Type == ResourceType.Parse("SIMI"));
 
-            // Reload and verify genuine live state roundtrip
             var loaded = SavedLotObjectLoader.Load(savedWithSimi, registry, library);
             var loadedObj = loaded.ObjectById(obj.Id)!;
             Assert.Equal(new ObjectPosition(120, 240, 1), loadedObj.Position);
@@ -112,7 +110,8 @@ public sealed class LiveStatePersistenceTests
         context.Frame.WaitState = 1;
         Assert.False(context.World.GenericSimsCallRequests.HasPending(me));
 
-        // When reloaded in WaitState == 1 with no pending request, it re-issues the request
+        // Reloading an object in wait state 1 with no active pending request automatically re-issues the
+        // generic call request.
         var result = GenericSimsCallPrimitive.Execute(context, [(byte)0x27, 0, 0, 0, 0, 0, 0, 0]);
 
         Assert.Equal(PrimitiveResult.Stop, result);
@@ -138,7 +137,6 @@ public sealed class LiveStatePersistenceTests
             var parent = world.Add(world.ObjectFactory!(0x10101010)!);
             var child = world.Add(world.ObjectFactory!(0x20202020)!);
 
-            // Establish hierarchy and slot connection
             parent.Slots.Add(child.Id);
             child[ObjectData.ParentId] = parent.Id;
             child[ObjectData.SlotHierNumber] = 1;
@@ -146,12 +144,10 @@ public sealed class LiveStatePersistenceTests
             child.Temporaries[0] = 77;
             child.DynamicSpriteFlags[0] = 5;
 
-            // Test HierSever directly
             world.HierSever(child);
             Assert.Equal(0, child[ObjectData.ParentId]);
             Assert.DoesNotContain(child.Id, parent.Slots);
 
-            // Test ResetObjectForChangedCode
             child.Attributes[0] = 99;
             child.Temporaries[0] = 88;
             child.DynamicSpriteFlags[0] = 12;
@@ -159,7 +155,7 @@ public sealed class LiveStatePersistenceTests
 
             Assert.All(child.Attributes, attr => Assert.Equal(0, attr));
             Assert.All(child.Temporaries, temp => Assert.Equal(0, temp));
-            // FUN_00431c90 (00431c90.c:50-51) clears Attributes and Temporaries, leaving DynamicSpriteFlags intact.
+            // Object reset clears attributes and temporaries while preserving dynamic sprite flags.
             Assert.Equal((short)12, child.DynamicSpriteFlags[0]);
             Assert.Empty(child.SavedStack);
         }
@@ -169,20 +165,21 @@ public sealed class LiveStatePersistenceTests
     [Fact]
     public void MultiNeighborhood_StorageSlot_IsolatesSlotNamesAcrossUserData1Through99()
     {
-        // Neighborhood 1 keeps exact slot names
+        // Neighborhood 1 preserves bare storage slot names without prefixes.
         Assert.Equal("quicksave", Neighborhoods.StorageSlot("quicksave", 1));
         Assert.Equal("manual", Neighborhoods.StorageSlot("manual", 1));
 
-        // Other neighborhoods prefix to guarantee no slot collisions
+        // Non-default neighborhoods prefix storage slot names with the neighborhood identifier to prevent
+        // collisions.
         Assert.Equal("neighborhood2-quicksave", Neighborhoods.StorageSlot("quicksave", 2));
         Assert.Equal("neighborhood99-quicksave", Neighborhoods.StorageSlot("quicksave", 99));
 
-        // Reserved prefix check
         Assert.True(Neighborhoods.IsReservedSlot("neighborhood2-quicksave"));
         Assert.False(Neighborhoods.IsReservedSlot("quicksave"));
         Assert.Throws<ArgumentException>(() => Neighborhoods.StorageSlot("neighborhood2-test", 1));
 
-        // Directory name derivation
+        // Neighborhood 1 maps to directory UserData, while subsequent neighborhoods append their number
+        // (e.g., UserData2).
         Assert.Equal("UserData", Neighborhoods.DirectoryName(1));
         Assert.Equal("UserData2", Neighborhoods.DirectoryName(2));
         Assert.Equal("UserData99", Neighborhoods.DirectoryName(99));
@@ -204,7 +201,7 @@ public sealed class LiveStatePersistenceTests
             var empty = EmptyLot(coded: false);
             var world = SavedLotObjectLoader.Load(empty, registry, library);
 
-            // Sim 1: Unhoused orphan (family == 0, lingering == 0)
+            // Person data index 61 stores the family identifier, where zero denotes an unhoused orphan.
             var orphanPersonData = new short[80];
             orphanPersonData[61] = 0;
             orphanPersonData[67] = 0;
@@ -214,7 +211,6 @@ public sealed class LiveStatePersistenceTests
                 FriendEligibilityObjectFlagsB4 = 4u
             };
 
-            // Sim 2: Family bin Sim (family == 5, member of unhoused family with house == 0)
             var binPersonData = new short[80];
             binPersonData[61] = 5;
             binPersonData[67] = 0;
@@ -224,7 +220,6 @@ public sealed class LiveStatePersistenceTests
                 FriendEligibilityObjectFlagsB4 = 4u
             };
 
-            // Sim 3: Housed Sim (family == 10, member of family living at house 1)
             var housedPersonData = new short[80];
             housedPersonData[61] = 10;
             housedPersonData[67] = 0;
@@ -247,13 +242,10 @@ public sealed class LiveStatePersistenceTests
                 Family.CreateNew(familyNumber: 10, houseNumber: 1, members: [0x55556666])
             };
 
-            // Sweep unhoused characters with family membership filter
             var swept = world.DeleteUnhousedCharacters(guid =>
                 families.Any(f => f.Members.Contains(unchecked((uint)guid))));
 
-            // Only Sim 1 (orphan) must be deleted
             Assert.Contains((short)1, swept);
-            // Family bin Sim (Sim 2) and Housed Sim (Sim 3) must be preserved
             Assert.DoesNotContain((short)2, swept);
             Assert.DoesNotContain((short)3, swept);
         }
@@ -274,18 +266,15 @@ public sealed class LiveStatePersistenceTests
         Assert.Equal(0x11112222u, family.Members[0]);
         Assert.Equal(0x33334444u, family.Members[1]);
 
-        // Move into house 12
         var moved = family.WithHouseNumber(12);
         Assert.Equal(12, moved.HouseNumber);
         Assert.Equal(7, moved.FamilyNumber);
         Assert.Equal(20_000, moved.Budget);
         Assert.Equal(2, moved.Members.Count);
 
-        // Serialize FAMI chunk version 9
         var bytes = moved.Write(chunkId: 7);
         Assert.NotEmpty(bytes);
 
-        // Roundtrip through IFF
         var iff = new IffFile(ChunkBuilder.File(("FAMI", 7, bytes)), "family-test.iff");
         var chunk = iff.Find(ResourceType.Parse("FAMI"), 7)!;
         var loaded = Family.Read(iff, chunk);

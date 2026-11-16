@@ -4,11 +4,8 @@ using SimsSDL;
 
 namespace SimsSDL.UI;
 
-/// <summary>
-/// Sims.exe cWinCatalogPopup (<c>FUN_005081d5</c> / <c>FUN_005084ca</c> / <c>FUN_00508dab</c>): the 559x127+ 9-sliced
-/// <c>PopupInfoTiles.bmp</c> slide popup over the Buy and Build subpanel showing the item's 168x127 preview box,
-/// 10pt "&lt;Name&gt; -- $&lt;Price&gt;" title, 8pt description, and 8pt white STR# 160 rating lines.
-/// </summary>
+/// <summary>Displays the catalog item details popup, rendering an item preview thumbnail, title, price,
+/// description, and motive rating text over a 9-sliced frame.</summary>
 public sealed class OriginalCatalogPopup
 {
     public sealed class Item : IEquatable<Item>
@@ -101,9 +98,6 @@ public sealed class OriginalCatalogPopup
 
     public bool InterfaceEffects { get; set; } = true;
 
-    /// <summary>
-    /// The text the box shows for a catalog item (<c>FUN_005084ca</c>: 005084ca.c:55-64).
-    /// </summary>
     public static string Text(string name, int price, string description)
     {
         string header = price < 1 ? name : $"{name} -- ${price}";
@@ -122,10 +116,8 @@ public sealed class OriginalCatalogPopup
         _redPixel = OriginalGameplayOverlay.CreateImage(device, 1, 1, [255, 0, 0, 255]);
     }
 
-    /// <summary>Whether the box is open.</summary>
     public bool IsVisible => _item is not null && DelayElapsed;
 
-    /// <summary>Whether the box has finished its 250ms slide-up transition.</summary>
     public bool IsFullyOpen
     {
         get
@@ -204,7 +196,7 @@ public sealed class OriginalCatalogPopup
 
         const double width = 559.0;
         const double textLeft = 178.0;
-        int wrapWidth = (int)(width - 12.0 - textLeft); // 369 px (FUN_005084ca: 0x22f - 0xc - 0xb2)
+        int wrapWidth = (int)(width - 12.0 - textLeft);
         if (_cachedItem != item)
         {
             (byte R, byte G, byte B) labelColor = (195, 205, 205);
@@ -263,7 +255,6 @@ public sealed class OriginalCatalogPopup
         double y = panelBottom - visibleHeight;
         var result = new List<OriginalGameplayOverlay.Part>();
 
-        // 9-slice PopupInfoTiles.bmp clipped at panelBottom.
         double tileW = _popupTiles.Size.Width / 3.0;
         double tileH = _popupTiles.Size.Height / 3.0;
         double[] xs = [x, x + tileW, x + width - tileW, x + width];
@@ -287,8 +278,7 @@ public sealed class OriginalCatalogPopup
             }
         }
 
-        // FUN_005084ca (005084ca.c:226-231): +0x5c is the offscreen 16-bit Z-buffer cleared to 0xFFFF before rendering
-        // the object thumbnail directly over PopupInfoTiles.bmp (no opaque white background fill).
+        // Renders the object thumbnail directly over the popup frame without a solid background fill.
         double boxY = y + Math.Floor((height - 127.0) / 2.0);
         if (_thumbnail is { } thumbnail && thumbnail.Rect.Width > 0.0 && thumbnail.Rect.Height > 0.0)
         {
@@ -297,7 +287,8 @@ public sealed class OriginalCatalogPopup
                 Math.Round(thumbnail.Rect.Width * scale, MidpointRounding.AwayFromZero),
                 Math.Round(thumbnail.Rect.Height * scale, MidpointRounding.AwayFromZero));
             double thumbX = x + Math.Floor((168.0 - size.Width) / 2.0);
-            // FUN_004e550a (004e550a.c:28-45) places the near-zoom floor diamond in the lower two-thirds of the 160x119 white box ((119 * 2) / 3 - 45 = 34 -> boxY + 38).
+            // Positions floor tile preview diamonds in the lower two-thirds of the preview area instead of
+            // vertically centering them.
             double thumbY = item.IsFloorPreview ? boxY + 38.0 : boxY + Math.Floor((127.0 - size.Height) / 2.0);
             if (thumbY < panelBottom && size.Height > 0.0)
             {
@@ -310,7 +301,8 @@ public sealed class OriginalCatalogPopup
             }
         }
 
-        // FUN_005084ca lines 328-342: when !FUN_004cd0fd() (price > budget), draw a 1px red border around the 160x119 inner preview box.
+        // Draws a 1-pixel red outline around the preview box when the item price exceeds available
+        // household funds.
         if (budget is { } availableBudget && item.Price > availableBudget)
         {
             ReadOnlySpan<CGRect> redRects =

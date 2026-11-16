@@ -97,8 +97,6 @@ public sealed class Wave9ParityRegressionTests
         var world = baseContext.World;
         world.LotRoomMaps[1] = OpenOutdoorRoomMap();
 
-        // Replace default id=100 person with deterministic WalkOrder ordering:
-        // [earlierHelper, subjectObj, personA, personB]
         world.Remove(100);
 
         var earlierHelper = world.Add(new XObject(9, PrimitiveTestWorld.Definition())
@@ -107,9 +105,6 @@ public sealed class Wave9ParityRegressionTests
             Position = new ObjectPosition(10 * 16 + 8, 10 * 16 + 8, 1),
         });
 
-        // subjectObj mimics Social Interactions: FunctionTable[0] (Init) writes Attribute[0] = 42,
-        // while FunctionTable[3] (Cleanup) == 0. When KillObject sets Flags |= 0x40u, ResetObjectForChangedCode
-        // must NOT re-initialize subjectObj via ResetObjectAfterScriptError.
         var subjectFunctions = new ushort[0x20];
         subjectFunctions[0] = 4096;
         var subjectInit = PrimitiveTestWorld.Tree(0,
@@ -133,7 +128,6 @@ public sealed class Wave9ParityRegressionTests
         });
         personA[ObjectData.AllowedHeightFlags] = 1;
         personA[ObjectData.PlacementFlags] = 0x0801;
-        // personA holds an active +0xb00 interaction reference to subjectObj, triggering ResetPersonForChangedCode.
         PersonInteractionStack.Register(personA, subjectObj, 1, false);
 
         var personB = world.Add(new XPerson(16, PrimitiveTestWorld.Definition(XPerson.PersonType))
@@ -142,7 +136,6 @@ public sealed class Wave9ParityRegressionTests
             Position = new ObjectPosition(16 * 16 + 8, 16 * 16 + 8, 1),
         });
         personB.IdleFloat7A8 = -100;
-        // personB has a queued interaction targeting subjectObj (e.g. 'Talk - Person B').
         personB.ActionQueue[0] = new ActionQueueSlot
         {
             Owner = subjectObj,
@@ -154,9 +147,6 @@ public sealed class Wave9ParityRegressionTests
         };
         personB.ActionQueueEnd = 1;
 
-        // While notifying personA (earlier in WalkOrder than personB), remove earlierHelper from WalkOrder.
-        // The buggy index-based WalkOrder loop shifted personB left by 1 and incremented past personB,
-        // leaving personB's dead ActionQueue[0].Owner == subjectObj untouched.
         host.OnPersonObjectReferenceNotification = (recipient, subject) =>
         {
             if (ReferenceEquals(recipient, personA) && ReferenceEquals(subject, subjectObj))
@@ -165,16 +155,12 @@ public sealed class Wave9ParityRegressionTests
 
         Assert.True(world.KillObject(subjectObj.Id));
 
-        // 1. ResetObjectForChangedCode must NOT re-run Init (4096) on the being-killed subjectObj.
         Assert.Equal((short)99, subjectObj.Attributes[0]);
         Assert.Empty(subjectObj.SavedStack);
 
-        // 2. personB must NOT be skipped when WalkOrder shrank during personA's notification.
         Assert.Equal(personB.ActionQueueCurrent, personB.ActionQueueEnd);
         Assert.All(personB.ActionQueue, slot => Assert.False(ReferenceEquals(slot.Owner, subjectObj)));
 
-        // 3. Even if a GC-retained removed/killed XObject were somehow still inside ActionQueue,
-        // IdleForInputPrimitive must refuse to push or evaluate it and return Stop cleanly.
         var deadOwnerTree = PrimitiveTestWorld.Tree(0,
             (2, BhavInstruction.ReturnTrue, BhavInstruction.ReturnFalse,
                 PrimitiveTestWorld.Expression(0, 1, (byte)ExpressionOperator.EqualTo)));
@@ -239,12 +225,10 @@ public sealed class Wave9ParityRegressionTests
         Assert.True(world.CanPlaceObjectFromEditor(chess, chessPos, out var chessRef, out var chessRefSlot));
         world.PlaceCreatedObjectFromEditor(chess, chessPos, chessRef, chessRefSlot);
 
-        // Put Bella right nearby on clear outdoor ground so routing runs immediately.
         var bellaNear = new ObjectPosition((cx + 2) * 16 + 8, (cy + 2) * 16 + 8, 1);
         Assert.True(world.CanPlaceObject(bella, bellaNear));
         world.PlaceObject(bella, bellaNear);
 
-        // Part 1: Without any facing chair, Play must reject standing and finish cleanly without thread errors.
         var playNoChair = FindMenuChoice(world, bella, chessGroup, "Play");
         Assert.NotNull(playNoChair);
         Assert.True(world.EnqueueInteractionAction(bella, playNoChair!));
@@ -254,7 +238,6 @@ public sealed class Wave9ParityRegressionTests
         Assert.Equal((short)0, bella[PersonData.Sitting]);
         Assert.Empty(world.ThreadErrors);
 
-        // Part 2: Place a Dining Chair directly in front of Chess Table's localSector 0 seat facing inward.
         var chair = Assert.IsAssignableFrom<XObject>(world.ObjectFactory?.Invoke(unchecked((int)diningChairGuid)));
         chair.Position = new ObjectPosition(-16, -16, 1);
         world.Add(chair);

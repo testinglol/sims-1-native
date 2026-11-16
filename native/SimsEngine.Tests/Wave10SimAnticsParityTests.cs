@@ -113,8 +113,8 @@ public sealed class Wave10SimAnticsParityTests
         Assert.Equal((short)1, person[PersonData.Sitting]);
         Assert.Equal(bench.Id, person[ObjectData.ContainerId]);
 
-        // Even if a seat defines 0x1b (stand) without 0x1a (sit), TryPushSeatedStandTree must reject it
-        // and fail the route immediately rather than pushing stand or walking while seated.
+        // A seat defining a stand action (0x1B) without a sit action (0x1A) fails routing immediately to
+        // prevent invalid movement while seated.
         benchFunctions[0x1b] = 4097;
         person[PersonData.RouteResult] = 0;
 

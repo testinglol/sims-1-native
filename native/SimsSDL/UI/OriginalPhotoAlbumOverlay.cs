@@ -181,7 +181,6 @@ public sealed class OriginalPhotoAlbumOverlay
         }
         catch
         {
-            // Ignore write errors matching Swift try?.
         }
     }
 
@@ -260,7 +259,6 @@ public sealed class OriginalPhotoAlbumOverlay
     public void Perform(Action action)
     {
         if (!Enabled(action)) return;
-        // FUN_005dcbd1 / FUN_005d9dba: dismiss active/pending tooltip on button click.
         _suppressedTooltipAction = action;
         _tooltipText = null;
         _tooltipStartedAt = null;
@@ -291,10 +289,6 @@ public sealed class OriginalPhotoAlbumOverlay
         Refresh();
     }
 
-    /// <summary>
-    /// FUN_0052b1e7 (0052b1e7.c:33-74): Previous &amp; First enable iff count &gt; 0 &amp;&amp; index &gt; 0;
-    /// Next &amp; Last enable iff count &gt; 0 &amp;&amp; index &lt; count - 1; Delete enables iff count &gt; 0.
-    /// </summary>
     private bool Enabled(Action action) => action switch
     {
         Action.Done => true,
@@ -343,7 +337,6 @@ public sealed class OriginalPhotoAlbumOverlay
             }
             catch
             {
-                // Ignore rebuild failure on toggle.
             }
         }
         return inside;
@@ -430,7 +423,6 @@ public sealed class OriginalPhotoAlbumOverlay
             }
 
             var rect = PlacementTooltip.Rect(image.Size, new CGPoint(_tooltipAnchor.X, _tooltipAnchor.Y - 1), canvas);
-            // FUN_005d9f30 (005d9f30.c:80, 86-88): truncate unfurl height and keep tooltip hidden while height < 1.
             var height = Math.Floor(rect.Height * progress.Value);
             if (height < 1 || rect.Height <= 0) return [];
             return
@@ -483,7 +475,6 @@ public sealed class OriginalPhotoAlbumOverlay
         }
         else if (Count == 0)
         {
-            // FUN_0052ae49 draws STR# 144[22] ("Empty Photo Album") centered at (350, 220) in 18pt black RGB(0, 0, 0).
             parts.Add(new OriginalGameplayOverlay.Part(
                 _emptyLabel,
                 Mapped(

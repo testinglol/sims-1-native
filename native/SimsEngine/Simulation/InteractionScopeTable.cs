@@ -1,21 +1,13 @@
 namespace SimsEngine.Simulation;
 
-/// <summary>
-/// One 12-byte interaction-executor entry from a Sims.exe behavior scope
-/// (FUN_0041F748, FUN_0041F69E and FUN_0041F6FD).
-/// </summary>
 public readonly record struct InteractionScopeEntry(int Value, int Mode, int Result);
 
-/// <summary>
-/// The searchable part of Sims.exe's interaction-executor scope table. The table transformation models the logical effect of the scope compaction helpers; allocation and executor side effects
-/// remain outside this type.
-/// </summary>
 public sealed class InteractionScopeTable
 {
     private List<InteractionScopeEntry> _entries;
 
-    /// <summary>The ordered avatar objects held by this source scope. FUN_0043e2ff scans this vector, keeps the
-    /// animation key (+0x1c) of type-13 records, then FUN_0041f662 looks up (0, key) in this scope's entries.</summary>
+    /// <summary>Maintains ordered avatar object definitions to match animation keys from type-13 records
+    /// against scope entries.</summary>
     public List<TypeRecord> AvatarObjects { get; } = [];
 
     public InteractionScopeTable(IEnumerable<InteractionScopeEntry> entries)
@@ -33,15 +25,14 @@ public sealed class InteractionScopeTable
         return copy;
     }
 
-    /// <summary>FUN_0041f662's lookup in FUN_00458485: the (0, animationKey) entry restores eligibility only
-    /// when its signed count is positive.</summary>
+    /// <summary>Checks whether an animation key entry in the scope table restores interaction eligibility
+    /// via a positive count.</summary>
     public bool HasVisitorInventoryEntry(int animationKey)
     {
         short cursor = -1;
         return TryFindNext(0, ref cursor, animationKey, out var count) && unchecked((short)count) > 0;
     }
 
-    /// <summary>Counts entries whose first dword equals <paramref name="value"/> (FUN_0041F7A9).</summary>
     public int CountValue(int value)
     {
         var count = 0;
@@ -50,11 +41,8 @@ public sealed class InteractionScopeTable
         return count;
     }
 
-    /// <summary>
-    /// Searches from <paramref name="cursor"/> + 1 for an entry whose value matches and whose mode also matches,
-    /// unless <paramref name="mode"/> is zero (FUN_0041F69E). A miss resets the cursor to -1. The returned value
-    /// is the low 16 bits of the entry's third dword, matching the low word returned by the original helper.
-    /// </summary>
+    /// <summary>Searches forward from the cursor for an entry matching the value and mode, matching any
+    /// mode when zero and resetting the cursor to -1 on a miss.</summary>
     public bool TryFindNext(int value, ref short cursor, int mode, out ushort result)
     {
         var first = cursor + 1;
@@ -73,7 +61,6 @@ public sealed class InteractionScopeTable
         return false;
     }
 
-    /// <summary>Fetches a zero-based entry; negative and out-of-range indices resolve to the table end (FUN_0041F748).</summary>
     public bool TryGet(short index, out InteractionScopeEntry entry)
     {
         if (index >= 0 && index < _entries.Count)
@@ -86,14 +73,10 @@ public sealed class InteractionScopeTable
         return false;
     }
 
-    /// <summary>FUN_0041F4E7: retain only entries whose first dword matches <paramref name="key"/>.</summary>
     public void RemoveEntriesWithDifferentKey(int key) => _entries.RemoveAll(entry => entry.Value != key);
 
-    /// <summary>
-    /// FUN_0041F38F/FUN_0041F3F8: add <paramref name="delta"/> to the matching entry's signed low word, saturating
-    /// at 0x7fff; append a new (key, mode, delta) record when absent. A zero low word is a no-op. The original
-    /// refuses an append when the existing vector already has 0x7fff records.
-    /// </summary>
+    /// <summary>Adds a delta to a matching entry's low word saturating at 32767, or appends a new entry if
+    /// absent, ignoring zero deltas and capping capacity at 32767 entries.</summary>
     public bool AddOrIncrement(int key, int mode, int delta)
     {
         var amount = unchecked((short)delta);
@@ -117,11 +100,8 @@ public sealed class InteractionScopeTable
         return true;
     }
 
-    /// <summary>
-    /// Applies Sims.exe FUN_0041F56D and its F957 compaction path. A zero delta succeeds without inspecting the
-    /// index. Otherwise the indexed entry's low word is reduced by a nonnegative delta and retained only while
-    /// positive; a negative delta removes the indexed entry. All other entries retain their order and contents.
-    /// </summary>
+    /// <summary>Reduces an indexed entry's count by a nonnegative delta while positive, removes the entry
+    /// if the delta is negative, and succeeds immediately on a zero delta.</summary>
     public bool TryAdvance(short index, short delta)
     {
         if (delta == 0) return true;

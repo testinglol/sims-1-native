@@ -150,7 +150,6 @@ public sealed class ManageInventoryPrimitiveTests
     public void Mode5_ReplacesKeyOneEntriesWithTheTemporaryNeighborGuid()
     {
         var (context, host, me) = Setup();
-        // FUN_0042573e's one-based neighbor vector; the GUID at neighbor +4 becomes the second key.
         context.World.NeighborWalkOrder.Add(new NeighborState(1, PrimitiveTestWorld.Definition()) { TypeRecordKey = 0x1234 });
         me.Temporaries[0] = 1;
         context.World.NeighborInventory(me[PersonData.NeighborId]).Add(1, 99, 2);
@@ -259,7 +258,6 @@ public sealed class ManageInventoryPrimitiveTests
         context.World.NeighborWalkOrder.Add(new NeighborState(1, []) { TypeRecordKey = 0x55aa55aa });
         me.Temporaries[0] = 1;
 
-        // Operand has typeField == 0 (bytes 4..7 all 0)
         byte[] operand = [mode, 0, 0, 0, 0, 0, 0, 0];
         var result = ManageInventoryPrimitive.Execute(context, operand);
 
@@ -277,7 +275,7 @@ public sealed class ManageInventoryPrimitiveTests
     public void ManageInventoryModesFiveAndSix_WithZeroStackObjectAndMissingNeighbor_ReturnsFalseWithoutThrowing(byte mode)
     {
         var (context, _, me) = Setup(stackObject: 0);
-        me.Temporaries[0] = 999; // Missing neighbor
+        me.Temporaries[0] = 999;
 
         byte[] operand = [mode, 0, 0, 0, 0, 0, 0, 0];
         var result = ManageInventoryPrimitive.Execute(context, operand);

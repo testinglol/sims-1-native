@@ -19,9 +19,7 @@ public sealed class OriginalUIStrings
         "Not Available to Pets",
     ];
 
-    /// <summary>
-    /// The startup splash progress sequence in <c>cSimsApp::InitApp</c> order (<c>004fbaaa</c>, table at <c>0x006ca0a4</c> into STR# 155).
-    /// </summary>
+    /// <summary>The startup splash progress message sequence as ordered string indices from STR# 155.</summary>
     public static readonly IReadOnlyList<int> SplashProgressOrder = [3, 5, 6, 7, 8, 14, 9, 16, 10, 4, 11, 12, 13];
 
     private readonly IReadOnlyDictionary<ushort, IReadOnlyList<string>> _tables;
@@ -52,7 +50,7 @@ public sealed class OriginalUIStrings
         ArgumentNullException.ThrowIfNull(content);
         _languageCode = content.Language.Code;
 
-        // The Live panel's inventory strip title is STR# 141 entry 0 of Live.iff (FUN_0051fc72), not UIText.iff's chunk 141.
+        // The inventory strip title is loaded from STR# 141 entry 0 in Live.iff rather than UIText.iff.
         byte[]? liveData = TryReadContent(content, "GameData/Live.iff", "Live.iff");
         IReadOnlyDictionary<ushort, IReadOnlyList<string>> liveStrings = liveData is not null
             ? OriginalStringResource.TryParse(
@@ -101,9 +99,8 @@ public sealed class OriginalUIStrings
         _buildTooltips = GetTable(_tables, 0x8b);
     }
 
-    /// <summary>
-    /// The <c>Credits.iff</c> text blocks (STR# 163 base game, 164–171 per expansion) by chunk id.
-    /// </summary>
+    /// <summary>Loads <c>Credits.iff</c> text blocks by chunk ID, where STR# 163 is the base game and
+    /// 164–171 correspond to expansions.</summary>
     public static IReadOnlyDictionary<ushort, IReadOnlyList<string>> CreditBlocks(GameContent content)
     {
         ArgumentNullException.ThrowIfNull(content);
@@ -123,15 +120,9 @@ public sealed class OriginalUIStrings
             ?? new Dictionary<ushort, IReadOnlyList<string>>();
     }
 
-    /// <summary>
-    /// <c>cSimsApp::InitInstance</c> (<c>004ef301</c>) reads <c>UIText.iff</c> STR# 0x9a (154, MiscStrings) entry 5 for the splash copyright line.
-    /// </summary>
     public string SplashCopyright() =>
         Value(154, 5, "The Sims is (c) 1999 by Maxis, Electronic Arts");
 
-    /// <summary>
-    /// The loading screen's progress line: STR# 0x9b ("splashprogress") entry for the load phase code's position in the table at <c>0x006ca0a4</c>.
-    /// </summary>
     public string? SplashProgress(int position)
     {
         string text = Value(155, position, string.Empty);
@@ -161,20 +152,17 @@ public sealed class OriginalUIStrings
         return result;
     }
 
-    /// <summary>UIText.iff STR# 180 (0xb4, PhoneBookDialog): entry 0 "Call", entry 1 "Call", entry 2 "doesn't know anyone." (FUN_0052242d, FUN_00522be9).</summary>
     public string PhoneBookCallVerb() => Value(180, 0, "Call");
     public string PhoneBookCallButton() => Value(180, 1, "Call");
     public string PhoneBookDoesNotKnowAnyone() => Value(180, 2, "doesn't know anyone.");
 
     public string Camera(int index, string fallback) => Value(140, index, fallback);
 
-    /// <summary><c>cWinPictureInPicture::Init</c> assigns UIText STR# 156 entry 0 to its window tooltip.</summary>
     public string PictureInPictureTip() => Value(156, 0, "Click to center");
 
     public string Album(int index, string fallback) => Value(144, index, fallback);
     public string AlbumDescription() => Value(154, 3, "No Description");
 
-    /// <summary><c>cWinPeople::BuildPersonalityButtons</c> loads the human and pet popup tables from <c>Live.iff</c>.</summary>
     public (string Name, string Description)? PersonalityPopup(int trait, int value, bool pet)
     {
         if (trait is < 0 or >= 5)
@@ -198,7 +186,8 @@ public sealed class OriginalUIStrings
         return string.IsNullOrEmpty(name) || string.IsNullOrEmpty(description) ? null : (name, description);
     }
 
-    /// <summary>The Job panel's skill button popup: <c>Live.iff</c> STR# 137 holds a name and a hint for each skill in panel order.</summary>
+    /// <summary>Loads skill button popup text from <c>Live.iff</c> STR# 137, which stores name and hint
+    /// string pairs for each skill in panel order.</summary>
     public (string Title, string Description)? SkillPopup(int index)
     {
         if (index < 0 || index * 2 + 1 >= _jobPopupText.Count)
@@ -208,7 +197,8 @@ public sealed class OriginalUIStrings
         return (_jobPopupText[index * 2], _jobPopupText[index * 2 + 1]);
     }
 
-    /// <summary><c>cWinSubpanelJob::SetupSummaryClient</c> (<c>00530bbd</c>) uses entries 12–31 of <c>Live.iff</c> STR# 0x89 for its 4 summary buttons.</summary>
+    /// <summary>Loads career summary popups from entries 12–31 of <c>Live.iff</c> STR# 137 for the four
+    /// summary buttons.</summary>
     public (string Title, string Description)? CareerSummaryPopup(int index, GameplayPanelState.Career career)
     {
         ArgumentNullException.ThrowIfNull(career);
@@ -311,7 +301,8 @@ public sealed class OriginalUIStrings
         return (perfTitle, perfDesc);
     }
 
-    /// <summary>CatSkills and DogSkills load button names from <c>Live.iff</c> STR# 0xab (after entry 0 "Pet Skills") and title/description pairs from 0xac.</summary>
+    /// <summary>Loads pet skill button names from <c>Live.iff</c> STR# 171 (following entry 0) and
+    /// title/description pairs from STR# 172.</summary>
     public string PetSkillTitle(int index, bool cat = false, string fallback = "")
     {
         int entry = index switch
@@ -356,7 +347,8 @@ public sealed class OriginalUIStrings
         return title.Length > 0 && description.Length > 0 ? (title, description) : null;
     }
 
-    /// <summary><c>cWinPeople::Init</c> loads <c>UIText.iff</c> STR# 165 (0xa5, SignPopups) as 12 alternating title/description pairs.</summary>
+    /// <summary>Loads zodiac popups from <c>UIText.iff</c> STR# 165, formatted as 12 alternating title and
+    /// description pairs.</summary>
     public (string Title, string Description)? ZodiacPopup(int zodiac)
     {
         if (zodiac is < 1 or > 12 || !_tables.TryGetValue(165, out var entries))
@@ -429,10 +421,8 @@ public sealed class OriginalUIStrings
 
     public string QuitTitle() => Value(153, 1, "Quit?");
 
-    /// <summary>STR# 153 entry 5, the title of the save-before-quitting prompt.</summary>
     public string QuitSaveTitle() => Value(153, 5, "Quit?");
 
-    /// <summary>STR# 153 entries 7–9, the Reset Tutorial question and its failure (FUN_004f2661).</summary>
     public string ResetTutorialTitle() => Value(153, 7, "Reset Tutorial");
     public string ResetTutorialMessage() => Value(153, 8, "Are you sure you want to reset the tutorial? The current family in that lot will be evicted.");
     public string ResetTutorialFailedMessage() => Value(153, 9, "The tutorial could not be reset.");
@@ -447,29 +437,29 @@ public sealed class OriginalUIStrings
     public string PurchaseHouseTitle() => Value(132, 0, "Purchase House?");
     public string PurchaseHouseMessage() => Value(132, 1, "Are you sure you want to buy this house?");
 
-    /// <summary>STR# 225: "Please Purchase The Sims Hot Date / Vacation / … to be able to visit …".</summary>
     public string MissingPackTip(int index, string fallback) => Value(225, index, fallback);
 
-    /// <summary>STR# 169 entry 0, the Return button tooltip on the expansion maps.</summary>
     public string ReturnTip(string fallback) => Value(169, 0, fallback);
 
-    /// <summary><c>cWinPeople::InitRelationshipSorts</c> loads UIText STR# 240 and assigns its four rows to the family, friend, star, and all filters.</summary>
+    /// <summary>Loads relationship filter tooltips from <c>UIText.iff</c> STR# 240, mapping its four
+    /// entries to family, friend, star, and all filters.</summary>
     public string RelationshipFilterTip(int index, string fallback) => Value(240, index, fallback);
 
-    /// <summary><c>cWinPeople::InitInventorySorts</c> loads UIText STR# 241 and assigns its three rows to the magic, other, and gift sort buttons.</summary>
+    /// <summary>Loads inventory sort tooltips from <c>UIText.iff</c> STR# 241, mapping its three entries to
+    /// magic, other, and gift sort buttons.</summary>
     public string InventorySortTip(int index, string fallback) => Value(241, index, fallback);
 
-    /// <summary><c>cWinPeople</c>'s gift and interest panels assign STR# 154 entries 0 and 1 to their previous/next page controls.</summary>
     public string PeoplePageTip(int index, string fallback) => Value(154, index, fallback);
 
-    /// <summary><c>cWinCatalog</c> assigns UIText STR# 210 entry 0 to its back button.</summary>
     public string CatalogBackTip(string fallback) => Value(210, 0, fallback);
 
-    /// <summary><c>cWinCatalog</c> loads UIText STR# 150; entries 0–7 are room categories and 8–15 are function categories.</summary>
+    /// <summary>Loads catalog category tooltips from <c>UIText.iff</c> STR# 150, where entries 0–7
+    /// represent room categories and 8–15 represent function categories.</summary>
     public string CatalogCategoryTip(int index, bool room, string fallback) =>
         Value(150, (room ? 0 : 8) + index, fallback);
 
-    /// <summary><c>cWinCatalog</c> loads STR# 200–207 for each function category's four primary sub-sort tips, then STR# 210 for shared choices.</summary>
+    /// <summary>Loads catalog sub-sort tooltips using STR# 200–207 for function category sub-sorts and STR#
+    /// 210 for shared choices.</summary>
     public string CatalogFunctionSubsortTip(int category, int index, string fallback) =>
         index switch
         {
@@ -481,13 +471,12 @@ public sealed class OriginalUIStrings
             _ => fallback,
         };
 
-    /// <summary><c>cWinPeople</c>'s two Mood meter segments use UIText STR# 154 entry 15.</summary>
     public string PeopleRatingTip(int index, string fallback) => Value(154, index, fallback);
 
-    /// <summary>A control panel button's tooltip (STR# 138, VCtlTips; the Help button uses entry 23).</summary>
     public string PanelTip(int index, string fallback) => Value(138, index, fallback);
 
-    /// <summary><c>cWinArch::Init</c> loads <c>UIText.iff</c> STR# 139 (0x8b) and assigns entries 0..11 to the build tools and 12..15 to Undo, Redo, Previous Page, Next Page (00500572).</summary>
+    /// <summary>Loads build tooltips from <c>UIText.iff</c> STR# 139, where entries 0–11 map to build tools
+    /// and 12–15 map to undo, redo, and paging controls.</summary>
     public string BuildToolTip(int index, string fallback)
     {
         if (index < 0 || index >= _buildTooltips.Count)
@@ -498,10 +487,10 @@ public sealed class OriginalUIStrings
         return string.IsNullOrWhiteSpace(entry) ? fallback : entry;
     }
 
-    /// <summary><c>cWinRoof::Init</c> loads <c>UIText.iff</c> STR# 147 (0x93) for roof pitch button positions/tooltips and catalog popup title/description (0052921e).</summary>
     public string RoofString(int index, string fallback) => Value(147, index, fallback);
 
-    /// <summary><c>FUN_004cd2d8</c> loads <c>Build.iff</c> STR# 128 (0x80) as 4 triples (price, name, description): Raise, Lower, Level, Grass.</summary>
+    /// <summary>Loads terrain brush definitions from <c>Build.iff</c> STR# 128, structured as price, name,
+    /// and description triples for raise, lower, level, and grass tools.</summary>
     public (int Price, string Name, string Description) TerrainCatalogItem(TerrainBrushMode mode)
     {
         var (triple, fallbackLabel) = mode switch
@@ -527,7 +516,8 @@ public sealed class OriginalUIStrings
         return (price, name, description);
     }
 
-    /// <summary><c>cWinInterest::Init</c> loads <c>Live.iff</c> STR# 0x8c (entry 0 is panel title; entries 1..19 are interest icon tooltips).</summary>
+    /// <summary>Loads interest tooltips from <c>Live.iff</c> STR# 140, where entry 0 is the panel title and
+    /// entries 1–19 are interest icon tooltips.</summary>
     public string InterestTip(int index, string fallback)
     {
         int stringIndex = index + 1;
@@ -539,7 +529,8 @@ public sealed class OriginalUIStrings
         return string.IsNullOrWhiteSpace(entry) ? fallback : entry;
     }
 
-    /// <summary><c>Live.iff</c> STR# 130 (human) and STR# 180 / 0xb4 (pet) pair each need's name with its popup description.</summary>
+    /// <summary>Loads motive help text from <c>Live.iff</c> STR# 130 for humans and STR# 180 for pets,
+    /// structured as alternating motive names and popup descriptions.</summary>
     public string? MotiveHelp(int index, bool pet = false)
     {
         int stringIndex = index * 2 + 2;
@@ -554,10 +545,8 @@ public sealed class OriginalUIStrings
         return stringIndex < _motiveLabels.Count && _motiveLabels[stringIndex].Length > 0 ? _motiveLabels[stringIndex] : null;
     }
 
-    /// <summary>
-    /// <c>cWinPeople::Init</c> assigns <c>Live.iff</c> STR# 134 (<c>ModeTips</c>, <c>005186da.c:205-230</c>) entries 0–6 to its seven main panel buttons.
-    /// <c>SetPerson</c> (<c>0051c61b.c:46-156</c>) then replaces buttons +0x15c/+0x168/+0x16c (indices 2/5/6) according to pet and child state.
-    /// </summary>
+    /// <summary>Loads people panel tooltips from <c>Live.iff</c> STR# 134, substituting specific button
+    /// indices based on pet and child status.</summary>
     public string PeoplePanelTip(int index, GameplayPanelState.Sim? selected, string fallback)
     {
         int stringIndex;
@@ -592,11 +581,10 @@ public sealed class OriginalUIStrings
         return stringIndex >= 0 && stringIndex < DefaultPeoplePanelTips.Length ? DefaultPeoplePanelTips[stringIndex] : fallback;
     }
 
-    /// <summary>The budget dialog loads <c>UIText.iff</c> STR# 146 (Mac resource 0x92); these row captions are localized by the installed language.</summary>
     public string BudgetCategory(int index, string fallback) => Value(146, index, fallback);
     public string BudgetLabel(int index, string fallback) => Value(146, index, fallback);
 
-    /// <summary>The Mac help window reads STR# 166 as alternating topic and explanation strings.</summary>
+    /// <summary>Loads help topics from STR# 166 as alternating title and explanation strings.</summary>
     public IReadOnlyList<(string Title, string Text)> HelpTopics
     {
         get
@@ -627,7 +615,8 @@ public sealed class OriginalUIStrings
     public string PersonalityTitle =>
         _personalityStrings.Count > 0 && _personalityStrings[0].Length > 0 ? _personalityStrings[0] : "Personality";
 
-    /// <summary><c>FUN_0051dfa3</c> and <c>FUN_00520bfe</c> load human (STR# 0x83) and pet (STR# 0xaa) trait button captions at index <c>1 + trait * 7</c>.</summary>
+    /// <summary>Loads personality trait labels from STR# 131 for humans and STR# 170 for pets, using index
+    /// 1 + (trait * 7).</summary>
     public string PersonalityTraitLabel(int index, bool pet = false, string fallback = "")
     {
         var table = pet ? _petPersonalityStrings : _personalityStrings;
@@ -635,7 +624,8 @@ public sealed class OriginalUIStrings
         return stringIndex >= 0 && stringIndex < table.Count && table[stringIndex].Length > 0 ? table[stringIndex] : fallback;
     }
 
-    /// <summary>Sims.exe <c>FUN_005186da</c> loads <c>Live.iff</c> STR# 0x82 (human) and STR# 0xb4 (pet); motive names alternate with help text.</summary>
+    /// <summary>Loads motive labels from <c>Live.iff</c> STR# 130 for humans and STR# 180 for pets, where
+    /// motive names alternate with help text.</summary>
     public string MotiveLabel(int index, bool pet = false, string fallback = "")
     {
         int stringIndex = index * 2 + 1;
@@ -650,15 +640,17 @@ public sealed class OriginalUIStrings
         return stringIndex < _motiveLabels.Count && _motiveLabels[stringIndex].Length > 0 ? _motiveLabels[stringIndex] : fallback;
     }
 
-    /// <summary><c>Live.iff</c> STR# 0x85 (<c>HouseSubpanelLabels</c>): House title, five rating names, then house metadata labels.</summary>
+    /// <summary>Loads house subpanel labels from <c>Live.iff</c> STR# 133, containing the house title, five
+    /// rating names, and house metadata labels.</summary>
     public string HouseLabel(int index, string fallback) =>
         index >= 0 && index < _houseLabels.Count && _houseLabels[index].Length > 0 ? _houseLabels[index] : fallback;
 
-    /// <summary><c>Live.iff</c> STR# 0x8a (<c>HouseSubpanelSize</c>): localized small, medium and large lot names.</summary>
+    /// <summary>Loads lot size labels from <c>Live.iff</c> STR# 138, ordered as small, medium, and large.</summary>
     public string HouseLotSize(int index, string fallback) =>
         index >= 0 && index < _houseSizes.Count && _houseSizes[index].Length > 0 ? _houseSizes[index] : fallback;
 
-    /// <summary><c>Live.iff</c> STR# 0x87 (<c>HouseSubpanelPopupText</c>): title and description pairs for the House panel hints.</summary>
+    /// <summary>Loads house panel hints from <c>Live.iff</c> STR# 135, structured as title and description
+    /// pairs.</summary>
     public (string Title, string Description)? HouseHint(int index)
     {
         int titleIndex = index * 2;
@@ -677,12 +669,12 @@ public sealed class OriginalUIStrings
     public string BulldozeTitle() => Value(131, 0, "Bulldoze House?");
     public string BulldozeMessage() => Value(131, 1, "Do you want to bulldoze this house?");
 
-    /// <summary>STR# 250 and 251: the rezone question and zoning type names (0 Residential, 1 Community).</summary>
+    /// <summary>Loads lot rezoning dialog strings from STR# 250 and zoning type names from STR# 251 (0
+    /// Residential, 1 Community).</summary>
     public string RezoneTitle() => Value(250, 0, "Rezone House?");
     public string RezoneMessage() => Value(250, 1, "This lot is currently zoned as a %s lot. Please choose what type of lot you want this to be:");
     public string ZoningType(int index) => Value(251, index, index == 0 ? "Residential" : "Community");
 
-    /// <summary>STR# 131 entries 6–9: confirmations before a lot can be rezoned.</summary>
     public string RezoneEvictTitle() => Value(131, 6, "Are You Sure?");
     public string RezoneEvictMessage() => Value(131, 7, "The %s family has net worth of %s. You cannot rezone this lot until the family that is living there is evicted. Proceed with the eviction?");
     public string RezoneBulldozeTitle() => Value(131, 8, "Are you sure?");
@@ -697,7 +689,8 @@ public sealed class OriginalUIStrings
     public string NothingToBulldozeTitle() => Value(131, 4, "Nothing to Bulldoze");
     public string NothingToBulldozeMessage() => Value(131, 5, "There is nothing here to bulldoze.");
 
-    /// <summary>Wardrobe (STR# 220) and pet adoption (STR# 221) carousel text: 0 next, 1 previous, 2 buy, 3 cancel, 4 title.</summary>
+    /// <summary>Loads wardrobe (STR# 220) and pet adoption (STR# 221) carousel text: 0 next, 1 previous, 2
+    /// buy, 3 cancel, and 4 title.</summary>
     public string OutfitText(bool pet, int index, string fallback) =>
         Value((ushort)(pet ? 221 : 220), index, fallback);
 
@@ -714,10 +707,8 @@ public sealed class OriginalUIStrings
     public string CorruptedFileMessage(string path) =>
         Value(154, 22, "The following file is corrupted: %s").Replace("%s", path, StringComparison.Ordinal);
 
-    /// <summary>Neighborhood lot rollover templates from STR# 134 (NghRollover), with <c>%s</c>/<c>%d</c> placeholders.</summary>
     public string NeighborhoodRollover(int index, string fallback) => Value(134, index, fallback);
 
-    /// <summary>Fills <c>%s</c> and <c>%d</c> placeholders in order, the way the original printf-style templates are used.</summary>
     public static string Format(string template, IReadOnlyList<string> arguments)
     {
         ArgumentNullException.ThrowIfNull(template);
@@ -746,7 +737,6 @@ public sealed class OriginalUIStrings
         return sb.ToString();
     }
 
-    /// <summary>Simoleon amounts as the original UI writes them, e.g. <c>§20,000</c>.</summary>
     public static string Simoleons(int amount) =>
         "§" + amount.ToString("#,##0", CultureInfo.InvariantCulture);
 
@@ -759,7 +749,7 @@ public sealed class OriginalUIStrings
     public string LoadMenuTitle() => Value(153, 19, "Load");
     public string OptionString(int index, string fallback) => Value(145, index, fallback);
 
-    /// <summary>Parses the original <c>"(x;y)"</c> layout strings stored in UIText tables.</summary>
+    /// <summary>Parses coordinate pairs formatted as <c>"(x;y)"</c> stored in UI string tables.</summary>
     public static CGPoint? Point(string value)
     {
         if (string.IsNullOrEmpty(value))
@@ -934,7 +924,6 @@ public sealed class OriginalUIStrings
         return title.Length > 0 && description.Length > 0 ? (title, description) : null;
     }
 
-    /// <summary><c>Live.iff</c> STR# 139 (0x8b) is loaded by <c>cWinSubpanelReportCard::Init</c> (<c>00532b92</c>).</summary>
     public string ReportCardLabel() => _reportCardTitleText ?? "Report Card";
 
     public string InterestsTitle()
@@ -998,7 +987,6 @@ public sealed class OriginalUIStrings
             }
             catch
             {
-                // Try fallback path.
             }
         }
         return null;
@@ -1303,7 +1291,7 @@ public sealed class OriginalStringResource
             }
             catch (DecoderFallbackException)
             {
-                // Fall back to Windows-1252 when a -1 chunk contains non-UTF-8 legacy bytes.
+                // Falls back to Windows-1252 encoding when chunk text contains non-UTF-8 legacy bytes.
             }
         }
 

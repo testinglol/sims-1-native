@@ -2,9 +2,9 @@ using System.Buffers.Binary;
 
 namespace SimsEngine.Formats;
 
-/// <summary>Pure C# EA XA ADPCM audio decoder for Maxis / Electronic Arts audio assets (.xa).
-/// Supports both mono (15-byte blocks yielding 28 16-bit samples) and stereo (30-byte blocks yielding 28 stereo frames),
-/// decoding into standard 44-byte RIFF WAV output.</summary>
+/// <summary>EA XA ADPCM audio decoder for .xa audio assets. Supports mono (15-byte blocks yielding 28
+/// 16-bit samples) and stereo (30-byte blocks yielding 28 stereo frames) decoding into RIFF WAV format.
+/// </summary>
 public static class XaAudio
 {
     private static readonly int[] EaC1 = [0, 240, 460, 392];
@@ -44,7 +44,6 @@ public static class XaAudio
 
         if (channels == 1)
         {
-            // Mono decoding: 15-byte blocks -> 28 samples
             int curSample = 0;
             int prevSample = 0;
             for (int offset = 0; offset + 15 <= payload.Length; offset += 15)
@@ -59,7 +58,6 @@ public static class XaAudio
                 {
                     byte b = payload[offset + i];
 
-                    // High nibble
                     int nibble = (b >> 4) & 0x0F;
                     int val = (nibble << 28) >> shift;
                     int predicted = (val + curSample * c1 + prevSample * c2 + 0x80) >> 8;
@@ -68,7 +66,6 @@ public static class XaAudio
                     curSample = s;
                     samples.Add((short)s);
 
-                    // Low nibble
                     nibble = b & 0x0F;
                     val = (nibble << 28) >> shift;
                     predicted = (val + curSample * c1 + prevSample * c2 + 0x80) >> 8;
@@ -81,7 +78,6 @@ public static class XaAudio
         }
         else
         {
-            // Stereo decoding: 30-byte blocks -> 28 stereo frames (56 interleaved samples)
             int curLeft = 0, prevLeft = 0;
             int curRight = 0, prevRight = 0;
             for (int offset = 0; offset + 30 <= payload.Length; offset += 30)
@@ -103,7 +99,6 @@ public static class XaAudio
                     byte bLeft = payload[offset + i];
                     byte bRight = payload[offset + i + 1];
 
-                    // High nibble left
                     int nLeft = (bLeft >> 4) & 0x0F;
                     int valLeft = (nLeft << 28) >> shiftLeft;
                     int predLeft = (valLeft + curLeft * c1Left + prevLeft * c2Left + 0x80) >> 8;
@@ -111,7 +106,6 @@ public static class XaAudio
                     prevLeft = curLeft;
                     curLeft = sLeft;
 
-                    // High nibble right
                     int nRight = (bRight >> 4) & 0x0F;
                     int valRight = (nRight << 28) >> shiftRight;
                     int predRight = (valRight + curRight * c1Right + prevRight * c2Right + 0x80) >> 8;
@@ -122,7 +116,6 @@ public static class XaAudio
                     samples.Add((short)sLeft);
                     samples.Add((short)sRight);
 
-                    // Low nibble left
                     nLeft = bLeft & 0x0F;
                     valLeft = (nLeft << 28) >> shiftLeft;
                     predLeft = (valLeft + curLeft * c1Left + prevLeft * c2Left + 0x80) >> 8;
@@ -130,7 +123,6 @@ public static class XaAudio
                     prevLeft = curLeft;
                     curLeft = sLeft;
 
-                    // Low nibble right
                     nRight = bRight & 0x0F;
                     valRight = (nRight << 28) >> shiftRight;
                     predRight = (valRight + curRight * c1Right + prevRight * c2Right + 0x80) >> 8;
@@ -144,7 +136,6 @@ public static class XaAudio
             }
         }
 
-        // Trim to decompressed size if specified in header
         int targetSampleCount = decompressedSize > 0 ? (int)(decompressedSize / 2) : samples.Count;
         if (targetSampleCount > samples.Count) targetSampleCount = samples.Count;
         int frameCount = targetSampleCount / channels;
@@ -174,7 +165,7 @@ public static class XaAudio
         header[8] = (byte)'W'; header[9] = (byte)'A'; header[10] = (byte)'V'; header[11] = (byte)'E';
         header[12] = (byte)'f'; header[13] = (byte)'m'; header[14] = (byte)'t'; header[15] = (byte)' ';
         BinaryPrimitives.WriteInt32LittleEndian(header.AsSpan(16, 4), 16);
-        BinaryPrimitives.WriteInt16LittleEndian(header.AsSpan(20, 2), 1); // PCM = 1
+        BinaryPrimitives.WriteInt16LittleEndian(header.AsSpan(20, 2), 1);
         BinaryPrimitives.WriteInt16LittleEndian(header.AsSpan(22, 2), channels);
         BinaryPrimitives.WriteInt32LittleEndian(header.AsSpan(24, 4), sampleRate);
         BinaryPrimitives.WriteInt32LittleEndian(header.AsSpan(28, 4), byteRate);

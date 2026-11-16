@@ -33,7 +33,9 @@ fragment main0_out main0(main0_in in [[stage_in]], texture2d<float> lotColor [[t
     float4 sampled = lotColor.read(uint2(sampleCoord), 0);
     uint h = uint((cell.x * 73856093) ^ (cell.y * 19349663));
     h = (h ^ (h >> 13u)) * 1274126177u;
-    float dither = (float(h & 15u) - 8.0) / 255.0;
+    float lum = fast::max(sampled.x, fast::max(sampled.y, sampled.z));
+    float ditherScale = mix(0.25, 1.0, smoothstep(0.0199999995529651641845703125, 0.25, lum));
+    float dither = ((float(h & 15u) - 8.0) / 255.0) * ditherScale;
     out.color = float4(fast::clamp(sampled.xyz + float3(dither), float3(0.0), float3(1.0)), 1.0);
     return out;
 }

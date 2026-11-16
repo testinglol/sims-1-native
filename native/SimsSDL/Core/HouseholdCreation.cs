@@ -396,10 +396,8 @@ public sealed class HouseholdAppearanceCatalog : IEquatable<HouseholdAppearanceC
     public static bool operator !=(HouseholdAppearanceCatalog? left, HouseholdAppearanceCatalog? right) => !Equals(left, right);
 }
 
-/// <summary>
-/// The original character editor retains the selected suit indices for each gender/age pair. Skin changes reuse
-/// the same pair, while age or gender changes load that pair's prior indices.
-/// </summary>
+/// <summary>Retains selected suit indices per gender and age group. Skin tone changes preserve current
+/// selections, while age or gender switches restore that group's previous choices.</summary>
 public sealed class HouseholdAppearanceSelectionCache : IEquatable<HouseholdAppearanceSelectionCache>
 {
     public record struct Indices(int Head, int Body);
@@ -412,10 +410,6 @@ public sealed class HouseholdAppearanceSelectionCache : IEquatable<HouseholdAppe
     public void Remember(Indices indices, string gender, string age) =>
         _values[Key(gender, age)] = indices;
 
-    /// <summary>
-    /// Mirrors <c>cWinDesignCharacter::SanifySuits</c>: negative indices become zero
-    /// and oversized indices become last.
-    /// </summary>
     public static int Sanitized(int index, int count) =>
         count > 0 ? Math.Min(Math.Max(0, index), count - 1) : -1;
 
@@ -461,9 +455,8 @@ public sealed class HouseholdAppearanceSelectionCache : IEquatable<HouseholdAppe
 
 public static class HouseholdPersonalityEditor
 {
-    /// <summary>
-    /// Applies one widget click: one 100-point step, with no redistribution to other traits.
-    /// </summary>
+    /// <summary>Adjusts a personality trait by a single 100-point increment without redistributing points
+    /// among other traits.</summary>
     public static int[]? Step(IReadOnlyList<int> values, int trait, bool increasing)
     {
         if (values.Count != 5 || trait < 0 || trait >= values.Count)
@@ -606,26 +599,78 @@ public sealed class HouseholdAppearancePreview
 
     public static (HouseholdAppearancePreview Preview, List<byte[]> Pixels) Load(string path)
     {
-        var fileInfo = new FileInfo(path);
-        if (!fileInfo.Exists)
+        if (SimsSimulation.InMemorySessionAssets.TryGetPayload<global::HouseholdAppearancePreview.DirectAppearancePreview>(path, out var direct)
+            && direct is not null)
         {
-            throw new FileNotFoundException("Household appearance preview file not found.", path);
+            var textures = new List<LotScene.Texture>(direct.Textures.Length);
+            for (int i = 0; i < direct.Textures.Length; i++)
+            {
+                var t = direct.Textures[i];
+                textures.Add(new LotScene.Texture(t.File, t.Width, t.Height, t.Encoding));
+            }
+
+            var meshes = new List<LotScene.Mesh>(direct.Meshes.Length);
+            for (int i = 0; i < direct.Meshes.Length; i++)
+            {
+                var m = direct.Meshes[i];
+                var vertices = new LotScene.MeshVertex[m.Vertices.Length];
+                for (int v = 0; v < m.Vertices.Length; v++)
+                {
+                    var sv = m.Vertices[v];
+                    vertices[v] = new LotScene.MeshVertex(sv.X, sv.Y, sv.Z, sv.U, sv.V, sv.Nx, sv.Ny, sv.Nz);
+                }
+
+                meshes.Add(new LotScene.Mesh
+                {
+                    Texture = m.Texture,
+                    ObjectID = m.ObjectID,
+                    Depth = m.Depth,
+                    Vertices = vertices,
+                    Layer = m.Layer
+                });
+            }
+
+            var directPreview = new HouseholdAppearancePreview(1, 1f, 1f, textures, meshes);
+            directPreview.Validate();
+            var directPixels = new List<byte[]>(direct.Textures.Length);
+            for (int i = 0; i < direct.Textures.Length; i++)
+                directPixels.Add(LotScene.DecodeTextureBytes(textures[i], direct.Textures[i].Bytes));
+            return (directPreview, directPixels);
         }
 
-        if (fileInfo.Length > 16L * 1024L * 1024L)
+        byte[] jsonBytes;
+        string root;
+        if (SimsSimulation.InMemorySessionAssets.TryReadBytes(path, out var inMemoryBytes))
         {
-            throw new ContentError("Household appearance preview exceeds 16 MiB");
+            if (inMemoryBytes.Length > 16L * 1024L * 1024L)
+                throw new ContentError("Household appearance preview exceeds 16 MiB");
+            jsonBytes = inMemoryBytes;
+            string parentDir = Path.GetDirectoryName(Path.GetFullPath(path)) ?? ".";
+            root = SimsSimulation.InMemorySessionAssets.Canonicalize(parentDir);
+        }
+        else
+        {
+            var fileInfo = new FileInfo(path);
+            if (!fileInfo.Exists)
+            {
+                throw new FileNotFoundException("Household appearance preview file not found.", path);
+            }
+
+            if (fileInfo.Length > 16L * 1024L * 1024L)
+            {
+                throw new ContentError("Household appearance preview exceeds 16 MiB");
+            }
+
+            jsonBytes = File.ReadAllBytes(path);
+            string fullPath = Path.GetFullPath(path);
+            string parentDir = Path.GetDirectoryName(fullPath) ?? ".";
+            string resolved = Directory.ResolveLinkTarget(parentDir, returnFinalTarget: true)?.FullName ?? parentDir;
+            root = Path.GetFullPath(resolved);
         }
 
-        byte[] jsonBytes = File.ReadAllBytes(path);
         HouseholdAppearancePreview preview = JsonSerializer.Deserialize<HouseholdAppearancePreview>(jsonBytes)
             ?? throw new ContentError("Invalid household appearance preview header");
         preview.Validate();
-
-        string fullPath = Path.GetFullPath(path);
-        string parentDir = Path.GetDirectoryName(fullPath) ?? ".";
-        string root = Directory.ResolveLinkTarget(parentDir, returnFinalTarget: true)?.FullName ?? parentDir;
-        root = Path.GetFullPath(root);
 
         List<byte[]> pixels = [.. LotScene.ReadPixels(preview.Textures, root)];
         return (preview, pixels);

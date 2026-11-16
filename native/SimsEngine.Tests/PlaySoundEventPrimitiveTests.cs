@@ -2,13 +2,11 @@ using SimsEngine.Simulation;
 
 namespace SimsEngine.Tests;
 
-/// <summary>Play Sound Event (0x17), after FUN_00452862: the event id, the owner from the flags, the two banks and the
-/// positional part, and the result, which is always true.</summary>
 public class PlaySoundEventPrimitiveTests
 {
     private const short StackObjectId = 5;
 
-    /// <summary>The operand: the event id in word 0 and the flags in byte 4.</summary>
+    /// <summary>The operand encodes the sound event identifier in word 0 and playback flags in byte 4.</summary>
     private static byte[] Operand(short eventId, byte flags = 0) =>
         [(byte)eventId, (byte)(eventId >> 8), 0, 0, flags, 0, 0, 0];
 

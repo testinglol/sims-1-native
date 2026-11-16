@@ -5,7 +5,6 @@ namespace SimsEngine.Tests;
 
 public sealed class ChangeActionStringPrimitiveTests
 {
-    // Operand: word 0 is the string table id and byte 4 the entry index.
     private static byte[] Operand(short table, byte index) => [(byte)table, (byte)(table >> 8), 0, 0, index, 0, 0, 0];
 
     [Fact]

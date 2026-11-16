@@ -1,12 +1,10 @@
 namespace SimsEngine.Formats;
 
-/// <summary>One motive advertisement of an interaction. In versions 6 and later the three values are stored in the
-/// order minimum, delta, personality (Sims.exe FUN_004760ae reads entry offsets +2, +4, +0); versions 0 to 5 store
-/// the maximum instead of the delta, and FUN_004761b4 converts it (delta = stored - minimum). The meaning of the
-/// three values is inferred from their use in autonomy scoring (FUN_004214d4).</summary>
+/// <summary>Represents a motive advertisement. In format version 6 and later, values are stored as minimum,
+/// delta, and personality; earlier versions store the maximum instead of delta, computed as <c>delta =
+/// stored - minimum</c>.</summary>
 public readonly record struct MotiveAdvertisement(short Minimum, short Delta, short Personality);
 
-/// <summary>One pie-menu interaction of an object (a TTAB entry).</summary>
 public sealed record Interaction(
     ushort ActionTree,
     ushort GuardTree,
@@ -19,15 +17,8 @@ public sealed record Interaction(
     IReadOnlyList<MotiveAdvertisement> Motives,
     string? Name);
 
-/// <summary>An object's interaction table (TTAB), read as Sims.exe FUN_00475e2d does: an int16 entry count and an
-/// int16 version; versions above 8 add a byte that switches the rest of the chunk to the bit-packed field encoding
-/// (<see cref="FieldReader"/>). Entries use FUN_004761b4 for versions 0 to 5 and FUN_004760ae for 6 and later.
-/// In versions 0 to 3 the TTAs string is the entry's own index.
-/// <para>Where the shipped files disagree with the decompiled readers, the files win (inferred): the 32-bit values of
-/// versions 2 to 5 sit on 4-byte boundaries, with two padding bytes after the 16-bit motive count (the layout of a
-/// stored C structure), and the two version 7 tables carry no inline names although FUN_004760ae would read one
-/// through FUN_00464c84 (their names come from the TTAs chunk). An empty chunk is an empty table, and a table that
-/// ends after its header is read plainly.</para></summary>
+/// <summary>Represents an object interaction table (TTAB). Versions 8 and below use plain binary streams
+/// with aligned fields, while version 9 and later use bit-packed variable-width field encoding.</summary>
 public sealed class InteractionTable
 {
     public short Version { get; }
@@ -79,8 +70,8 @@ public sealed class InteractionTable
         return new Interaction(action, guard, flags, tta, attenuationCode, attenuationValue, threshold, joining, motives, null);
     }
 
-    /// <summary>Versions 0 to 5 (FUN_004761b4), always stored plainly. Motives are numbered by position, except in
-    /// versions 0 and 1, which store (motive, maximum) pairs.</summary>
+    /// <summary>Reads legacy interaction entries where versions 0 and 1 store explicit (motive, maximum)
+    /// pairs while versions 2 through 5 number motives implicitly by position.</summary>
     private static Interaction ReadOld(ref FieldReader reader, short version, int index)
     {
         var action = (ushort)reader.Int16();
@@ -123,13 +114,9 @@ public sealed class InteractionTable
     }
 }
 
-/// <summary>The Sims.exe resource stream (FUN_00464973, FUN_00464a5e, FUN_00464b48, FUN_00464c84): little-endian
-/// values, or, once a chunk switches it on, the field encoding. An encoded value is one bit (0 means the value is
-/// 0), then two bits choosing a width, then the value in that many bits, most significant first and sign-extended
-/// (FUN_00464696, FUN_004647a1). The width tables live in zero-initialised data that Sims.exe fills at start-up, so
-/// they are not in the executable file; the widths here (5, 8, 13, 16 for 16-bit fields and 6, 11, 21, 32 for
-/// 32-bit fields) are inferred: with them all 1399 non-empty version 9 TTAB chunks in the game decode to exactly
-/// their last byte.</summary>
+/// <summary>Reads bit-packed variable-width field encoded streams: a presence bit indicates zero, followed
+/// by a two-bit selector mapping to bit widths (5, 8, 13, 16 for 16-bit fields; 6, 11, 21, 32 for 32-bit
+/// fields) stored MSB-first and sign-extended.</summary>
 public ref struct FieldReader
 {
     private static ReadOnlySpan<byte> ShortWidths => [5, 8, 13, 16];
@@ -151,7 +138,6 @@ public ref struct FieldReader
         _chunk = chunk;
     }
 
-    /// <summary>The offset of the next unread byte.</summary>
     public readonly int Position => _position;
 
     public readonly ResourceFormatException Error(string problem) => new(_source, _chunk, _position, problem);
@@ -160,8 +146,6 @@ public ref struct FieldReader
 
     public int Int32() => _encoded ? Encoded(IntWidths) : Byte() | Byte() << 8 | Byte() << 16 | Byte() << 24;
 
-    /// <summary>A plain 32-bit value at the next 4-byte boundary of the chunk (old TTAB versions; inferred from the
-    /// files).</summary>
     public int AlignedInt32()
     {
         _position = (_position + 3) & ~3;
@@ -179,7 +163,6 @@ public ref struct FieldReader
         if (Bits(1) == 0) return 0;
         var width = widths[(int)Bits(2)];
         var value = Bits(width);
-        // Sign-extend from the top bit of the field.
         return width == 32 ? (int)value : (int)(value << (32 - width)) >> (32 - width);
     }
 

@@ -3,14 +3,12 @@ using System.Globalization;
 
 namespace SimsSDL.Client;
 
-/// <summary>
-/// Reclaims the game-content copies of sessions whose client is gone. A client killed by a signal, or a host that does
-/// not exit in time, never reaches the normal discard, and where mounts are copies rather than clones each one costs
-/// gigabytes. Logs, scenes and manifests stay; only <c>content</c> and interrupted <c>.mount-*</c> staging folders are removed.
-/// </summary>
+/// <summary>Reclaims abandoned content mounts from sessions whose processes have terminated, preserving
+/// logs, scenes, and manifests while removing copied content and staging folders.</summary>
 public static class SessionSweeper
 {
     internal const string OwnerFile = "owner.pid";
+    private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
 
     private static int CurrentProcessId => Environment.ProcessId;
 
@@ -30,7 +28,7 @@ public static class SessionSweeper
             }
             catch
             {
-                // Access denied / insufficient privileges implies the process still exists.
+                // Access denied implies the target process is still running.
                 return true;
             }
         }
@@ -44,9 +42,7 @@ public static class SessionSweeper
         }
     }
 
-    /// <summary>
-    /// Records the running client as the session's owner so other clients leave its mount alone.
-    /// </summary>
+    /// <summary>Records the running process as the session owner to prevent concurrent reclamation.</summary>
     public static void Claim(string session)
     {
         ArgumentException.ThrowIfNullOrEmpty(session);
@@ -55,18 +51,15 @@ public static class SessionSweeper
             File.WriteAllText(
                 Path.Combine(session, OwnerFile),
                 CurrentProcessId.ToString(CultureInfo.InvariantCulture),
-                Encoding.UTF8);
+                Utf8NoBom);
         }
         catch
         {
-            // Ignore best-effort claim write failures to match Swift try?.
         }
     }
 
-    /// <summary>
-    /// Removes the content mounts of sessions under <paramref name="dataRoot"/> whose owner process no longer runs.
-    /// Sessions written before owners were recorded are swept once they are an hour old. Returns the sessions it cleaned.
-    /// </summary>
+    /// <summary>Removes content mounts for sessions whose owner process is no longer running, sweeping
+    /// unowned sessions older than one hour.</summary>
     public static IReadOnlyList<string> Sweep(string dataRoot)
     {
         ArgumentException.ThrowIfNullOrEmpty(dataRoot);
@@ -115,7 +108,6 @@ public static class SessionSweeper
             }
             catch
             {
-                // Ignore enumeration failures.
             }
         }
 
@@ -136,17 +128,14 @@ public static class SessionSweeper
             }
             catch
             {
-                // Ignore enumeration failures.
             }
         }
 
         return cleaned;
     }
 
-    /// <summary>
-    /// Removes stale pack mounts after the current content identity has been selected and claimed. Valid cached mounts
-    /// survive app restarts; at most the active identity, plus caches owned by another running app, are retained.
-    /// </summary>
+    /// <summary>Removes stale pack mount caches while preserving the active content identity and caches
+    /// owned by other running processes.</summary>
     public static IReadOnlyList<string> SweepContentCaches(string dataRoot, string preserving)
     {
         ArgumentException.ThrowIfNullOrEmpty(dataRoot);
@@ -262,7 +251,6 @@ public static class SessionSweeper
         }
         catch
         {
-            // Ignore cleanup errors when entries vanish concurrently.
         }
     }
 

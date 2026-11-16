@@ -1,8 +1,5 @@
 namespace SimsSDL.Core;
 
-/// <summary>
-/// Manages per-neighborhood JPEG snapshots, thumbnails, and sidecar captions.
-/// </summary>
 public sealed class PhotoAlbum
 {
     public sealed record class Photo
@@ -182,7 +179,6 @@ public sealed class PhotoAlbum
                 }
                 catch
                 {
-                    // Best-effort cleanup of partial capture files.
                 }
             }
             throw;
@@ -361,7 +357,6 @@ public sealed class PhotoAlbum
             }
             catch
             {
-                // Ignore temp cleanup failure.
             }
             throw;
         }

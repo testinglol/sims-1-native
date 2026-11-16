@@ -11,8 +11,8 @@ public sealed record SoundResolution(
     bool IsPositionalObjectTrack = true
 );
 
-/// <summary>Indexes game audio archives (.far), parses .hot equates and hitlists,
-/// decodes .xa/.utk audio to cached .wav files, and resolves mode music and ambient sequences.</summary>
+/// <summary>Indexes audio archives, parses HIT equates and hitlists, decodes XA and UTK audio, and manages
+/// ambient and mode playback.</summary>
 public sealed class SoundBank : IDisposable
 {
     public sealed record TrackInfo(int TrackId, string Symbol, string Group, int PatchId, string Tkd, bool IsLooped,
@@ -149,11 +149,9 @@ public sealed class SoundBank : IDisposable
                     var norm = entry.Name.Replace('\\', '/').TrimStart('/');
                     farEntries[norm] = (archive, entry);
 
-                    // Also index without any leading folder prefixes
                     var fileName = Path.GetFileName(norm);
                     if (!farEntries.ContainsKey(fileName)) farEntries[fileName] = (archive, entry);
 
-                    // And index with common prefixes stripped
                     foreach (var prefix in StrippedArchivePrefixes)
                     {
                         if (norm.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
@@ -179,7 +177,6 @@ public sealed class SoundBank : IDisposable
             catch { }
         }
 
-        // Also index loose audio files on disk if any
         try
         {
             foreach (var ext in new[] { "*.xa", "*.wav", "*.utk", "*.mp3" })
@@ -205,7 +202,7 @@ public sealed class SoundBank : IDisposable
         }
         catch { }
 
-        // Sort so that Expansion files override base game files
+        // Sort so expansion pack definitions override base game definitions.
         hotFiles.Sort((a, b) =>
         {
             int scoreA = a.Contains("Expansion", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
@@ -349,7 +346,7 @@ public sealed class SoundBank : IDisposable
                             var group = grpRaw.Contains("Vox", StringComparison.OrdinalIgnoreCase) || grpRaw == "3" ? "VOX" :
                                         grpRaw.Contains("Music", StringComparison.OrdinalIgnoreCase) || grpRaw == "2" ? "MUSIC" : "FX";
                             var tkd = vals[7].Trim();
-                            // In Sims.exe (0057b921.c:75), vals[8] is the initial patch/hitlist ID (cHitTrack+0x1f0), NOT a loop flag.
+                            // Parameter 8 specifies the initial patch ID rather than a loop flag.
                             var isLooped = tkd.Contains("GenericLooped", StringComparison.OrdinalIgnoreCase);
 
                             int patchId = 0;
@@ -551,7 +548,6 @@ public sealed class SoundBank : IDisposable
         AddModeMusic(18, Path.Combine("Music", "Modes", "MM_Buy"));
         AddModeMusic(19, Path.Combine("Music", "Modes", "MM_Credits"), Path.Combine("Music", "Modes", "MM_credits"));
 
-        // Radio stations (0057163b.c:149-268)
         AddStationAudio("radio_country", Path.Combine("Music", "Stations", "Country"));
         AddStationAudio("radio_rock", Path.Combine("Music", "Stations", "Rock"));
         AddStationAudio("radio_latin", Path.Combine("Music", "Stations", "Latin"));
@@ -567,7 +563,6 @@ public sealed class SoundBank : IDisposable
         AddStationAudio("station_unlspeak", Path.Combine("Music", "Stations", "UnlSpeak"));
         AddStationAudio("stereo_superstar", Path.Combine("Music", "Stations", "Superstar"));
 
-        // TV stations (0057163b.c:191-251)
         AddStationAudio("tv_action", Path.Combine("SoundData", "TVStations", "TV_Action"));
         AddStationAudio("tv_cartoon", Path.Combine("SoundData", "TVStations", "TV_Comedy_cartoon"));
         AddStationAudio("tv_romance", Path.Combine("SoundData", "TVStations", "TV_Romance"));
@@ -598,9 +593,8 @@ public sealed class SoundBank : IDisposable
             : hitLength;
     }
 
-    /// <summary>Steps HIT VM instructions per Sims.exe FUN_0057e3dc (0057e3dc.c) to extract hitlist/patch registers,
-    /// loop opcodes (0x20 kTrackCmdLoop), timer waits (0x09 kTrackCmdWait), kill_track targets (0x33), and branch targets
-    /// (0x07, 0x0d, 0x3e..0x43 taking a 32-bit tkdId operand, e.g. tkd_FootstepHard -> tkd__FootstepHard).</summary>
+    /// <summary>Analyzes HIT bytecode instructions to extract patch registers, loop commands, timer waits,
+    /// kill-track targets, and branch destinations.</summary>
     private static HitSubroutineInfo AnalyzeHitSubroutine(
         byte[] hit,
         int offset,
@@ -624,18 +618,18 @@ public sealed class SoundBank : IDisposable
             while (pc < limit)
             {
                 byte op = hit[pc];
-                if (op is 0x08 or 0x0c or 0x1b) // return, end, error
+                if (op is 0x08 or 0x0c or 0x1b) // Stop on return (0x08), end (0x0C), or error (0x1B) opcodes.
                     break;
-                if (op == 0x20) // kTrackCmdLoop (0057e3dc.c:365)
+                if (op == 0x20) // Loop track command (0x20).
                 {
                     hasLoopOpcode = true;
                     break;
                 }
-                if (op == 0x09) // kTrackCmdWait (0057e3dc.c:124)
+                if (op == 0x09) // Wait timer command (0x09).
                 {
                     hasTimerWait = true;
                 }
-                else if (op == 0x05 && pc + 6 <= limit) // kTrackCmdLoadl (0057e3dc.c:78)
+                else if (op == 0x05 && pc + 6 <= limit) // Load immediate command (0x05).
                 {
                     byte reg = hit[pc + 1];
                     int val = BinaryPrimitives.ReadInt32LittleEndian(hit.AsSpan(pc + 2, 4));
@@ -645,14 +639,14 @@ public sealed class SoundBank : IDisposable
                         if (reg == 5) reg5 ??= val;
                         else if (reg == 6) reg6 ??= val;
                         else if (reg == 7) reg7 ??= val;
-                        else if (reg == 0x32) regPatch = val; // register 50 = patch override (e.g. fireplace_loop -> 1819)
+                        else if (reg == 0x32) regPatch = val; // Register 50 (0x32) holds the patch override ID.
                     }
                 }
-                else if (op == 0x33 && pc + 2 <= limit && hit[pc + 1] == 5 && lastReg5Load is > 0) // kTrackCmdKillTrack (0057e3dc.c:601)
+                else if (op == 0x33 && pc + 2 <= limit && hit[pc + 1] == 5 && lastReg5Load is > 0) // Kill track command (0x33).
                 {
                     killedTrackId = lastReg5Load;
                 }
-                else if (op is 0x07 or 0x0d or (>= 0x3e and <= 0x43) && pc + 5 <= limit) // jump/branch to tkdId (0057e3dc.c:644-660)
+                else if (op is 0x07 or 0x0d or (>= 0x3e and <= 0x43) && pc + 5 <= limit) // Branch commands targeting a 32-bit track identifier.
                 {
                     int targetTkdId = BinaryPrimitives.ReadInt32LittleEndian(hit.AsSpan(pc + 1, 4));
                     if (visitedOffsets.Count < 8 &&
@@ -662,7 +656,7 @@ public sealed class SoundBank : IDisposable
                     {
                         pendingOffsets.Enqueue(targetOffset);
                     }
-                    if (op == 0x07) // unconditional jump
+                    if (op == 0x07)
                         break;
                 }
 
@@ -800,13 +794,12 @@ public sealed class SoundBank : IDisposable
                 return CreateMockResolution($"{name}_{code}1");
             }
 
-            // 1. Candidate patches matching name + demographic code (0057348c.c:65-95)
             var candidates = allPatches
                 .Where(p => MatchesDemographic(p.Symbol, name, code))
                 .OrderBy(p => p.Symbol, StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
-            // Fallback to 'f' or 'm' if child 'k' has no specific patches matching name
+            // Fall back to adult voice patches if no child-specific patch exists.
             if (candidates.Count == 0 && code == 'k')
             {
                 candidates = allPatches
@@ -822,7 +815,6 @@ public sealed class SoundBank : IDisposable
                 }
             }
 
-            // 2. Check demographic-suffixed EventMapping / Track (e.g. name + 'm'/'f'/'k')
             if (candidates.Count == 0)
             {
                 var demoNames = code == 'k'
@@ -851,8 +843,7 @@ public sealed class SoundBank : IDisposable
                 }
             }
 
-            // 3. Check exact EventMapping / Track match (0057348c.c:55-58) for generic_fm_smartlists tracks
-            //    (Reg5/Reg6/Reg7) and explicit pet events (voxdog_barkb, voxcat_mew).
+            // Match exact track names for generic smartlists and pet sound events.
             TrackInfo? track = null;
             if (candidates.Count == 0)
             {
@@ -1284,13 +1275,12 @@ public sealed class SoundBank : IDisposable
 
         if (patch == null)
         {
-            // Voice matching: prefix match (e.g. vox_laugh_giggle -> vox_laugh_gigglef1)
+            // Match voice prefix or suffix patterns for demographic voice variants.
             if (name.StartsWith("vox", StringComparison.OrdinalIgnoreCase) || name.EndsWith("vox", StringComparison.OrdinalIgnoreCase))
             {
                 patch = allPatches.FirstOrDefault(p => p.Symbol.StartsWith(name, StringComparison.OrdinalIgnoreCase));
             }
 
-            // Mourn / cry matching
             if (patch == null && (name.Contains("mourn", StringComparison.OrdinalIgnoreCase) || (track?.Symbol.Contains("mourn", StringComparison.OrdinalIgnoreCase) ?? false)))
             {
                 patch = patchesBySymbol.GetValueOrDefault("vox_cry_hardf1") ??
@@ -1316,7 +1306,6 @@ public sealed class SoundBank : IDisposable
         var found = FindAsset(name);
         if (!found.HasValue)
         {
-            // Try with extensions
             found = FindAsset(name + ".xa") ?? FindAsset(name + ".wav") ?? FindAsset(name + ".utk");
         }
 
@@ -1343,11 +1332,9 @@ public sealed class SoundBank : IDisposable
         var norm = relativePath.Replace('\\', '/').TrimStart('/');
         if (farEntries.TryGetValue(norm, out var entry)) return entry;
 
-        // Try without folder
         var nameOnly = Path.GetFileName(norm);
         if (farEntries.TryGetValue(nameOnly, out entry)) return entry;
 
-        // Try stripped prefixes
         foreach (var prefix in StrippedArchivePrefixes)
         {
             if (norm.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
@@ -1476,7 +1463,7 @@ public sealed class SoundBank : IDisposable
             {
                 int sampleRate = 22050;
                 int frameCount = (int)(sampleRate * duration);
-                var pcm = new byte[frameCount * 2]; // 16-bit mono silence for tests
+                var pcm = new byte[frameCount * 2];
                 var wav = XaAudio.CreateRiffWav(sampleRate, 1, 16, pcm);
                 File.WriteAllBytes(destPath, wav);
             }

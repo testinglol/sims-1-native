@@ -3,17 +3,12 @@ using System.Text;
 
 namespace SimsEngine.Formats;
 
-/// <summary>One chunk's row in an IFF resource map (rsmp): the chunk id, its flags, its file offset and its label.</summary>
 public sealed record ResourceMapEntry(ushort Id, ushort Flags, int Offset, string Label);
 
-/// <summary>One chunk type's rows in an IFF resource map.</summary>
 public sealed record ResourceMapGroup(ResourceType Type, IReadOnlyList<ResourceMapEntry> Entries);
 
-/// <summary>The IFF resource map (the rsmp chunk): a 20-byte header (two zero u32s, the reversed "pmsr" tag, a zero
-/// u32 and a u32 group count), then per chunk type the reversed 4cc type, a u32 entry count and per entry the chunk's
-/// u32 offset, u16 id, u16 flags and its zero-terminated label padded to an even length. Sims.exe's loader
-/// (FUN_00416fc3) scans the sequential chunk headers instead and never reads this index; it is written for tools that
-/// look chunks up through it.</summary>
+/// <summary>Encodes the IFF resource map (rsmp) chunk, which indexes chunk types, file offsets, resource
+/// IDs, flags, and even-padded labels.</summary>
 public static class ResourceMap
 {
     public static IReadOnlyList<ResourceMapGroup> Read(IffChunk chunk)
@@ -51,8 +46,6 @@ public static class ResourceMap
         return groups;
     }
 
-    /// <summary>Writes the index for <paramref name="chunks"/> (the rsmp chunk itself excluded) with their new file
-    /// offsets.</summary>
     public static byte[] Write(IReadOnlyList<(ResourceType Type, ushort Id, ushort Flags, string Label, int Offset)> chunks)
     {
         using var output = new MemoryStream();
@@ -81,7 +74,7 @@ public static class ResourceMap
                 var label = Encoding.Latin1.GetBytes(entry.Label);
                 output.Write(label);
                 output.WriteByte(0);
-                // The map pads an odd label with the same 0xA3 byte the streams use.
+                // Pads odd-length resource labels to an even byte boundary using 0xA3.
                 if ((output.Position & 1) != 0) output.WriteByte(0xA3);
             }
         }

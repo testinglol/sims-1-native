@@ -2,13 +2,11 @@ using SimsEngine.Simulation;
 
 namespace SimsEngine.Tests;
 
-/// <summary>Unit tests for A14 headless batch execution (60, 300, 1800 ticks) and deterministic progression without UI.</summary>
 public class HeadlessBatchRunnerTests
 {
     private static SimulationWorld CreateInitialWorld()
     {
         var world = new SimulationWorld();
-        // Register simulation clock with normal speed
         world.Clock.Restore(8, 0, 0);
         return world;
     }
@@ -34,7 +32,6 @@ public class HeadlessBatchRunnerTests
     [Fact]
     public void HeadlessSimulationProducesDeterministicStateWithoutUI()
     {
-        // Two independent worlds starting from identical state
         var worldA = CreateInitialWorld();
         var worldB = CreateInitialWorld();
 
@@ -60,7 +57,6 @@ public class HeadlessBatchRunnerTests
         var world = CreateInitialWorld();
         var control = new SimulationClockControl(1, 1, 1);
 
-        // Advancing 600 ticks should complete smoothly and quickly in pure headless mode
         var exception = Record.Exception(() =>
         {
             for (int i = 0; i < 600; i++)

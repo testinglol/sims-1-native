@@ -2,11 +2,11 @@ namespace SimsEngine.Formats;
 
 public enum JobTextKind { Title, Description, Offer }
 
-/// <summary>Career tracks in ExpansionShared/work.iff. Field positions follow Sims.exe FUN_00403647 and the
-/// CARR parser path in FUN_00403d7c; strings are retained only to advance the field-encoded stream.</summary>
+/// <summary>Parses career tracks and progression levels from CARR resources in work.iff.</summary>
 public sealed class CareerCatalog : SimsEngine.Simulation.ISimulationCareerHost
 {
-    private sealed record Level(int[] Requirements, int[] MotiveDeltas, int Salary, int StartHour, int EndHour, int CarType, string MaleUniformMesh);
+    private sealed record Level(int[] Requirements, int[] MotiveDeltas, int Salary, int StartHour, int EndHour, int CarType,
+        string MaleUniformMesh, string FemaleUniformMesh, string UniformSkin);
     private sealed record Track(ushort Id, string Name, string[] JobNames, Level[] Levels);
 
     private readonly Dictionary<short, Track> _tracks;
@@ -23,12 +23,10 @@ public sealed class CareerCatalog : SimsEngine.Simulation.ISimulationCareerHost
     public IReadOnlyList<int> CareerTable() => _ids;
     public bool CareerExists(short career) => _tracks.ContainsKey(career);
 
-    /// <summary>The track and level labels stored directly in work.iff's CARR record.</summary>
     public string? TrackName(short career) => _tracks.TryGetValue(career, out var track) ? track.Name : null;
     public string? JobTitle(short career, short level) => _tracks.TryGetValue(career, out var track) &&
         level >= 0 && level < track.JobNames.Length ? track.JobNames[level] : null;
 
-    /// <summary>Format of the shipped job-offer label, corroborated by the original work.iff CARR names.</summary>
     public string? JobOffer(short career, int level)
     {
         if (!_tracks.TryGetValue(career, out var track)) return null;
@@ -36,7 +34,7 @@ public sealed class CareerCatalog : SimsEngine.Simulation.ISimulationCareerHost
         return $"{track.Name} career track for a {job}.";
     }
 
-    /// <summary>Job and job-description text lives in the STR chunk paired with the career's CARR id.</summary>
+    /// <summary>Retrieves localized career strings from the string table matching the career's resource ID.</summary>
     public string? JobString(short career, int index, byte language)
     {
         if (!_tracks.ContainsKey(career) || index < 0) return null;
@@ -46,11 +44,10 @@ public sealed class CareerCatalog : SimsEngine.Simulation.ISimulationCareerHost
         return (uint)index < strings.Count ? strings[index] : null;
     }
 
-    /// <summary>The job strings FUN_00403d7c reads from the career's STR# (its one-based indexes less one): level
-    /// <paramref name="level"/> has its title at 3+2*level, its description at 4+2*level and a female title at 23+level;
-    /// the career's own offer text is entry 1 with a female variant in entry 2. A female Sim (person +0x60e bit 0) gets
-    /// the female string when it is not empty (FUN_004035e8 and FUN_004033ea). Null when the career, level or table is
-    /// missing.</summary>
+    /// <summary>Locates job strings within the career's string table using indexed offsets: title at 3 + 2
+    /// * level, description at 4 + 2 * level, female title at 23 + level, and base offer text at entries 1
+    /// and 2. Female Sims use the gendered variant when non-empty, falling back to the standard title.
+    /// </summary>
     public string? JobText(short career, int level, JobTextKind kind, bool female, byte language)
     {
         if (!_tracks.TryGetValue(career, out var track) || (uint)level >= track.Levels.Length) return null;
@@ -67,8 +64,7 @@ public sealed class CareerCatalog : SimsEngine.Simulation.ISimulationCareerHost
         };
     }
 
-    /// <summary>Zero-based grade lookup into work.iff STR# 0x1001. Mac cJob::GetGrade converts a performance word to
-    /// its one-based STR# index by adding 1 before lookup.</summary>
+    /// <summary>Resolves a school performance grade string from string table 0x1001 in work.iff.</summary>
     public string? GradeString(int performance, byte language)
     {
         var chunk = _file.Find(ResourceType.Str, 0x1001);
@@ -91,13 +87,24 @@ public sealed class CareerCatalog : SimsEngine.Simulation.ISimulationCareerHost
             13 => entry.EndHour,
             >= 14 and <= 20 => entry.MotiveDeltas[field - 14],
             21 => entry.CarType,
-            // FUN_00403647 dispatches field 22 through the StringBuffer at level+0x284 and returns length()!=0.
-            // In the CARR record this is the first uniform string (the male uniform mesh); installed BHAVs use the
-            // flag in Global.iff #378 "Dress Work" and object trees #4117 "test work".
             22 => entry.MaleUniformMesh.Length == 0 ? 0 : 1,
             _ => (int?)null,
         };
         return value is { } result ? checked((short)result) : null;
+    }
+
+    public bool TryGetCareerUniform(short career, short level, bool female, out string meshTemplate, out string skinTemplate)
+    {
+        if (_tracks.TryGetValue(career, out var track) && (uint)level < (uint)track.Levels.Length)
+        {
+            var entry = track.Levels[level];
+            meshTemplate = female && entry.FemaleUniformMesh.Length > 0 ? entry.FemaleUniformMesh : entry.MaleUniformMesh;
+            skinTemplate = entry.UniformSkin;
+            return meshTemplate.Length > 0;
+        }
+        meshTemplate = string.Empty;
+        skinTemplate = string.Empty;
+        return false;
     }
 
     public static CareerCatalog Read(IffFile file)
@@ -149,18 +156,19 @@ public sealed class CareerCatalog : SimsEngine.Simulation.ISimulationCareerHost
             var start = decoder.ReadInt32();
             var end = decoder.ReadInt32();
             var car = decoder.ReadInt32();
-            jobNames[index] = decoder.ReadString(nextField: false); // job level label
+            jobNames[index] = decoder.ReadString(nextField: false);
             var maleUniformMesh = decoder.ReadString(nextField: false);
-            _ = decoder.ReadString(nextField: false); // female uniform mesh
-            _ = decoder.ReadString(nextField: false); // uniform skin
-            _ = decoder.ReadString(nextField: index + 1 < count); // trailing per-level string
-            levels[index] = new Level(requirements, motives, salary, start, end, car, maleUniformMesh);
+            var femaleUniformMesh = decoder.ReadString(nextField: false);
+            var uniformSkin = decoder.ReadString(nextField: false);
+            _ = decoder.ReadString(nextField: index + 1 < count);
+            levels[index] = new Level(requirements, motives, salary, start, end, car,
+                maleUniformMesh, femaleUniformMesh, uniformSkin);
         }
         return new Track(chunk.Id, name, jobNames, levels);
     }
 
-    /// <summary>The source's IffFieldEncode layout: one presence bit, a two-bit signed-width selector, then MSB-first
-    /// signed integer bits. Career string boundaries are byte aligned and padded to an even chunk offset.</summary>
+    /// <summary>Decodes packed IFF field streams: one presence bit, a two-bit width selector, and MSB-first
+    /// signed integer bits, with strings byte-aligned and padded to even offsets.</summary>
     private sealed class FieldDecoder(byte[] bytes, int start, string source, string chunk)
     {
         private static readonly int[] Widths = [6, 11, 21, 32];

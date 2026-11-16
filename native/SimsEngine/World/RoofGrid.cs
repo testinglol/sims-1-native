@@ -1,9 +1,8 @@
 namespace SimsEngine.World;
 
-/// <summary>The roof layer's cell grid (Sims.exe FUN_0056ea87 and the passes it runs). Each cell is two bytes: byte 0 bit 0
-/// roofed, bit 1 the second kind (FUN_0056e8c4), bit 2 added by the grow pass, bit 3 never roof (set by the first stage
-/// FUN_0056e1dc from the room data, supplied by <see cref="LotRoofGrid"/> or <see cref="Seed"/>), bits 4-7 the shape index
-/// (FUN_0056e8e9); byte 1 is the height. Cells are addressed [row, column].</summary>
+/// <summary>Manages the roof cell grid. Each cell occupies two bytes: byte 0 stores roofed (bit 0),
+/// secondary kind (bit 1), grown (bit 2), never-roof (bit 3), and shape index (bits 4-7); byte 1 stores
+/// height.</summary>
 public sealed class RoofGrid(int size)
 {
     private const byte Roofed = 1, Second = 2, Grown = 4, Blocked = 8;
@@ -14,8 +13,7 @@ public sealed class RoofGrid(int size)
     private static readonly int[] ShapeDy = [1, 0, 0, -1, -1, -1, 1, 1];
     private static readonly int[] ShapeMasks = [0xc, 10, 5, 3, 7, 0xb, 0xe, 0xd];
 
-    // FUN_0056f815 with the tables the initialisers at 0x56f4fe and 0x56f5e1 fill (orientation 0, the only one the roof
-    // layer draws): per shape index, a mesh resource id and a count of quarter turns (the draw multiplies it by pi * 0.5).
+    // Maps each shape index to a mesh resource ID and a quarter-turn rotation count.
     private static readonly byte[] PlainResources = [0, 0, 8, 2, 8, 1, 10, 1, 8, 3, 10, 2, 9, 1, 14, 2, 8, 0, 9, 0, 10, 0, 14, 1, 10, 3, 14, 3, 14, 0, 15, 0];
     private static readonly byte[] SecondResources = [255, 255, 4, 1, 4, 2, 3, 0, 4, 0, 3, 3, 9, 1, 13, 1, 4, 3, 9, 0, 3, 1, 13, 2, 3, 2, 13, 0, 13, 3, 255, 255];
 
@@ -28,14 +26,12 @@ public sealed class RoofGrid(int size)
 
     public int Height(int row, int column) => heights[row * size + column];
 
-    /// <summary>Whether the cell holds a roof after planning.</summary>
     public bool Has(int row, int column) => (Flags(row, column) & Roofed) != 0;
 
-    /// <summary>The shape index of a roofed cell (byte 0 bits 4-7).</summary>
     public int Shape(int row, int column) => Flags(row, column) >> 4;
 
-    /// <summary>The mesh resource id and quarter turns the draw (FUN_0056eb75) takes for a roofed cell: a plain cell uses 0x100 plus the
-    /// table value, a second-kind cell the raw value (255 means none).</summary>
+    /// <summary>Resolves the mesh resource ID and quarter turns for a cell: standard cells add 0x100 to the
+    /// table entry, while secondary cells use the raw entry (255 indicates none).</summary>
     public (int Id, int QuarterTurns) MeshResource(int row, int column)
     {
         var flagsValue = Flags(row, column);
@@ -46,20 +42,19 @@ public sealed class RoofGrid(int size)
         return (second ? id : 0x100 + id, table[shape * 2 + 1]);
     }
 
-    /// <summary>The second kind (FUN_0056e742): a cell with a taller neighbour or a corner pattern of equal ones.</summary>
+    /// <summary>Identifies a secondary roof cell, characterized by having a taller neighbor or a corner
+    /// pattern of equal-height neighbors.</summary>
     public bool IsSecondKind(int row, int column) => (Flags(row, column) & Second) != 0;
 
-    /// <summary>FUN_0056e1dc's result for one cell: roofed (bit 0) and never-roof (bit 3).</summary>
     public void Seed(int row, int column, bool roofed, bool blocked)
     {
         var index = row * size + column;
         flags[index] = (byte)((flags[index] & ~(Roofed | Blocked)) | (roofed ? Roofed : 0) | (blocked ? Blocked : 0));
     }
 
-    /// <summary>FUN_0056ea87 after the first stage: with <paramref name="grow"/> it first drops the roof bit of every
-    /// cell that was not grown (a roofed cell without bit 2), subtracts any non-grown roofed cells from
-    /// <paramref name="upperRoof"/>, runs the grow pass, then repeats height, kind and shape passes
-    /// until all report success or nine rounds have run.</summary>
+    /// <summary>Executes the roof planning passes, optionally running growth against upper roofs and
+    /// iteratively solving heights, secondary kinds, and shapes until stable or capped at nine iterations.
+    /// </summary>
     public void Plan(bool grow = false, RoofGrid? upperRoof = null)
     {
         if (grow)
@@ -83,9 +78,8 @@ public sealed class RoofGrid(int size)
 
     private bool Open(int row, int column) => (flags[row * size + column] & Roofed) == 0 || (flags[row * size + column] & Grown) != 0;
 
-    /// <summary>FUN_0056e3da: a cell that is not roofed and not blocked becomes roofed and grown when any of its eight
-    /// neighbours holds an original roof, unless the upper level's roof already covers that cell without growth.
-    /// Grown cells do not propagate growth.</summary>
+    /// <summary>Expands roof coverage to unblocked adjacent cells whose neighbors have an original roof,
+    /// without propagating from previously grown cells or extending beneath upper-level roofs.</summary>
     private void Grow(RoofGrid? upperRoof = null)
     {
         for (var row = 1; row < size - 1; row++)
@@ -102,7 +96,8 @@ public sealed class RoofGrid(int size)
         }
     }
 
-    /// <summary>FUN_0056e5fc: a roofed cell's height is the number of square rings around it that are entirely roofed.</summary>
+    /// <summary>Calculates roof height as the number of concentric square rings around a cell that are
+    /// entirely roofed.</summary>
     private void Heights()
     {
         for (var row = 1; row < size - 1; row++)
@@ -122,7 +117,7 @@ public sealed class RoofGrid(int size)
 
     private bool RingRoofed(int row, int column, int ring)
     {
-        // Start at the top-left corner and walk 2*ring cells along each side: right, down, left, up.
+        // Walks around the square ring perimeter clockwise starting from the top-left corner.
         int[] stepRow = [0, 1, 0, -1], stepColumn = [1, 0, -1, 0];
         int y = row - ring, x = column - ring;
         for (var side = 0; side < 4; side++)
@@ -135,8 +130,8 @@ public sealed class RoofGrid(int size)
         return true;
     }
 
-    /// <summary>FUN_0056e742: sets or clears the second-kind bit from the neighbours' heights. Returns false when it had
-    /// to drop a grown cell (FUN_0056e8c4), so the passes run again.</summary>
+    /// <summary>Updates secondary roof cell flags based on neighbor heights, returning false if a grown
+    /// cell was removed to trigger another iteration.</summary>
     private bool Kinds()
     {
         for (var row = 1; row < size - 1; row++)
@@ -167,7 +162,6 @@ public sealed class RoofGrid(int size)
         return true;
     }
 
-    /// <summary>FUN_0056e8e9: the shape index in byte 0's high nibble.</summary>
     private void Shapes()
     {
         for (var row = 1; row < size - 1; row++)

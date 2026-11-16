@@ -1,6 +1,5 @@
 namespace SimsEngine.Simulation;
 
-/// <summary>Sprite offsets from Mac IconGroup.s and the fixed tables in constants.s/data.s.</summary>
 internal static class IconGroupSpriteIds
 {
     private static readonly short[] DefaultGroupZero =
@@ -11,8 +10,8 @@ internal static class IconGroupSpriteIds
 
     private static readonly short[] BaseSprites = [-1, 100, 400, 200, 300, 500, 600, -1, 700, 800, 900];
 
-    /// <summary>IconGroup::GetSpriteID: a mapped group adds the icon index to its base; group zero uses the fixed
-    /// 19-entry default sprite table. A zero result is the original no-sprite sentinel.</summary>
+    /// <summary>Resolves a sprite ID from an icon group: group zero indexes a fixed 19-entry table, while
+    /// other groups add the icon index to their base sprite ID. Zero indicates no sprite.</summary>
     public static short GetSpriteId(int group, int icon)
     {
         if ((uint)group >= BaseSprites.Length) return 0;
@@ -22,7 +21,8 @@ internal static class IconGroupSpriteIds
         return unchecked((short)(baseSprite + icon));
     }
 
-    /// <summary>IconGroup::GetBalloonSpriteID uses the group-one base and only accepts enum values 0, 1, or 2.</summary>
+    /// <summary>Resolves a speech or thought balloon sprite ID using group-one base offsets for types 0, 1,
+    /// and 2.</summary>
     public static short GetBalloonSpriteId(int type) =>
         type is >= 0 and < 3 ? unchecked((short)(BaseSprites[1] + type)) : (short)0;
 }

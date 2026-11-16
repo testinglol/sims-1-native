@@ -5,13 +5,8 @@ using SimsSDL;
 
 namespace SimsSDL.UI;
 
-/// <summary>
-/// The original control-panel Options mode. Button offsets come from UIText STR# 145 (<c>optionstrs</c>), which stores
-/// "(x;y)" positions before each button's tooltip: Neighborhood (88;6), Save (29;6), Quit (159;6), Graphics (29;58),
-/// Sound (89;58) and Play (151;58). The executable creates the buttons from the ID table at 0x66c364 in that order
-/// (FUN_00514110). Offsets are relative to the sub-panel origin, which sits right of the 220-pixel universal panel on
-/// top of <c>PanelBack.bmp</c>.
-/// </summary>
+/// <summary>Options mode button positions are defined in UIText STR# 145 (<c>optionstrs</c>), which encodes
+/// coordinate pairs before each button tooltip relative to the sub-panel origin.</summary>
 public sealed class OriginalOptionsPanelOverlay
 {
     public enum Button
@@ -22,10 +17,6 @@ public sealed class OriginalOptionsPanelOverlay
         Graphics,
         Sound,
         Play,
-        /// <summary>
-        /// Shown on the Play page only (FUN_004f2661 runs when it is clicked). FUN_005154a3 does not use the STR# 145 entry 68
-        /// position: it puts the control 3 pixels from the right edge of the 580-pixel sub-panel, 7 pixels down.
-        /// </summary>
         ResetTutorial
     }
 
@@ -37,9 +28,6 @@ public sealed class OriginalOptionsPanelOverlay
         Play
     }
 
-    /// <summary>
-    /// Persisted Play Options (UIText STR# 145 entries 54–67 and 72–74). Only options the native client honors are enabled.
-    /// </summary>
     public record struct PlayOptionsState
     {
         [JsonPropertyName("autoCenter")]
@@ -57,11 +45,9 @@ public sealed class OriginalOptionsPanelOverlay
         [JsonPropertyName("lighting")]
         public bool Lighting { get; set; } = true;
 
-        // RestoreFactorySettings initializes the Mac option manager's backing flag to 1.
         [JsonPropertyName("simInBackground")]
         public bool SimInBackground { get; set; } = true;
 
-        // RestoreFactorySettings enables these flags and sets both detail levels to high.
         [JsonPropertyName("antiAlias")]
         public bool AntiAlias { get; set; } = true;
 
@@ -80,10 +66,6 @@ public sealed class OriginalOptionsPanelOverlay
         [JsonPropertyName("exportHTML")]
         public bool ExportHTML { get; set; } = true;
 
-        /// <summary>
-        /// Graphics page Terrain Detail and Character Detail: 0 low, 1 medium, 2 high. Sims.exe's two default presets
-        /// (FUN_004e7045, FUN_004e711d) set them to high/high and medium/low; absent values mean high.
-        /// </summary>
         [JsonPropertyName("terrainDetail")]
         public int TerrainDetail { get; set; } = 2;
 
@@ -96,7 +78,6 @@ public sealed class OriginalOptionsPanelOverlay
             Math.Clamp(setting == DetailSetting.Terrain ? TerrainDetail : CharacterDetail, 0, 2);
     }
 
-    /// <summary>The Graphics page's two three-way radio rows (FUN_0051449d).</summary>
     public enum DetailSetting
     {
         Terrain,
@@ -105,17 +86,14 @@ public sealed class OriginalOptionsPanelOverlay
 
     public enum PlayOption
     {
-        // Play page, column B (STR# 145 entries 54/55): original order of the option text blocks.
         AutoCenter,
         FreeWill,
         EdgeScrolling,
         SimInBackground,
-        // Play page, column A (placed after column B, see PlayColumn): the second group of text blocks after Reset Tutorial.
         QuickTips,
         AutoSnapshot,
         LivePIP,
         ExportHTML,
-        // Graphics page (entries 12/13).
         AntiAlias,
         Shadows,
         Lighting,
@@ -149,13 +127,8 @@ public sealed class OriginalOptionsPanelOverlay
     private static readonly DetailSetting[] AllDetailSettings = Enum.GetValues<DetailSetting>();
     private static readonly PlayOption[] AllPlayOptions = Enum.GetValues<PlayOption>();
 
-    /// <summary>STR# 145 entries 54/55: first checkbox row and row size, relative to the sub-panel origin.</summary>
     private RowLayout _playRows = new() { Origin = new CGPoint(275, 9), Size = new CGSize(200, 20) };
 
-    /// <summary>
-    /// Graphics page (FUN_0051449d reads STR# 145 in order): checkbox labels at entry 12 with row size 13, checkboxes at
-    /// 34 with row size 35, detail labels ending at 26 with row size 27, 80 x 20 radio rows (36) at 37 with row size 38.
-    /// </summary>
     private RowLayout _graphicsLabels = new() { Origin = new CGPoint(275, 9), Size = new CGSize(200, 20) };
     private RowLayout _graphicsBoxes = new() { Origin = new CGPoint(245, 7), Size = new CGSize(200, 20) };
     private RowLayout _detailLabels = new() { Origin = new CGPoint(480, 30), Size = new CGSize(200, 26) };
@@ -215,7 +188,6 @@ public sealed class OriginalOptionsPanelOverlay
         set => _playOptions = value;
     }
 
-    /// <summary>Set when on a non-residential / away lot (<c>005154a3.c:229-231</c>, <c>00517545.c:73-82</c>).</summary>
     public bool LotSaveDisabled
     {
         get => _lotSaveDisabled;
@@ -246,7 +218,6 @@ public sealed class OriginalOptionsPanelOverlay
         }
     }
 
-    /// <summary>STR# 145 entries 42/43: the first sound slider row and its row size.</summary>
     public static (CGPoint Origin, CGSize Size) SoundRows(OriginalUIStrings strings) =>
         (OriginalUIStrings.Point(strings.OptionString(42, "(305;13)")) ?? new CGPoint(305, 13),
          OriginalUIStrings.Point(strings.OptionString(43, "(200;28)")) is { } s ? new CGSize(s.X, s.Y) : new CGSize(200, 28));
@@ -438,12 +409,10 @@ public sealed class OriginalOptionsPanelOverlay
         return true;
     }
 
-    /// <summary>Reset Tutorial belongs to the Play page; the other buttons are always shown.</summary>
     public bool IsShown(Button button) => button != Button.ResetTutorial || CurrentPage == Page.Play;
 
     public void Select(Page page)
     {
-        // FUN_005dcbd1 / FUN_005d9dba: clicking an Options button dismisses any active/pending tooltip until hover moves elsewhere.
         if (Hovered is { } hovered) _suppressedTooltipButton = hovered;
         _tooltipText = null;
         _tooltipStartedAt = null;
@@ -463,7 +432,6 @@ public sealed class OriginalOptionsPanelOverlay
         {
             return CGRect.Zero;
         }
-        // Option button sheets hold normal, selected, hovered and disabled frames side by side.
         return new CGRect(
             SubpanelOrigin.X + position.X,
             top + SubpanelOrigin.Y + position.Y,
@@ -511,7 +479,6 @@ public sealed class OriginalOptionsPanelOverlay
         }
         HoveredDetail = detailHit;
 
-        // FUN_00516284 opens cWinSlidePopup (+0x194/+0x198) for hovered/selected option items.
         PopupTopic? newTopic = null;
         if (HoveredOption is { } option) newTopic = new PopupTopic.OptionTopic(option);
         else if (HoveredDetail is { } detail) newTopic = new PopupTopic.DetailTopic(detail);
@@ -529,7 +496,6 @@ public sealed class OriginalOptionsPanelOverlay
             _popupOpenedAt = null;
         }
 
-        // cWinOptions assigns STR# 145's short button text to the 7 icon buttons with SetToolTipsText.
         Button? tipButton = Hovered is { } h && h != _suppressedTooltipButton ? h : null;
         var text = tipButton is { } tb && Labels.TryGetValue(tb, out var lbl) ? lbl : null;
         if (!string.Equals(text, _tooltipText, StringComparison.Ordinal))
@@ -557,7 +523,6 @@ public sealed class OriginalOptionsPanelOverlay
         _tooltipStartedAt = null;
     }
 
-    /// <summary>The shared tooltip control's delay and unfurl duration follow cOptionsMgr::SetQuickTips.</summary>
     public List<OriginalGameplayOverlay.Part> TooltipParts(CGSize canvas, bool enabled, bool quickTips = true)
     {
         if (_tooltipQuickTips != quickTips)
@@ -589,7 +554,6 @@ public sealed class OriginalOptionsPanelOverlay
             }
 
             var rect = PlacementTooltip.Rect(image.Size, new CGPoint(_tooltipAnchor.X, _tooltipAnchor.Y - 1), canvas);
-            // FUN_005d9f30 (005d9f30.c:80, 86-88): truncate unfurl height and keep tooltip hidden while height < 1.
             var height = Math.Floor(rect.Height * progress.Value);
             if (height < 1 || rect.Height <= 0) return [];
             return
@@ -610,7 +574,6 @@ public sealed class OriginalOptionsPanelOverlay
     {
         if (option.Page() == Page.Graphics)
         {
-            // FUN_0051449d (0051449d.c:105-112): each Graphics label button is sized to its rendered string width, not the 200px row stride.
             var box = _graphicsBoxes.Origin;
             var label = _graphicsLabels.Origin;
             var labelWidth = _playLabels.TryGetValue(option, out var img)
@@ -633,11 +596,6 @@ public sealed class OriginalOptionsPanelOverlay
             _playRows.Size.Height);
     }
 
-    /// <summary>
-    /// FUN_005154a3: column B's labels start at STR# 145 entry 54 with each checkbox a quarter of the checkbox sheet's
-    /// width to their left; column A's labels start 70 pixels past column B's checkboxes plus its widest label, at the same Y.
-    /// Positions are relative to the sub-panel origin.
-    /// </summary>
     private (double Box, double Label, double Y) PlayColumn(PlayOption option)
     {
         var inset = _checkbox.Size.Width / 4.0;
@@ -670,7 +628,6 @@ public sealed class OriginalOptionsPanelOverlay
         return null;
     }
 
-    /// <summary>The original "About" help text for the hovered Play, Graphics, or Sound option.</summary>
     public string? AboutText(CGPoint point, CGSize canvas)
     {
         DetailSetting? detail = null;
@@ -776,7 +733,6 @@ public sealed class OriginalOptionsPanelOverlay
         return parts;
     }
 
-    /// <summary>Radio buttons sit at the left, centre and right of the 80-pixel row (FUN_005378dd).</summary>
     private CGRect RadioRect(DetailSetting setting, int level, double top)
     {
         var button = _radio.Size.Width / 6.0;
@@ -788,7 +744,6 @@ public sealed class OriginalOptionsPanelOverlay
             _radio.Size.Height);
     }
 
-    /// <summary>The label and its radio row, for the About text.</summary>
     private CGRect DetailRowRect(DetailSetting setting, double top)
     {
         double widest = 0;
@@ -867,9 +822,7 @@ public sealed class OriginalOptionsPanelOverlay
         var top = canvas.Height - 150;
         var parts = SlidePopupParts(canvas);
         parts.Add(new OriginalGameplayOverlay.Part(_universal, new CGRect(0, top - 33, _universal.Size.Width, _universal.Size.Height)));
-        // FUN_0053a26b blits OptionsPatch (mode 3) at universal-local (0xb7, 0x53) = (183, 83).
         parts.Add(new OriginalGameplayOverlay.Part(_patch, new CGRect(183, top - 33 + 83, _patch.Size.Width, _patch.Size.Height)));
-        // FUN_00516165 blits OptionsToothpkHoriz at subpanel-local (0x10, 0x33) = (16, 51) and OptionsToothpkVert at (0xde, 6) = (222, 6).
         parts.Add(new OriginalGameplayOverlay.Part(
             _toothpickHoriz,
             new CGRect(SubpanelOrigin.X + 16, top + SubpanelOrigin.Y + 51, _toothpickHoriz.Size.Width, _toothpickHoriz.Size.Height)));
@@ -884,7 +837,6 @@ public sealed class OriginalOptionsPanelOverlay
             var selected = (button == Button.Sound && CurrentPage == Page.Sound) ||
                 (button == Button.Graphics && CurrentPage == Page.Graphics) ||
                 (button == Button.Play && CurrentPage == Page.Play);
-            // FUN_005e3a26: col 0 = normal, col 1 = selected, col 2 = hovered, col 3 = disabled.
             var frame = !IsEnabled(button) ? 3.0f : selected ? 1.0f : Hovered == button ? 2.0f : 0.0f;
             parts.Add(new OriginalGameplayOverlay.Part(image, Rect(button, top), new Vector4(frame / 4.0f, 0f, 0.25f, 1f)));
         }
@@ -950,7 +902,6 @@ public sealed class OriginalOptionsPanelOverlay
             {
                 if (option.Page() != CurrentPage) continue;
                 var area = OptionRect(option, top);
-                // Checkbox sheet: [off, on] x [normal, hover, disabled], 20 pixels wide each.
                 var pair = !IsEnabled(option) ? 2.0f : HoveredOption == option ? 1.0f : 0.0f;
                 var frame = pair * 2.0f + (option.Value(_playOptions) ? 1.0f : 0.0f);
                 var label = HoveredOption == option
@@ -989,7 +940,6 @@ public sealed class OriginalOptionsPanelOverlay
                     : _detailTitles.GetValueOrDefault(setting);
                 if (title.Size.Width > 0 && title.Size.Height > 0)
                 {
-                    // FUN_0051449d calls FUN_005e4ada(2) (right-aligned text) on each detail label so its right edge sits at x = 480.
                     pageContent.Add(new OriginalGameplayOverlay.Part(
                         title,
                         new CGRect(
@@ -1001,7 +951,6 @@ public sealed class OriginalOptionsPanelOverlay
 
                 for (var level = 0; level < 3; level++)
                 {
-                    // Radio sheet: [off, on] x [normal, hover, disabled], like the checkbox sheet.
                     var isHovered = HoveredRadio is { } hr && hr.Setting == setting && hr.Level == level;
                     var pair = !setting.IsImplemented() ? 2.0f : isHovered ? 1.0f : 0.0f;
                     var frame = pair * 2.0f + (_playOptions.Detail(setting) == level ? 1.0f : 0.0f);
@@ -1012,8 +961,6 @@ public sealed class OriginalOptionsPanelOverlay
                 }
             }
 
-            // FUN_0051449d: Low/Med/High share a control from 8 pixels left of the first radio row to 5 past its end,
-            // 7 pixels above it; FUN_00537ca4 gives each label a centred third.
             var first = RadioRect(DetailSetting.Terrain, 0, top);
             var spanMinX = first.MinX - 8;
             var spanWidth = _radioSize.Width + 13;
@@ -1070,7 +1017,8 @@ public static class OriginalOptionsPanelOverlayExtensions
         _ => throw new ArgumentOutOfRangeException(nameof(button), button, null)
     };
 
-    /// <summary>STR# 145 index of the "(x;y)" position; the tooltip follows at the next index.</summary>
+    /// <summary>Gets the STR# 145 index of the coordinate string, where the corresponding tooltip follows
+    /// at the next index.</summary>
     public static int StringIndex(this OriginalOptionsPanelOverlay.Button button) => (int)button switch
     {
         0 => 0,
@@ -1107,7 +1055,8 @@ public static class OriginalOptionsPanelOverlayExtensions
         _ => throw new ArgumentOutOfRangeException(nameof(button), button, null)
     };
 
-    /// <summary>STR# 145 index of the label; the "About" title and text follow at +1 and +2.</summary>
+    /// <summary>Gets the STR# 145 index of the label, where the title and explanatory text follow at
+    /// offsets +1 and +2.</summary>
     public static int StringIndex(this OriginalOptionsPanelOverlay.DetailSetting setting) =>
         setting == OriginalOptionsPanelOverlay.DetailSetting.Terrain ? 28 : 31;
 
@@ -1131,7 +1080,8 @@ public static class OriginalOptionsPanelOverlayExtensions
     public static bool IsColumnA(this OriginalOptionsPanelOverlay.PlayOption option) =>
         (int)option is >= 4 and < 8;
 
-    /// <summary>STR# 145 index of the label; the "About" title and text follow at +1 and +2.</summary>
+    /// <summary>Gets the STR# 145 index of the label, where the title and explanatory text follow at
+    /// offsets +1 and +2.</summary>
     public static int StringIndex(this OriginalOptionsPanelOverlay.PlayOption option) => (int)option switch
     {
         0 => 56,

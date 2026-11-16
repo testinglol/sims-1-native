@@ -2,9 +2,8 @@ using SimsEngine.Content;
 using SimsEngine.Formats;
 using SimsEngine.Simulation;
 
-/// <summary>The native counterpart of Sims.exe's purchasable clothes/pet picker data. Delegates appearance and texture
-/// enumeration to <see cref="WardrobeSuitService"/> so picker indices match GenericSimsCall 0x18/0x1d and MakeNewCharacter
-/// 1-to-1 across .cmx and .bcf files on both the Skins and Animation search paths.</summary>
+/// <summary>Provides purchasable clothing and pet outfit catalog data, delegating appearance and texture
+/// enumeration to match character creation indices across CMX and BCF files.</summary>
 internal sealed class SimOutfits
 {
     internal sealed record Choice(string Appearance, string BodyTexture, string HandTexture);

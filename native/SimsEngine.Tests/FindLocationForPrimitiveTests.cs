@@ -631,7 +631,7 @@ public sealed class FindLocationForPrimitiveTests
     {
         var walls = new ChunkBuilder().S16(0).S16(0).S32(64).S32(64).S32(8).U32(0);
         var records = new byte[64 * 64 * 8];
-        // Arry 2 is indexed [x][y], so the saved row-major array has x as its outer row.
+        // Arry 2 chunks are indexed as [x][y], storing tiles in row-major order with x as the outer row.
         var index = (tileX * 64 + tileY) * 8;
         records[index] = segment;
         var categoryOffset = segment switch { 1 => 2, 2 => 3, 4 => 4, 8 => 5, _ => throw new ArgumentOutOfRangeException(nameof(segment)) };

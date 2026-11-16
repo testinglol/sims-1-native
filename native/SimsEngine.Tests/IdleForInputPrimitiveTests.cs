@@ -6,13 +6,12 @@ namespace SimsEngine.Tests;
 
 public sealed class IdleForInputPrimitiveTests
 {
-    // The parameter index is the short at byte 0 and the flag the short at byte 2. Bytes 4 to 7 are not read, so they hold a marker.
+    // The primitive operand encodes the parameter index as a 16-bit integer at bytes 0-1 and the control
+    // flag at bytes 2-3.
     private static byte[] Operand(int index, int flag) => [(byte)index, (byte)(index >> 8), (byte)flag, (byte)(flag >> 8), 0xEE, 0xEE, 0xEE, 0xEE];
 
     private static SimulationError Fails(Action action) => Assert.Throws<SimulationException>(action).Error;
 
-    // Person 100 with the given parameters (the first is the countdown). The person is idle by default: the predicate's second
-    // block answers not idle only while every float at +0x7a8 and +0x7b0 is at least -99, so +0x7a8 starts below that.
     private static (TreeContext Context, XPerson Me, PrimitiveTestHost Host) Start(short[]? parameters = null)
     {
         var (context, me, host) = PrimitiveTestWorld.Create(parameters ?? [0]);
@@ -68,11 +67,10 @@ public sealed class IdleForInputPrimitiveTests
         Assert.Equal(1, context.Frame.Parameters[0]);
         Assert.Equal(PrimitiveResult.Stop, IdleForInputPrimitive.Execute(context, Operand(0, 0)));
         Assert.Equal(0, context.Frame.Parameters[0]);
-        // The flag stays set while the countdown runs and is cleared when it reaches zero.
+        // The idle input flag remains active during the countdown and clears once it reaches zero.
         Assert.Equal(XPerson.IdleForInputFlag, me.InputFlags);
         Assert.Equal(PrimitiveResult.True, IdleForInputPrimitive.Execute(context, Operand(0, 0)));
         Assert.Equal(0, me.InputFlags);
-        // The non-interruptible check comes before state classification, and no host is needed.
         Assert.Empty(host.Calls);
     }
 
@@ -279,7 +277,6 @@ public sealed class IdleForInputPrimitiveTests
         me.ActionQueue[0].Threshold = 50;
         me[PersonData.Priority] = 50;
 
-        // 50 is not below 50, so the queue does not make the person idle; this nonzero state has no class-1 entry.
         Assert.Equal(PrimitiveResult.Stop, IdleForInputPrimitive.Execute(context, Operand(0, 0)));
         Assert.Empty(host.Calls);
         Assert.Equal(0, context.Frame.Parameters[0]);
@@ -325,10 +322,8 @@ public sealed class IdleForInputPrimitiveTests
         me.IdleFloat7A8 = 0;
         me.IdleFloat7B0 = 0;
         me.IdleFloat7A0 = 0;
-        // Every float is at least -99 and +0x7a0 is too, so the person is not idle.
         Assert.Equal(PrimitiveResult.Stop, IdleForInputPrimitive.Execute(context, Operand(0, 0)));
 
-        // +0x7a0 below -99 makes the predicate answer idle, unless the gender is above 1.
         me.IdleFloat7A0 = -100;
         Assert.Equal(PrimitiveResult.True, IdleForInputPrimitive.Execute(context, Operand(0, 0)));
         me[PersonData.Gender] = 2;

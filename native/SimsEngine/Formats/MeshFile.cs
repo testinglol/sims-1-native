@@ -2,33 +2,25 @@ using System.Numerics;
 
 namespace SimsEngine.Formats;
 
-/// <summary>One triangle: three indexes into <see cref="Mesh.Vertices"/>.</summary>
 public readonly record struct MeshFace(int A, int B, int C);
 
-/// <summary>The vertices one bone owns. <see cref="FirstVertex"/> and <see cref="VertexCount"/> index the real vertices,
-/// which are the first <see cref="Mesh.TextureCoordinates"/>.Count entries of <see cref="Mesh.Vertices"/>.
-/// <see cref="FirstBlend"/> (-1 when there are none) and <see cref="BlendCount"/> index <see cref="Mesh.Blends"/>.</summary>
+/// <summary>Defines the vertex and blend ranges influenced by a bone, where base vertices index the primary
+/// vertex array and blend indices reference weighted copies.</summary>
 public readonly record struct MeshBinding(int Bone, int FirstVertex, int VertexCount, int FirstBlend, int BlendCount);
 
-/// <summary>A blend: the real vertex it copies (<see cref="Vertex"/>) and the weight of the copy in 1/32768ths. The text form
-/// writes the vertex first; the binary form writes the weight first, as Sims.exe's writer FUN_005996e6 does (the first value
-/// is the struct's first field, the weight, and the installed BMF files hold the weight in that place).</summary>
+/// <summary>Represents a weighted vertex blend with weights normalized to 32768. In text (SKN) files the
+/// vertex index precedes the weight, whereas binary (BMF) files store the weight first.</summary>
 public readonly record struct MeshBlend(int Vertex, int Weight);
 
-/// <summary>A vertex's position and normal, in the space of the bone it belongs to.</summary>
+/// <summary>Represents a vertex position and normal expressed in bone-local space.</summary>
 public readonly record struct MeshVertex(Vector3 Position, Vector3 Normal);
 
-/// <summary>A mesh (<c>.skn</c> text, <c>.bmf</c> binary): its name, texture, bone names, faces, bindings, texture
-/// coordinates, blends and vertices. Sims.exe's writer FUN_0059ac03 lists them in that order; the text and binary forms
-/// hold the same values.</summary>
 public sealed record Mesh(string Name, string Texture, IReadOnlyList<string> Bones, IReadOnlyList<MeshFace> Faces,
     IReadOnlyList<MeshBinding> Bindings, IReadOnlyList<Vector2> TextureCoordinates, IReadOnlyList<MeshBlend> Blends,
     IReadOnlyList<MeshVertex> Vertices)
 {
-    /// <summary>The bytes of a text mesh (SKN).</summary>
     public static Mesh ReadText(ReadOnlyMemory<byte> data, string source) => Read(CharacterCursor.Text(data, source));
 
-    /// <summary>The bytes of a binary mesh (BMF).</summary>
     public static Mesh ReadBinary(ReadOnlyMemory<byte> data, string source) => Read(CharacterCursor.Binary(data, source));
 
     private static Mesh Read(CharacterCursor cursor)
@@ -47,7 +39,7 @@ public sealed record Mesh(string Name, string Texture, IReadOnlyList<string> Bon
         var blends = new MeshBlend[cursor.Count(8)];
         for (var index = 0; index < blends.Length; index++)
         {
-            // Text: vertex, then weight. Binary: weight, then vertex (see MeshBlend).
+            // Text stores vertex then weight; binary stores weight then vertex.
             var first = cursor.Int32();
             var second = cursor.Int32();
             blends[index] = cursor.IsText ? new MeshBlend(first, second) : new MeshBlend(second, first);
@@ -64,9 +56,8 @@ public sealed record Mesh(string Name, string Texture, IReadOnlyList<string> Bon
         return new Mesh(name, texture, bones, faces, bindings, coordinates, blends, vertices);
     }
 
-    /// <summary>Indexes that name ranges must stay inside them. Sims.exe trusts them; here a bad range is an error. A binding
-    /// with no real vertices may carry -1 as its first index, and one with no blends may carry -1 as its first blend (the
-    /// installed meshes do both). Every installed blend copies a real vertex.</summary>
+    /// <summary>Validates mesh range indices, allowing empty vertex or blend ranges to specify -1 for their
+    /// start index.</summary>
     private static void Validate(CharacterCursor cursor, int bones, MeshFace[] faces, MeshBinding[] bindings, int realVertices,
         MeshBlend[] blends, int vertices)
     {

@@ -13,7 +13,6 @@ public sealed class RemoveObjectInstancePrimitiveTests
         return definition;
     }
 
-    // The running object is 1 and the stack object is 2.
     private static (TreeContext Context, SimulationWorld World, XPerson Me, XObject Stack) World()
     {
         var world = new SimulationWorld();
@@ -23,7 +22,6 @@ public sealed class RemoveObjectInstancePrimitiveTests
         return (new TreeContext(world, me, new StackFrame(2, [], [])), world, me, stack);
     }
 
-    // The selector is the short at byte 0 and the flags are byte 2.
     private static byte[] Operand(short selector, byte flags = 0) =>
         [(byte)selector, (byte)(selector >> 8), flags, 0, 0, 0, 0, 0];
 

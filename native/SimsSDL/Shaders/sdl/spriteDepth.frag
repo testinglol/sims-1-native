@@ -64,18 +64,23 @@ void main() {
     vec2 texel = clampedUV * texSize;
     vec2 fw = max(fwidth(texel), vec2(1e-4));
 
-    // Non-AA SPR2 mode: classic binary mask at raw 5-bit alpha >= 8/31.
+    // Non-AA SPR2 two-pass mode: opaque core writes Z; translucent/semi-transparent fringe blends without Z-write.
     if (inDepthInterval.w < 0.5) {
         ivec2 nearest = clamp(ivec2(clamp(inUV, 0.0, 1.0) * texSize), ivec2(0), artDims - 1);
         vec4 raw = texelFetch(art, nearest, 0);
-        if (raw.a < inDepthInterval.z) discard;
-        if (raw.a > 0.0) {
-            raw.rgb /= raw.a;
-            raw.a = 1.0;
-        }
         ivec2 depthCoord = clamp(ivec2(clamp(inUV, 0.0, 1.0) * vec2(depthDims)), ivec2(0), depthDims - 1);
         float d = texelFetch(depthMap, depthCoord, 0).r;
         if (d >= 1.0) discard;
+        if (inDepthInterval.w < -0.5) {
+            if (raw.a >= inDepthInterval.z || raw.a < (1.0 / 255.0)) discard;
+            float stepBias = max(2e-6, 0.25 * abs(inDepthInterval.y - inDepthInterval.x) / 254.0);
+            color = raw * inTint;
+            gl_FragDepth = max(0.0, mix(inDepthInterval.x, inDepthInterval.y, d * 255.0 / 254.0) - stepBias);
+            return;
+        }
+        if (raw.a < inDepthInterval.z) discard;
+        raw.rgb /= max(raw.a, 1e-4);
+        raw.a = 1.0;
         color = raw * inTint;
         gl_FragDepth = mix(inDepthInterval.x, inDepthInterval.y, d * 255.0 / 254.0);
         return;

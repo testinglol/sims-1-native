@@ -1,54 +1,5 @@
 namespace SimsSDL;
 
-/// <summary>
-/// Scripted input for <c>--script &lt;file&gt;</c>: drives a live window with the same press, release and key calls a player's
-/// input reaches, so UI flows can be run and checked with screenshots without a person at the window. One command per
-/// line; <c>#</c> starts a comment.
-/// <para>
-/// <c>wait &lt;frames&gt;</c> - do nothing for this many frames (prefer waitfor: it ends when the state is reached)<br/>
-/// <c>waitfor &lt;condition&gt; [frames]</c> - wait until lot, menu, panel, dialog, nodialog, quiet, neighborhood, picker,
-/// creation, preview or popup holds (default 1800 frames); quiet means no dialog has been open for the last 30 frames,
-/// for startup messages that open one after another; preview means every Sim figure on the Create a Family screen has
-/// loaded; popup means the buy or build catalog's description box is open; catalog means the requested buy or build
-/// catalog page has arrived; placement means the held object's preview under the pointer has been answered; cursor means
-/// the wall or terrain tool's cursor is drawn at the vertex under the pointer; built means the lot scene has been redrawn
-/// since the last click, drag or key<br/>
-/// <c>waitfor absent &lt;id&gt; [frames]</c> - waits until a previously observed object has left both the VM and rendered scene.<br/>
-/// <c>waitfor anim &lt;name&gt; [frames]</c> - wait until any Sim on the lot plays an animation whose name contains the text<br/>
-/// <c>waitfor placed &lt;dir&gt; [frames]</c> - wait until an object the player can move appears on the lot facing this way
-/// (1 north, 4 east, 16 south, 64 west) and drawn<br/>
-/// <c>waitfor sound &lt;name&gt; [frames]</c> - wait until the UI sound with this event name has been asked for since the last
-/// click or drag (audio may be off)<br/>
-/// <c>waitfor map &lt;mode&gt; [frames]</c> - wait until the neighborhood screen shows this map (1 base, 2 Downtown,
-/// 3 Vacation Island, 5 Studio Town, 7 Magic Town)<br/>
-/// <c>autodismiss</c> - answer every original dialog with its first button from now on, so a flow never has to wait out startup messages<br/>
-/// <c>key &lt;name&gt;</c> - escape, enter, tab, backspace, space, home, end, f1-f5, or one character<br/>
-/// <c>click &lt;x&gt; &lt;y&gt;</c> - a left click at window pixels<br/>
-/// <c>drag &lt;x&gt; &lt;y&gt; &lt;x2&gt; &lt;y2&gt;</c> - press at the first point, move to the second and release there<br/>
-/// <c>hold &lt;keys&gt;</c> - keep these modifiers (ctrl, shift, alt; none releases them) down for the clicks and drags that follow<br/>
-/// <c>clicksim &lt;n&gt;</c> - a left click on the n-th household Sim (Tab order, from 0)<br/>
-/// <c>clickobject &lt;id&gt;</c> - a left click on a visible pixel of the object with this simulation ID<br/>
-/// <c>clickobject &lt;name&gt; [part]</c> - the same on the part-th object (from 1, by simulation ID) whose name contains the text,
-/// so <c>clickobject bed 2</c> clicks a double bed's second tile<br/>
-/// <c>moveground &lt;x&gt; &lt;y&gt;</c> - move to a lot tile center projected through the active camera<br/>
-/// <c>clickgroundcenter &lt;x&gt; &lt;y&gt;</c> - a normal left click at that projected tile center<br/>
-/// <c>centerground &lt;x&gt; &lt;y&gt;</c> - pan the active camera to center a lot tile<br/>
-/// <c>actions</c> - log the selected Sim's position, queued action names and speed<br/>
-/// <c>objects &lt;text&gt;</c> - log the ID and name of every object whose name contains the text<br/>
-/// <c>asserttile &lt;x&gt; &lt;y&gt; &lt;level&gt; contains &lt;id&gt;</c> - enumerate a fixture-enabled native tile and require a unique traversal containing the object<br/>
-/// <c>centre &lt;id&gt; | &lt;name&gt; [part]</c> - pan the view so this object (named as for clickobject) is in the middle<br/>
-/// <c>choose &lt;label&gt;</c> - a left click on the open pie menu's entry with this label (spaces allowed)<br/>
-/// <c>control &lt;text&gt;</c> - a left click on the frontmost screen's first control whose label contains the text<br/>
-/// <c>rightrelationship &lt;id&gt;</c> - right-click a visible relationship by neighbor ID<br/>
-/// <c>relationshippopup &lt;id&gt;</c> - click a relationship and check its popup opens (case-insensitive)<br/>
-/// <c>controls</c> - log the frontmost screen's control labels<br/>
-/// <c>sweep</c> - click every catalog thumbnail on screen in turn; each one the household can afford must become the held item, and each one it cannot must not<br/>
-/// <c>type &lt;text&gt;</c> - typed text, as a keyboard's text input delivers it<br/>
-/// <c>shot &lt;file.png&gt;</c> - write the next frame to a PNG<br/>
-/// <c>quit</c> - end the run (exit status 0)
-/// </para>
-/// A condition that times out, a Sim that is not on screen or a missing pie entry ends the run with exit status 2.
-/// </summary>
 internal sealed class InputScript
 {
     public abstract record Action
@@ -137,23 +88,18 @@ internal sealed class InputScript
     private int _frame;
     private int _lastDialogFrame;
 
-    /// <summary>The game clock when the last dialog closed, once known.</summary>
     private int? _lastDialogClock;
 
     public string? Failed { get; private set; }
 
-    /// <summary>The movable objects on the lot before the last click or drag, and when a <c>waitfor placed</c> began.</summary>
     private HashSet<int> _placedBefore = [];
     private HashSet<int> _objectsBefore = [];
 
-    /// <summary>The modifiers <c>hold</c> keeps down for presses.</summary>
     private HashSet<string> _held = [];
     private string? _keepSpeed;
 
-    /// <summary>The lot scene's revision before the last click or drag, for <c>waitfor built</c>.</summary>
     private long _revisionBefore;
 
-    /// <summary>How many UI sounds had played before the last click, drag or key, for <c>waitfor sound</c>.</summary>
     private int _soundsBefore;
 
     private readonly Dictionary<string, ConstructionSnapshot> _constructionSnapshots = new(StringComparer.Ordinal);
@@ -177,7 +123,6 @@ internal sealed class InputScript
         }
     }
 
-    /// <summary>Runs the commands due this frame, after the controller's tick. Returns what the main loop must do for it.</summary>
     public Action Step(LiveController live)
     {
         _frame += 1;
@@ -510,7 +455,7 @@ internal sealed class InputScript
                         Fail($"line {number}: cursorshots needs a folder", live);
                         return new Action.None();
                     }
-                    try { Directory.CreateDirectory(argument); } catch { /* Best-effort folder creation before Dump reports failures. */ }
+                    try { Directory.CreateDirectory(argument); } catch { }
                     var cursors = new OriginalCursors(live.Content);
                     foreach (string name in OriginalCursors.Names)
                     {
@@ -670,7 +615,6 @@ internal sealed class InputScript
 
                 case "hover":
                 {
-                    // A label that ends with the text wins over one that only contains it, so "house 5" is not "house 50".
                     string needle = argument.ToLowerInvariant();
                     if (needle.Length == 0 || FindControlForHover(live.ScriptControls, needle) is not { } control)
                     {
@@ -894,7 +838,6 @@ internal sealed class InputScript
         live.ScriptDeleteModifier = _held.Contains("ctrl") || _held.Contains("alt");
     }
 
-    /// <summary>The simulation IDs named by <c>clickobject &lt;name&gt; [part]</c> or <c>centre &lt;name&gt; [part]</c>.</summary>
     private static List<int> ScriptObjectMatches(string[] words, LiveController live)
     {
         int? part = words.Length > 2 && TryParseInt(words[^1], out int parsedPart) ? parsedPart : null;
@@ -903,7 +846,7 @@ internal sealed class InputScript
             ? string.Join(' ', words, 1, needleCount).ToLowerInvariant()
             : "";
 
-        // Objects placed on the lot and drawn on the current floor come before hidden sub-tiles or controllers.
+        // Placed objects on the active floor take precedence over sub-tiles.
         IReadOnlyDictionary<int, int> placed = live.ScriptEditableObjects;
         List<(int Id, string Name)> named = [];
         if (needle.Length > 0)
@@ -986,7 +929,7 @@ internal sealed class InputScript
             case "idle": return live.ScriptSimIdle;
             case "freewill": return live.ScriptFreeWill == true;
             case "quiet":
-                // Startup letters open a game minute or two apart, so the clock must also have moved on since the last one.
+                // Startup letters queue minutes apart; game clock must advance between them.
                 if (live.Ui.GameDialog is not null || _frame - _lastDialogFrame < 30) return false;
                 if (!live.Ui.ShowsLot) return true;
                 if (_lastDialogClock is not { } since || live.Ui.ClockMinutes is not { } now) return false;
@@ -1030,7 +973,7 @@ internal sealed class InputScript
 
         if (name.StartsWith("placed ", StringComparison.Ordinal))
         {
-            // The object list can arrive before the scene that draws it, so the object must also be in the scene.
+            // Simulation state can lead the rendered scene, so verify presence in both.
             string expectedDirection = name[7..];
             foreach ((int key, int direction) in live.ScriptEditableObjects)
             {

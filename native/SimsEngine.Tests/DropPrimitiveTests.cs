@@ -5,7 +5,6 @@ namespace SimsEngine.Tests;
 
 public sealed class DropPrimitiveTests
 {
-    // The running object is 100 at (50, 60, 2), facing direction 2.
     private static (TreeContext Context, XPerson Me, PrimitiveTestHost Host) World()
     {
         var (context, me, host) = PrimitiveTestWorld.Create();

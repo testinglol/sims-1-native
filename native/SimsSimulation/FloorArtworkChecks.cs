@@ -3,13 +3,13 @@ using SimsEngine.World;
 using System.Text.Json;
 using SimsSimulation;
 
-/// <summary>Checks original floor patterns and palette selection used by native lot scene export.</summary>
 internal static class FloorArtworkChecks
 {
     public static object Run(string gameRoot, string? scenePath = null)
     {
         var floors = IffFile.Open(Path.Combine(gameRoot, "GameData", "floors.iff"));
-        // House 05 uses floor pattern 12. The original floors.iff stores its medium SPR2 at pattern + 256.
+        // Floor pattern sprite resources in floors.iff are stored with medium zoom sprites at pattern ID
+        // plus 256.
         var spriteChunk = floors.Find(ResourceType.Spr2, 268)
             ?? throw new InvalidDataException("Base-game floor pattern 12 has no SPR2 268");
         var sprite = DepthSprite.Read(floors, spriteChunk);

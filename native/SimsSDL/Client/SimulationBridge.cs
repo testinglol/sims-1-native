@@ -4,11 +4,6 @@ using System.Threading.Channels;
 
 namespace SimsSDL.Client;
 
-/// <summary>
-/// In-process bridge to <c>SimsSimulation</c> (<see cref="SimsSimulation.SimulationServer"/> and
-/// <see cref="global::FrontendAudioServer"/>), streaming JSON commands over a <see cref="Channel{T}"/>
-/// and dispatching server events back onto <see cref="MainThreadDispatcher"/> (or directly for decoded animation frames).
-/// </summary>
 public sealed class SimulationBridge : IDisposable
 {
     private const int MaxMessageBytes = 16 * 1024 * 1024;
@@ -38,14 +33,8 @@ public sealed class SimulationBridge : IDisposable
     public string Session { get; }
     public string ProfileId { get; }
 
-    /// <summary>
-    /// The numbered neighborhood (<c>UserData</c> is 1) whose lots and saves the host uses.
-    /// </summary>
     public int Neighborhood { get; }
 
-    /// <summary>
-    /// Deletes private session mounts after the host exits. Shared mounts and original installation files are never deleted here.
-    /// </summary>
     public bool DiscardsContentOnExit { get; set; }
 
     public bool IsRunning => _serverTask is { IsCompleted: false };
@@ -61,17 +50,10 @@ public sealed class SimulationBridge : IDisposable
     public Action<Dictionary<string, JsonElement>>? OnScene { get; set; }
     public Action<Dictionary<string, JsonElement>>? OnAudio { get; set; }
 
-    /// <summary>
-    /// When set, animation events reach it already decoded, off the main thread, instead of through <see cref="OnEvent"/>;
-    /// they are the bulk of the stream while a lot runs.
-    /// </summary>
     public Action<SceneAnimation>? Animation { get; set; }
 
     public Action<string>? Failed { get; set; }
 
-    /// <summary>
-    /// Invoked on the main thread when an active server exits (<c>null</c> on clean exit, or error message on failure).
-    /// </summary>
     public Action<string?>? OnExit { get; set; }
 
     public SimulationBridge(
@@ -121,9 +103,6 @@ public sealed class SimulationBridge : IDisposable
         return OpenAsyncCore(content, house, nativeEngine, cancellationToken);
     }
 
-    /// <summary>
-    /// Starts the simulation daemon without preloading a house lot (<c>house == 0</c>).
-    /// </summary>
     public void StartDaemon(GameContent content)
     {
         ArgumentNullException.ThrowIfNull(content);
@@ -131,9 +110,6 @@ public sealed class SimulationBridge : IDisposable
         StartSimulationSync(content, house: 0, nativeEngine: false);
     }
 
-    /// <summary>
-    /// Starts the simulation daemon asynchronously without preloading a house lot (<c>house == 0</c>), reusing the zero-copy content mount path.
-    /// </summary>
     public Task StartDaemonAsync(
         GameContent content,
         bool nativeEngine = false,
@@ -143,9 +119,6 @@ public sealed class SimulationBridge : IDisposable
         return OpenAsyncCore(content, house: 0, nativeEngine, cancellationToken);
     }
 
-    /// <summary>
-    /// Starts an audio-only server for the loading screen and neighborhood maps, before any lot is loaded.
-    /// </summary>
     public void StartFrontendAudio(GameContent content)
     {
         ArgumentNullException.ThrowIfNull(content);
@@ -193,7 +166,6 @@ public sealed class SimulationBridge : IDisposable
     {
         await CloseAsync().ConfigureAwait(false);
         var expectedStopSequence = Volatile.Read(ref _stopSequence);
-        // Ensure session directory and claim exist asynchronously (no pack mount needed for audio-only).
         _ = await PrepareContentAsync(
             content,
             materializeFiles: false,
@@ -322,6 +294,7 @@ public sealed class SimulationBridge : IDisposable
 
             lock (SimulationHost.SimulationStateLock)
             {
+                _cachedAppearanceRegistry = null;
                 SimsSimulation.InMemorySessionAssets.EnableRoot(Session);
                 SimulationHost.ApplyNativeEngineEnvironmentIfSelected(nativeEngine);
                 var (profilePath, _) = SimulationHost.PrepareNeighborhood(content.Root, DataRoot, ProfileId, Neighborhood);
@@ -332,12 +305,61 @@ public sealed class SimulationBridge : IDisposable
                     (short)house,
                     writer,
                     (byte)content.Language.Code);
+                server.DirectAnimationSink = directFrame =>
+                {
+                    if (_stopped || generation != Volatile.Read(ref _generation) || Animation is not { } handler)
+                    {
+                        return;
+                    }
+
+                    handler(ConvertDirectAnimation(directFrame));
+                };
             }
 
             _inputChannel = channel;
             _writer = writer;
             _serverTask = Task.Run(() => RunSimulationLoopAsync(server, channel.Reader, generation));
         }
+    }
+
+    private static SceneAnimation ConvertDirectAnimation(SimsSimulation.SceneExporter.DirectAnimationFrame frame)
+    {
+        SceneAnimation.Mesh[] meshes = frame.Meshes.Length == 0
+            ? Array.Empty<SceneAnimation.Mesh>()
+            : new SceneAnimation.Mesh[frame.Meshes.Length];
+        for (int i = 0; i < frame.Meshes.Length; i++)
+        {
+            var m = frame.Meshes[i];
+            meshes[i] = new SceneAnimation.Mesh
+            {
+                Texture = m.Texture,
+                ObjectID = m.ObjectID,
+                Room = m.Room,
+                Level = m.Level,
+                FloorShadow = LotScene.ToZoomImage(m.FloorShadow),
+                FloorShadowNear = LotScene.ToZoomImage(m.FloorShadowNear),
+                FloorShadowFar = LotScene.ToZoomImage(m.FloorShadowFar),
+                Depth = m.Depth,
+                Vertices = Array.Empty<byte>(),
+                DirectVertices = LotScene.ToMeshVertices(m.Vertices, m.ShiftX, m.ShiftY),
+                Tint = m.Tint,
+            };
+        }
+
+        return new SceneAnimation
+        {
+            SchemaVersion = 1,
+            Lighting = LotScene.ToLighting(frame.Lighting),
+            BaseRevision = frame.BaseRevision,
+            Sequence = frame.Sequence,
+            Updates = frame.Updates,
+            TextureStart = frame.TextureStart,
+            Textures = LotScene.ToTextures(frame.Textures),
+            Sprites = LotScene.ToSprites(frame.Sprites),
+            Meshes = meshes,
+            CensorRects = LotScene.ToCensorRects(frame.CensorRects),
+            IsTrustedInProcess = true,
+        };
     }
 
     private void LaunchFrontendAudioServer(GameContent content, bool nativeEngine, long expectedStopSequence)
@@ -497,9 +519,6 @@ public sealed class SimulationBridge : IDisposable
         });
     }
 
-    /// <summary>
-    /// Returns an immutable, pack-overlaid content root shared by every host using this content identity.
-    /// </summary>
     public static async Task<string> SharedContentMount(
         GameContent content,
         string dataRoot,
@@ -534,36 +553,41 @@ public sealed class SimulationBridge : IDisposable
             {
                 var sharedRoot = Path.Combine(dataRoot, "runtime", "content");
                 var cacheDirectory = Path.Combine(sharedRoot, key);
-                // A different app process may be preparing or reading this identity. Give this process an isolated cache rather
-                // than replacing files which its trusted plugin code could currently have open.
                 if (SessionSweeper.IsOwnedByAnotherProcess(cacheDirectory))
                 {
                     cacheDirectory = Path.Combine(sharedRoot, $"{key}-{Guid.NewGuid():D}");
                 }
 
                 var selectedCacheDirectory = cacheDirectory;
-                createdCacheDirectory = selectedCacheDirectory;
                 var mount = Path.Combine(selectedCacheDirectory, "content");
                 preparation = Task.Run(() =>
                 {
-                    if (Directory.Exists(selectedCacheDirectory) &&
-                        !content.ReusableMount(mount, identity))
+                    var targetCacheDirectory = selectedCacheDirectory;
+                    var targetMount = mount;
+                    if (Directory.Exists(targetCacheDirectory))
                     {
-                        SessionSweeper.DeleteEntrySafely(selectedCacheDirectory);
+                        if (content.ReusableMount(targetMount, identity) && Directory.Exists(targetMount))
+                        {
+                            SessionSweeper.Claim(targetCacheDirectory);
+                            _ = Task.Run(() => SessionSweeper.SweepContentCaches(dataRoot, preserving: targetCacheDirectory));
+                            return targetMount;
+                        }
+
+                        SessionSweeper.DeleteEntrySafely(targetCacheDirectory);
                     }
 
-                    if (Directory.Exists(mount))
+                    if (File.Exists(targetMount) || Directory.Exists(targetMount) || PackContentPaths.IsSymbolicLink(targetMount))
                     {
-                        SessionSweeper.Claim(selectedCacheDirectory);
-                        _ = Task.Run(() => SessionSweeper.SweepContentCaches(dataRoot, preserving: selectedCacheDirectory));
-                        return mount;
+                        targetCacheDirectory = Path.Combine(sharedRoot, $"{key}-{Guid.NewGuid():D}");
+                        targetMount = Path.Combine(targetCacheDirectory, "content");
                     }
 
-                    Directory.CreateDirectory(selectedCacheDirectory);
-                    SessionSweeper.Claim(selectedCacheDirectory);
-                    content.Materialize(mount, cacheIdentity: identity, nativeOverlay: true);
-                    _ = Task.Run(() => SessionSweeper.SweepContentCaches(dataRoot, preserving: selectedCacheDirectory));
-                    return mount;
+                    createdCacheDirectory = targetCacheDirectory;
+                    Directory.CreateDirectory(targetCacheDirectory);
+                    SessionSweeper.Claim(targetCacheDirectory);
+                    content.Materialize(targetMount, cacheIdentity: identity, nativeOverlay: true);
+                    _ = Task.Run(() => SessionSweeper.SweepContentCaches(dataRoot, preserving: targetCacheDirectory));
+                    return targetMount;
                 });
 
                 SharedMountPreparations[key] = preparation;
@@ -697,10 +721,6 @@ public sealed class SimulationBridge : IDisposable
         channel?.Writer.TryComplete();
     }
 
-    /// <summary>
-    /// For a client about to exit: waits up to <paramref name="timeoutSeconds"/> for the host to finish after
-    /// <see cref="Stop"/>, then discards the private content mount if requested.
-    /// </summary>
     public bool WaitForExit(double timeoutSeconds)
     {
         if (_preparing)
@@ -725,7 +745,6 @@ public sealed class SimulationBridge : IDisposable
             }
             catch
             {
-                // Task exception already routed via Run*Async / OnExit.
             }
         }
 
@@ -768,7 +787,6 @@ public sealed class SimulationBridge : IDisposable
             }
             catch
             {
-                // Timeout or server exception already handled cleanly.
             }
         }
 
@@ -826,6 +844,36 @@ public sealed class SimulationBridge : IDisposable
             nativeEngine,
             includeWebScenes);
 
+    private static (string InstallRoot, string CharactersDir, int FileCount, long MaxWriteTicks, SimsEngine.Content.ObjectRegistry Registry)? _cachedAppearanceRegistry;
+
+    private static SimsEngine.Content.ObjectRegistry GetOrScanAppearanceRegistry(string installRoot, string userDataPath)
+    {
+        var fullInstall = Path.GetFullPath(installRoot);
+        var charsDir = Path.GetFullPath(Path.Combine(userDataPath, "Characters"));
+        var count = 0;
+        var maxTicks = 0L;
+        if (Directory.Exists(charsDir))
+        {
+            foreach (var f in Directory.EnumerateFiles(charsDir, "*.iff"))
+            {
+                count++;
+                var ticks = File.GetLastWriteTimeUtc(f).Ticks;
+                if (ticks > maxTicks) maxTicks = ticks;
+            }
+        }
+        if (_cachedAppearanceRegistry is { } hit &&
+            string.Equals(hit.InstallRoot, fullInstall, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(hit.CharactersDir, charsDir, StringComparison.OrdinalIgnoreCase) &&
+            hit.FileCount == count &&
+            hit.MaxWriteTicks == maxTicks)
+        {
+            return hit.Registry;
+        }
+        var scanned = SimsEngine.Content.ObjectRegistry.Scan(installRoot, charsDir);
+        _cachedAppearanceRegistry = (fullInstall, charsDir, count, maxTicks, scanned);
+        return scanned;
+    }
+
     public HouseholdAppearanceCatalog GetAppearanceCatalog(
         string installRoot,
         string gender,
@@ -854,7 +902,7 @@ public sealed class SimulationBridge : IDisposable
             try
             {
                 var (_, userDataPath) = SimulationHost.PrepareNeighborhood(installRoot, dataRoot, profileId, neighborhood);
-                var registry = SimsEngine.Content.ObjectRegistry.Scan(installRoot, Path.Combine(userDataPath, "Characters"));
+                var registry = GetOrScanAppearanceRegistry(installRoot, userDataPath);
                 var catalog = global::HouseholdAppearance.Catalog(installRoot, registry, gender, age, skin);
                 return new HouseholdAppearanceCatalog(
                     catalog.Gender,
@@ -964,7 +1012,7 @@ public sealed class SimulationBridge : IDisposable
             try
             {
                 var (_, userDataPath) = SimulationHost.PrepareNeighborhood(installRoot, dataRoot, profileId, neighborhood);
-                var registry = SimsEngine.Content.ObjectRegistry.Scan(installRoot, Path.Combine(userDataPath, "Characters"));
+                var registry = GetOrScanAppearanceRegistry(installRoot, userDataPath);
                 var preview = global::HouseholdAppearancePreview.Export(
                     Path.GetFullPath(previewSession),
                     installRoot,
@@ -1006,9 +1054,6 @@ public sealed class SimulationBridge : IDisposable
         OnEvent?.Invoke(message);
     }
 
-    /// <summary>
-    /// Deletes a session's content mount cleanly under a shared lock so concurrent teardown handlers do not race.
-    /// </summary>
     internal static void Discard(string mount)
     {
         lock (DiscardLock)
@@ -1032,10 +1077,6 @@ public sealed class SimulationBridge : IDisposable
     private static string NormalizePath(string path) =>
         Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
 
-    /// <summary>
-    /// Receives JSON lines written by the in-process server's <see cref="TextWriter"/> and decodes/forwards them
-    /// immediately (animation frames off the main thread when requested, all other events to <see cref="MainThreadDispatcher"/>).
-    /// </summary>
     private sealed class LineForwardingTextWriter : TextWriter
     {
         internal const string SizeLimitError = "Simulation message exceeds the protocol size limit";
@@ -1319,7 +1360,6 @@ public sealed class SimulationBridge : IDisposable
             }
             catch
             {
-                // Fall back to full path when link resolution fails.
             }
 
             return fullPath;

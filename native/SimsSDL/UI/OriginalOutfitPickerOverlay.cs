@@ -3,11 +3,6 @@ using SimsSDL;
 
 namespace SimsSDL.UI;
 
-/// <summary>
-/// Sims.exe cWinBuySkin (FUN_0050913d, STR# 220, 300x400) and cWinChangeClothes (FUN_005219e0, STR# 221, 300x300):
-/// 9-sliced GenDlg.bmp frame, centered title, DesignCharSkinsLeftBtn.bmp (300) / DesignCharSkinsRightBtn.bmp (301)
-/// cycle buttons flanking the 3D preview, and two bottom WinBtn.bmp buttons (Buy/OK and Cancel).
-/// </summary>
 public sealed class OriginalOutfitPickerOverlay
 {
     public readonly record struct DrawItem(OriginalGameplayOverlay.Image Image, CGRect Rect, Vector4 UV);
@@ -37,9 +32,9 @@ public sealed class OriginalOutfitPickerOverlay
         Control.Cancel
     ];
 
-    private static readonly (byte R, byte G, byte B) NormalTextColor = (195, 205, 205); // DAT_006f2a44 (004ff397.c:26-27, 69)
-    private static readonly (byte R, byte G, byte B) PressedTextColor = (0, 255, 255);  // DAT_006f2a4c (004ff397.c:30, 71)
-    private static readonly (byte R, byte G, byte B) HoverTextColor = (255, 255, 255);  // DAT_006f2a48 (004ff397.c:28-29, 72)
+    private static readonly (byte R, byte G, byte B) NormalTextColor = (195, 205, 205);
+    private static readonly (byte R, byte G, byte B) PressedTextColor = (0, 255, 255);
+    private static readonly (byte R, byte G, byte B) HoverTextColor = (255, 255, 255);
 
     private readonly SimsBitmapFont _titleFont;
     private readonly SimsBitmapFont _buttonFont;
@@ -88,8 +83,6 @@ public sealed class OriginalOutfitPickerOverlay
         Pet = pet;
         Names = names;
 
-        // Proportional .ffn sizing for the 300px GenDlg.bmp picker and 33px WinBtn.bmp buttons:
-        // variablesans_12.ffn (23px lineHeight / 13px cap) for title and variablesans_10.ffn (19px / 10px cap) for buttons.
         SimsBitmapFont loadedTitleFont;
         try
         {
@@ -113,7 +106,7 @@ public sealed class OriginalOutfitPickerOverlay
         _frameEdge = new CGSize(Math.Floor(_frame.Size.Width / 3.0), Math.Floor(_frame.Size.Height / 3.0));
         _button = Upload("UIGraphics/Shared/Sys/WinBtn.bmp", magenta: true);
 
-        // cWinTileBtn::OnPaint (005f730f.c:20): cap = ((sheetWidth / 4) - 1) / 2 (7px for 64x33 WinBtn.bmp).
+        // Calculates button end-cap width as ((frameWidth - 1) / 2) from a four-column sprite sheet.
         double rawButtonFrameWidth = Math.Max(4.0, Math.Floor(_button.Size.Width / 4.0));
         double capWidth = Math.Max(1.0, Math.Floor((rawButtonFrameWidth - 1.0) / 2.0));
         _buttonCapWidth = capWidth;
@@ -148,8 +141,8 @@ public sealed class OriginalOutfitPickerOverlay
             _pressedLabels[control] = OriginalGameplayOverlay.Text(value, _buttonFont, device, PressedTextColor);
         }
 
-        // SMCtrlMgr::CreateButton (005e7b7d.c:33-35) & cWinTileBtn::SetText (005f76cc.c:23,42):
-        // minimum width 100px, widened with side cap padding when localized captions exceed 100px.
+        // Enforces a minimum button width of 100 pixels, adding side cap padding when localized text
+        // exceeds that width.
         double minPadding = Math.Max(16.0, (capWidth - 10.0) * 2.0);
         double buyLabelWidth = _normalLabels.TryGetValue(Control.Buy, out var buyImg) ? buyImg.Size.Width : 0.0;
         double cancelLabelWidth = _normalLabels.TryGetValue(Control.Cancel, out var cancelImg) ? cancelImg.Size.Width : 0.0;
@@ -164,8 +157,8 @@ public sealed class OriginalOutfitPickerOverlay
 
     private CGRect Panel(CGSize canvas)
     {
-        // FUN_00441311 + FUN_0050913d (lines 98-105) / FUN_005219e0 (lines 95-102):
-        // initial 300x400 (!pet) or 300x300 (pet), widened to requiredInner + 10 if title + 5 or buyW + cancelW + 15 exceeds 300.
+        // Dialog base dimensions are 300x400 (or 300x300 for pets), widening when title or button widths
+        // exceed 300 pixels.
         double minButtonsWidth = _buyButtonSize.Width + _cancelButtonSize.Width + 15.0;
         double minTitleWidth = _title.Size.Width + 5.0;
         double requiredInner = Math.Max(minTitleWidth, minButtonsWidth);
@@ -174,11 +167,6 @@ public sealed class OriginalOutfitPickerOverlay
         return new CGRect(Math.Floor((canvas.Width - width) / 2.0), Math.Floor((canvas.Height - height) / 2.0), width, height);
     }
 
-    /// <summary>
-    /// The area the 3D preview is drawn into, in logical points (FUN_0050913d lines 254-260 / FUN_005219e0 lines 253-260).
-    /// Note that in both FUN_0050913d and FUN_005219e0, m_pBackBmp (+0x130 / +0x12c) is still NULL during child control
-    /// layout and only loaded at the end of Init(), so the 1/3 GenDlg border offset is 0 throughout layout.
-    /// </summary>
     public CGRect PreviewRect(CGSize canvas)
     {
         var area = Panel(canvas);
@@ -371,8 +359,6 @@ public sealed class OriginalOutfitPickerOverlay
             items.Add(new DrawItem(sheet, box, new Vector4(uvX, 0f, 0.25f, 1f)));
         }
 
-        // cWinTileBtn::OnPaint (005f730f.c:20-58) & DrawCaption (005f74a2.c:21-75):
-        // 3-slice WinBtn.bmp (left cap, stretched middle, right cap) across 4 horizontal frames (0, 0.25, 0.50, 0.75).
         const float uFrame = 0.25f;
         float uCap = (float)(_buttonCapWidth / _button.Size.Width);
         float uMid = Math.Max(0f, uFrame - uCap * 2f);
@@ -411,7 +397,6 @@ public sealed class OriginalOutfitPickerOverlay
 
             if (labelImage is { } label)
             {
-                // cWinTileBtn (005f7201.c:18-26, 005f74a2.c:28-31): (+2, +2) shift only in state 1 (pressed).
                 double shift = isPressed ? 2.0 : 0.0;
                 items.Add(new DrawItem(
                     label,

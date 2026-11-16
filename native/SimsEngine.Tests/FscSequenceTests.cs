@@ -3,7 +3,7 @@ using SimsEngine.Formats;
 
 namespace SimsEngine.Tests;
 
-/// <summary>The FSC ambience format: header columns, note fields, jump points and skips.</summary>
+/// <summary>The FSC ambience format: header columns, note fields, jump points, and skips.</summary>
 public class FscSequenceTests
 {
     private const string Fixture =

@@ -39,7 +39,6 @@ public sealed class PersistWriterTests
         writer.Int32(0x01020304);
 
         var bytes = writer.ToArray();
-        // The coding flag byte comes first, then the two values.
         Assert.Equal([0x12, 0x34], bytes[13..15]);
         Assert.Equal([1, 2, 3, 4], bytes[15..19]);
         var reader = Reader(bytes);

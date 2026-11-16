@@ -304,4 +304,22 @@ public sealed class InteractionTestEvaluatorTests
         Assert.Equal(SimulationError.TreeBreakEncountered, error.Error);
         Assert.Empty(world.ThreadErrors);
     }
+
+    [Fact]
+    public void StepLimitInGuardRejectsOnlyThatCandidateAndDoesNotCrashSimThread()
+    {
+        var tree = Tree((2, 0, 0, PrimitiveTestWorld.Expression(0, 0, (byte)ExpressionOperator.EqualTo)));
+        var (world, person, target, action) = Lot(guard: 4107, scope: new TreeTable((4107, tree)));
+
+        InteractionTestEvaluator.Evaluate(world, person, [action], autonomy: false);
+
+        Assert.False(Passed(action));
+        Assert.NotEqual(0, action.Flags & InteractionTestEvaluator.Evaluated);
+        var error = Assert.Single(world.InteractionGuardErrors);
+        Assert.Equal(person.Id, error.PersonId);
+        Assert.Equal(target.Id, error.ObjectId);
+        Assert.Equal(4107, error.GuardTree);
+        Assert.Contains("StepLimit", error.Message);
+        Assert.Empty(world.ThreadErrors);
+    }
 }

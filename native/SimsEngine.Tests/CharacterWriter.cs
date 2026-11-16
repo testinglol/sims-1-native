@@ -4,14 +4,15 @@ using System.Text;
 
 namespace SimsEngine.Tests;
 
-/// <summary>Writes character and mesh content in the text form (CMX, SKN: one record per line, strings as lines) or the binary
-/// form (BCF, BMF: little-endian values and length-prefixed strings), so one test model can be checked in both forms.</summary>
+/// <summary>Writes character and mesh content in either text format (CMX and SKN using line-delimited
+/// records) or binary format (BCF and BMF using little-endian values and length-prefixed strings).</summary>
 internal sealed class CharacterWriter(bool text)
 {
     private readonly List<byte> _bytes = [];
     private readonly StringBuilder _text = new();
 
-    /// <summary>The header of a text CMX file: a comment line and the version line.</summary>
+    /// <summary>Writes the header of a text CMX file, consisting of a comment line followed by the version
+    /// line.</summary>
     public CharacterWriter CmxHeader()
     {
         if (text) _text.Append("// Character File. Copyright 1997, Maxis Inc.\r\nversion 300\r\n");
@@ -25,7 +26,6 @@ internal sealed class CharacterWriter(bool text)
         return this;
     }
 
-    /// <summary>Several integers: one line of text, or consecutive values in binary.</summary>
     public CharacterWriter Ints(params int[] values)
     {
         if (text) _text.Append(string.Join(' ', values.Select(value => value.ToString(CultureInfo.InvariantCulture)))).Append("\r\n");
@@ -40,7 +40,6 @@ internal sealed class CharacterWriter(bool text)
         return this;
     }
 
-    /// <summary>Several floats: one line of text, or consecutive values in binary.</summary>
     public CharacterWriter Floats(params float[] values)
     {
         if (text) _text.Append(string.Join(' ', values.Select(value => value.ToString("R", CultureInfo.InvariantCulture)))).Append("\r\n");
@@ -48,7 +47,8 @@ internal sealed class CharacterWriter(bool text)
         return this;
     }
 
-    /// <summary>A string: a line of text, or a one-byte length and the bytes (a 0xFF length is followed by a u32 length).</summary>
+    /// <summary>Writes a string formatted as a text line, or as binary bytes prefixed by a 1-byte length
+    /// where 0xFF indicates an extended 32-bit unsigned length.</summary>
     public CharacterWriter Str(string value)
     {
         if (text)
@@ -67,7 +67,6 @@ internal sealed class CharacterWriter(bool text)
         return this;
     }
 
-    /// <summary>Raw bytes in binary form (for hand-made damage); text form appends them as Latin-1.</summary>
     public CharacterWriter Raw(params byte[] bytes)
     {
         if (text) _text.Append(Encoding.Latin1.GetString(bytes));
@@ -77,7 +76,6 @@ internal sealed class CharacterWriter(bool text)
 
     public byte[] ToArray() => text ? Encoding.Latin1.GetBytes(_text.ToString()) : [.. _bytes];
 
-    /// <summary>A binary u32 at the given position, for building a count the test chooses.</summary>
     public static byte[] U32(uint value)
     {
         var bytes = new byte[4];

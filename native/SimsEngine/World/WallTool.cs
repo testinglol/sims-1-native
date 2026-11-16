@@ -3,44 +3,29 @@ using SimsEngine.Simulation;
 
 namespace SimsEngine.World;
 
-/// <summary>The build-mode wall tool's committed result for a straight drag (cNewWallTool and its planner, FUN_00493f54).
-/// The planner edits a working copy of the wall grid and the mouse-up commit (FUN_0049401b) copies the records that
-/// differ and charges the sum to expense category 7 (FUN_00492bc4). Each unit step follows FUN_004951a5 (add) and
-/// FUN_004960a5 (add or erase); a step that fails leaves its edge unchanged and records the first error code
-/// (0xb blocked by an object, 0x11 uneven terrain, 0xb on a Sim at an endpoint).
-/// <para>Add: an existing segment is free; a missing one costs the style's price (0x6e57e8 table) and must fit the budget
-/// together with the pending amount (FUN_00492b81, which sets +0xe060 and refuses the step otherwise). Unless the style is
-/// a fence or balustrade (2, 12, 13, 14) the tile and its far neighbour must have flat terrain at the drag's start
-/// height (FUN_004950b8); no non-Sim object on either side may forbid a wall there (WallPlacementFlags 0x100-0x800
-/// rotated by the object's direction); a diagonal needs every object on its tile to be type 9. A tile flagged 0x20 in Arry 8 is refused without an error code, and one without the buildable bit 0 (Arry 8 / 108) refuses a non-fence wall with error 0x20. With a pool grid (Arry 9) a cardinal edge between two pool tiles and a diagonal on a pool tile are refused with error 0x1d.</para>
-/// <para>Erase: the refund is trunc(object refunds + 0.8 * price of the segment's style) (float constant 0x6681ec). A
-/// segment whose style is an opening style (3, 5, 6, 15, 22, 23) first sells the first door or window (type 8) of the owner
-/// tile that names the edge, with its whole group, for trunc(0.8 * value + 0.5) (FUN_00497140, constant 0x666578). Drawing a wall over an
-/// existing opening-style segment does that sale (FUN_004960a5) and resets the segment's style to 1; over any other existing segment it does nothing.</para>
-/// <para>Multi-segment drags are committed through <c>WALL_STROKE</c>. The lot file keeps one style byte for a tile's second edge and its diagonal, so
-/// a tile never holds both.</para></summary>
+/// <summary>Manages build-mode wall placement, validation, and erasure across cardinal and diagonal
+/// segments. Enforces terrain flatness, object placement flags, buildability flags from Arry 8/108, pool
+/// exclusions from Arry 9, and handles opening sales and partial refunds when replacing or demolishing
+/// walls.</summary>
 public sealed class WallTool(SimulationWorld world, LotWalls walls, LotTerrain terrain, WallCatalog catalog, IFamilyBudget budget, LotPool? pool = null, LotTiles? tiles = null, LotWater? water = null, LotFloors? floors = null)
 {
     public const int ExpenseCategory = 7;
-    private const double RefundFactor = 0.800000011920929; // the float constant at 0x6681ec
+    private const double RefundFactor = 0.800000011920929;
     private static readonly int[] OpeningStyles = [3, 5, 6, 15, 22, 23];
     private static readonly int[] FenceStyles = [2, 12, 13, 14];
     private static readonly (uint Local, ushort Flag)[] ClearFlags = [(1, 0x800), (8, 0x400), (2, 0x100), (4, 0x200)];
     private static readonly (uint Local, ushort Flag)[] OpeningFlags = [(1, 8), (8, 4), (2, 1), (4, 2)];
 
-    /// <summary>Planner +0xe028: the amount a commit will charge (negative is a refund).</summary>
     public int Pending { get; private set; }
 
-    /// <summary>A step was refused for lack of funds (tool +0xe060).</summary>
     public bool InsufficientFunds { get; private set; }
 
-    /// <summary>How many steps failed and the first error code (planner +0xe064; 0 when none).</summary>
     public int Refused { get; private set; }
 
     public int Error { get; private set; }
 
-    /// <summary>Draws or erases the straight (axis-aligned or 45 degree) line between two lattice corners and returns how
-    /// many segments changed. Throws <see cref="ArgumentException"/> for a drag the original refuses outright.</summary>
+    /// <summary>Draws or erases a straight axis-aligned or 45-degree line of wall segments between two
+    /// lattice corners. Returns the number of modified segments.</summary>
     public int Line(int fromX, int fromY, int toX, int toY, int style, int pattern, bool erase)
     {
         Validate(fromX, fromY);
@@ -75,8 +60,8 @@ public sealed class WallTool(SimulationWorld world, LotWalls walls, LotTerrain t
         return applied;
     }
 
-    /// <summary>Draws the four sides selected by the SDL wall rectangle gesture. The original wall editor's
-    /// rectangular gesture is an outline; it reuses the same per-edge placement, refusal, and cost rules as a line.</summary>
+    /// <summary>Draws a rectangular wall outline using the same per-edge placement, refusal, and cost rules
+    /// as line drawing.</summary>
     public int Rectangle(int x, int y, int width, int height, int style, int pattern)
     {
         if (width <= 0 || height <= 0 || width > 128 || height > 128)
@@ -105,7 +90,7 @@ public sealed class WallTool(SimulationWorld world, LotWalls walls, LotTerrain t
         var diagonal = bit is 0x10 or 0x20;
         if ((record[0] & bit) != 0)
         {
-            // FUN_004960a5: a wall drawn over an existing opening-style segment sells the door or window on it and resets its style to 1.
+            // Overwriting an opening style sells doors/windows and resets style to 1.
             if (diagonal || !OpeningStyles.Contains(record[bit == 1 ? 2 : 3])) return false;
             var sold = SellOpening(x, y, bit);
             if (sold == 0) return false;
@@ -146,9 +131,7 @@ public sealed class WallTool(SimulationWorld world, LotWalls walls, LotTerrain t
         record[0] |= (byte)bit;
         if (diagonal)
         {
-            // FUN_004960a5 paints the diagonal's default side: 0x10 side 4 is byte 7, 0x20 side 1 is byte 6.
-            // FUN_004960a5 also zeroes the first style word and the first pattern slot (file bytes 2 and 4); FUN_00493b0f writes
-            // the pattern to the default side only, so the other side keeps whatever the record held.
+            // Zero cardinal style and pattern slots when initializing a diagonal wall.
             record[2] = 0;
             record[4] = 0;
             record[3] = (byte)style;
@@ -158,7 +141,7 @@ public sealed class WallTool(SimulationWorld world, LotWalls walls, LotTerrain t
         {
             record[bit == 1 ? 2 : 3] = (byte)style;
             record[bit == 1 ? 4 : 5] = (byte)pattern;
-            // FUN_00479954 mirrors a cardinal edge on the neighbour across it (bit 4 or 8), which keeps the other side's pattern.
+            // Mirror the cardinal edge on the adjacent tile using opposite bit 4 or 8.
             walls[bit == 1 ? x - 1 : x, bit == 1 ? y : y - 1][0] |= (byte)(bit == 1 ? 4 : 8);
         }
         Pending += cost;
@@ -172,8 +155,7 @@ public sealed class WallTool(SimulationWorld world, LotWalls walls, LotTerrain t
         var diagonal = bit is 0x10 or 0x20;
         if (!diagonal)
         {
-            // FUN_004951a5 lines 693 to 786: doors/windows on the owner tile must pass CanSellObject (error 0x23), and
-            // non-portal objects on either side of the edge may not require the wall via WallPlacementFlags (error 0xb).
+            // Existing doors and windows must be sellable before modifying the wall edge.
             if (world.ObjectsAtTile(x, y, walls.Level).Any(item =>
                     item is not XPerson && item.Definition[(int)ObjdField.Type] == 8 && !world.CanSellObject(item)))
                 return Fail(0x23);
@@ -186,8 +168,7 @@ public sealed class WallTool(SimulationWorld world, LotWalls walls, LotTerrain t
         var refund = unchecked((int)(objectRefund + catalog.Price(style) * RefundFactor));
         if (diagonal)
         {
-            // FUN_004960a5 lines 175 to 193: when erasing a diagonal wall on a split-floor tile (0xff), restore the
-            // flat floor pattern from the diagonal floor slot stored in the wall record.
+            // Erasing a diagonal wall on a split floor (0xFF) restores the flat pattern.
             var targetFloors = overrideFloors ?? floors;
             if (targetFloors is not null && targetFloors[x, y] == byte.MaxValue)
                 targetFloors[x, y] = record[4] != 0 ? record[4] : record[2];
@@ -195,7 +176,7 @@ public sealed class WallTool(SimulationWorld world, LotWalls walls, LotTerrain t
         record[0] &= (byte)~bit;
         if (!diagonal)
         {
-            // FUN_00479954: the neighbour loses the mirror bit and the pattern of its side; the owner keeps its stale style and pattern.
+            // Clear the neighbor's mirrored wall bit when erasing a cardinal edge.
             var neighbour = walls[bit == 1 ? x - 1 : x, bit == 1 ? y : y - 1];
             neighbour[0] &= (byte)(bit == 1 ? ~4 : ~8);
             neighbour[bit == 1 ? 7 : 6] = 0;
@@ -204,8 +185,8 @@ public sealed class WallTool(SimulationWorld world, LotWalls walls, LotTerrain t
         return true;
     }
 
-    /// <summary>FUN_00497140: sells the first door or window (type 8) on the owner tile whose opening flags name the edge,
-    /// with its whole group, and returns trunc(0.8 * value + 0.5); 0 when there is none.</summary>
+    /// <summary>Sells the door or window occupying the specified wall edge, along with its multi-tile
+    /// group, returning 80% depreciated value rounded to the nearest integer.</summary>
     private int SellOpening(int x, int y, int bit)
     {
         var item = world.ObjectsAtTile(x, y, walls.Level).FirstOrDefault(candidate => candidate is not XPerson &&
@@ -216,8 +197,6 @@ public sealed class WallTool(SimulationWorld world, LotWalls walls, LotTerrain t
         return refund;
     }
 
-    /// <summary>FUN_00496e92 lines 80 to 128: checks both tiles adjacent to the segment for a standing Sim (type 2) or
-    /// an object (or multi-tile group member) currently in use (UseCount &gt; 0).</summary>
     private bool SegmentBlockedBySimOrInUseObject(int x, int y, int bit, bool diagonal)
     {
         var candidates = diagonal
@@ -247,7 +226,6 @@ public sealed class WallTool(SimulationWorld world, LotWalls walls, LotTerrain t
         return false;
     }
 
-    /// <summary>FUN_00492bc4: charges the pending amount and clears it.</summary>
     public int Commit()
     {
         var amount = Pending;
@@ -256,11 +234,8 @@ public sealed class WallTool(SimulationWorld world, LotWalls walls, LotTerrain t
         return amount;
     }
 
-    /// <summary>FUN_004951a5's neighbour test for a new segment: a cardinal edge may not run into a diagonal wall of the
-    /// tiles that touch its ends (bit 1: 0x10 at (x-1,y-1) or (x,y+1), 0x20 at (x,y-1) or (x-1,y+1); bit 2: 0x10 at
-    /// (x-1,y-1) or (x+1,y), 0x20 at (x-1,y) or (x+1,y-1)), and a diagonal may not meet a cardinal edge on its far corners
-    /// (0x10: bits 4 or 8 at (x-1,y-1), bits 1 or 2 at (x+1,y+1); 0x20: bits 2 or 4 at (x-1,y+1), bits 1 or 8 at (x+1,y-1)).
-    /// Tiles outside 1..62 are not looked at. The refusal sets no error code.</summary>
+    /// <summary>Checks for invalid corner intersections between cardinal walls and adjacent diagonal walls
+    /// within lot bounds.</summary>
     private bool DiagonalConflict(int x, int y, int bit)
     {
         bool Has(int tx, int ty, int mask) => tx is >= 1 and <= LotWalls.Size - 2 && ty is >= 1 and <= LotWalls.Size - 2 && (walls[tx, ty][0] & mask) != 0;
@@ -274,9 +249,8 @@ public sealed class WallTool(SimulationWorld world, LotWalls walls, LotTerrain t
         };
     }
 
-    /// <summary>FUN_0053c06c on the tile's record: a diagonal may not join a tile that holds any other wall bit (a mirror
-    /// bit 4 or 8 included), and a cardinal edge may not run beside a tile across it that holds a diagonal (bit 1: the
-    /// tile at x - 1, bit 2: y - 1). The refusal sets no error code.</summary>
+    /// <summary>Validates that diagonal walls do not share tiles with existing cardinal or mirror wall
+    /// segments, and that cardinal edges do not border adjacent diagonal wall tiles.</summary>
     private bool TileTestFails(int x, int y, int bit)
     {
         if (bit is 0x10 or 0x20) return (walls[x, y][0] & 0xf) != 0;
@@ -284,8 +258,9 @@ public sealed class WallTool(SimulationWorld world, LotWalls walls, LotTerrain t
         return (walls[nx, ny][0] & 0x30) != 0;
     }
 
-    /// <summary>FUN_004951a5's tile flag test (error 0x20): the owner tile and, for a cardinal edge, the tile across it
-    /// both lack the buildable bit 0 (a diagonal looks at its own tile only). Fences skip it (FUN_00492b26 is 1).</summary>
+    /// <summary>Checks whether tiles lack the buildable flag in the terrain grid. Non-fence walls require
+    /// buildable flags on both sides of a cardinal edge, whereas diagonal walls inspect only the host tile.
+    /// </summary>
     private bool Unbuildable(int x, int y, int bit, bool diagonal)
     {
         if (tiles!.Buildable(x, y, walls.Level)) return false;
@@ -294,7 +269,8 @@ public sealed class WallTool(SimulationWorld world, LotWalls walls, LotTerrain t
         return !tiles.Buildable(nx, ny, walls.Level);
     }
 
-    /// <summary>FUN_004951a5's pool refusal (error 0x1d): a cardinal edge with pool tiles on both sides, or a diagonal on a pool tile.</summary>
+    /// <summary>Determines whether pool placement blocks the wall, disallowing cardinal edges between two
+    /// pool tiles and diagonal walls directly on pool tiles.</summary>
     private bool PoolBlocks(int x, int y, int bit, bool diagonal)
     {
         if (!pool!.IsPool(x, y, walls.Level)) return false;
@@ -303,7 +279,8 @@ public sealed class WallTool(SimulationWorld world, LotWalls walls, LotTerrain t
         return pool.IsPool(nx, ny, walls.Level);
     }
 
-    /// <summary>FUN_004951a5's pond/water refusal (error 0x1d): a cardinal edge with water tiles on both sides, or a diagonal on a water tile.</summary>
+    /// <summary>Determines whether pond terrain blocks the wall, disallowing cardinal edges between two
+    /// water tiles and diagonal walls directly on water tiles.</summary>
     private bool WaterBlocks(int x, int y, int bit, bool diagonal)
     {
         if (!water!.IsWater(x, y, walls.Level)) return false;
@@ -327,8 +304,8 @@ public sealed class WallTool(SimulationWorld world, LotWalls walls, LotTerrain t
             throw new ArgumentException("A Sim is standing on the wall's end tile");
     }
 
-    /// <summary>Non-Sim objects on the edge's two tiles whose flags (rotated by their direction) name that edge: the
-    /// owner tile sees it as <paramref name="bit"/>, the neighbour across it as the opposite bit (4 or 8).</summary>
+    /// <summary>Enumerates objects on either side of a wall edge whose placement flags match that boundary,
+    /// accounting for object rotation.</summary>
     private IEnumerable<XObject> EdgeObjects(int x, int y, int bit, (uint Local, ushort Flag)[] table)
     {
         var (nx, ny, opposite) = bit == 1 ? (x - 1, y, 4u) : (x, y - 1, 8u);

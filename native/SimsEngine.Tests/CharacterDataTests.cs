@@ -3,22 +3,16 @@ using SimsEngine.Formats;
 
 namespace SimsEngine.Tests;
 
-/// <summary>CMX and BCF content as Sims.exe's loader reads it (FUN_0059e5d1, FUN_0059ef12 and the readers they call), on
-/// hand-built files in both forms.</summary>
 public class CharacterDataTests
 {
-    /// <summary>One skeleton with a root and a pelvis, one appearance with a binding, and one animation with two motions.</summary>
     private static byte[] Sample(bool text)
     {
         var writer = new CharacterWriter(text).CmxHeader();
-        // Skeletons: one, "dog".
         writer.Int(1).Str("dog").Int(2);
         writer.Str("ROOT").Str("NULL").Int(0).Floats(0, 0, 0, 0, 0, 0, 1).Ints(1, 2, 3).Floats(0.5f, -1f);
         writer.Str("PELVIS").Str("ROOT").Int(1).Int(1).Str("Weight").Str("2")
             .Floats(1, 2, 3, 0.1f, 0.2f, 0.3f, 0.4f).Ints(0, 0, 0).Floats(0, 0);
-        // Appearances: one, "suit", with one binding.
         writer.Int(1).Str("suit").Ints(7, 8).Int(1).Str("PELVIS").Str("xskin-suit-PELVIS-BODY").Ints(0, 0);
-        // Animations: one, "a2a-wave", with a motion on ROOT that has a property and an event, and one plain motion.
         writer.Int(1).Str("a2a-wave").Str("xskill-a2a-wave").Floats(3817f, 0f).Int(232).Int(2).Int(3);
         writer.Int(2);
         writer.Str("ROOT").Int(116).Floats(3817f).Ints(1, 1, 0, 0).Int(1).Int(1).Str("Name").Str("v")
@@ -52,7 +46,7 @@ public class CharacterDataTests
         Assert.Equal("ROOT", pelvis.Parent);
         Assert.Equal([new PropertyPair("Weight", "2")], pelvis.Properties);
         Assert.Equal(new Vector3(1, 2, 3), pelvis.Translation);
-        // The rotation is read X, Y, Z, W.
+        // Bone rotations in skeleton chunks are parsed in X, Y, Z, W component order.
         Assert.Equal(new Quaternion(0.1f, 0.2f, 0.3f, 0.4f), pelvis.Rotation);
 
         var appearance = Assert.Single(file.Appearances);

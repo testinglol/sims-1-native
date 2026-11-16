@@ -139,7 +139,6 @@ public sealed class Wave12DaemonSaveAndUndoTests
             var catResp = ResponseFor(DrainEvents(outputStream, writer), "cat1");
             Assert.True(catResp.GetProperty("ok").GetBoolean());
 
-            // Create two bin families, then delete both via semicolon-separated neighborhood edit in lotless mode.
             Assert.True(server.Handle(JsonSerializer.Serialize(new
             {
                 id = "binA",
@@ -186,7 +185,6 @@ public sealed class Wave12DaemonSaveAndUndoTests
                 Assert.Equal(1, Neighborhoods.Current);
             }
 
-            // Vacant-lot CAS move-in directly from lotless mode into House 2.
             Assert.True(server.Handle(JsonSerializer.Serialize(new
             {
                 id = "casMoveIn",
@@ -207,7 +205,6 @@ public sealed class Wave12DaemonSaveAndUndoTests
             Assert.Contains(casEvents, e => e.TryGetProperty("type", out var t) && t.GetString() == "frame");
             Assert.Contains(casEvents, e => e.TryGetProperty("type", out var t) && t.GetString() == "state");
 
-            // Close lot with save: true -> returns to lotless state and persists House02.iff.
             Assert.True(server.Handle("""{"id":"close1","op":"closeLot","save":true}"""));
             var closeEvents = DrainEvents(outputStream, writer);
             var closeResp = ResponseFor(closeEvents, "close1");
@@ -217,7 +214,6 @@ public sealed class Wave12DaemonSaveAndUndoTests
             var closedState = closeEvents.Last(e => e.TryGetProperty("type", out var t) && t.GetString() == "state").GetProperty("state");
             Assert.Equal(0, closedState.GetProperty("house").GetInt32());
 
-            // Re-open lot 2 via openLot.
             Assert.True(server.Handle("""{"id":"open1","op":"openLot","house":2}"""));
             var openEvents = DrainEvents(outputStream, writer);
             var openResp = ResponseFor(openEvents, "open1");
@@ -266,7 +262,6 @@ public sealed class Wave12DaemonSaveAndUndoTests
             var travellerGuid = traveller!.TypeRecord!.Key;
             var familyNumber = traveller[PersonData.FamilyNumber];
 
-            // Mutate home lot state before leaving so we can verify departure persistence & return-home preservation.
             traveller[PersonData.CookingHouseBrokenSkill] = 777;
             homeWorld.Clock.Restore(9, 45, 0);
             var beforeLeaveBytes = File.ReadAllBytes(house05Path);
@@ -276,7 +271,6 @@ public sealed class Wave12DaemonSaveAndUndoTests
             server.BatchRun(1);
             DrainEvents(outputStream, writer);
 
-            // Departure persisted House05.iff + .runtime.json (004fc63a.c:14).
             Assert.True(File.Exists(house05Path + ".runtime.json"));
             var persistedHomeBytes = File.ReadAllBytes(house05Path);
             Assert.False(beforeLeaveBytes.SequenceEqual(persistedHomeBytes));
@@ -285,7 +279,6 @@ public sealed class Wave12DaemonSaveAndUndoTests
             Assert.NotSame(homeWorld, vacWorld);
             vacWorld.Clock.Restore(16, 20, 0);
 
-            // Saving on Vacation lot 40 with an active family must write House40.iff (004f277c.c:22-25) and SuspendedHome.
             Assert.True(server.Handle("""{"id":"saveVac","op":"save","slot":"vac-slot","lot":true}"""));
             var saveResp = ResponseFor(DrainEvents(outputStream, writer), "saveVac");
             Assert.True(saveResp.GetProperty("ok").GetBoolean());
@@ -300,7 +293,6 @@ public sealed class Wave12DaemonSaveAndUndoTests
             var suspendedHome = envelopeDoc.RootElement.GetProperty("suspendedHome");
             Assert.Equal(5, suspendedHome.GetProperty("homeHouse").GetInt32());
 
-            // Close lot, then reload "vac-slot" from lotless mode and verify Vacation lot + SuspendedHome return-home work!
             Assert.True(server.Handle("""{"id":"closeVac","op":"closeLot","save":false}"""));
             DrainEvents(outputStream, writer);
             Assert.Null(server.World);
@@ -314,7 +306,6 @@ public sealed class Wave12DaemonSaveAndUndoTests
             Assert.Equal(16, server.World!.Clock.Hour);
             Assert.Equal(20, server.World.Clock.Minute);
 
-            // Return home from the reloaded Vacation save -> must return to House 5 with suspended home state!
             server.World.PendingLotSwitch = new SimulationWorld.LotSwitchRequest(-1, travellerGuid, familyNumber);
             server.BatchRun(1);
             var returnEvents = DrainEvents(outputStream, writer);
@@ -383,7 +374,6 @@ public sealed class Wave12DaemonSaveAndUndoTests
             var budget = Assert.IsType<FamilyBudget>(world.FamilyBudget);
             budget.ActiveFamily = budget.ActiveFamily!.WithBudget(50_000);
 
-            // Locate a clear, unfloored, flat 5x5 outdoor grass patch inside House 05 for Part B/C.
             var lotIff = IffFile.Open(Path.Combine(userData, "Houses", "House05.iff"));
             var initTerrain = LotTerrain.Read(lotIff);
             var initWalls = LotWalls.Read(lotIff, 1);
@@ -417,7 +407,6 @@ public sealed class Wave12DaemonSaveAndUndoTests
                                                       c.Definition[ObjdField.SubIndex] == ushort.MaxValue)
                     : null;
 
-            // Part A: Multi-tile Portal Door (BuildModeType == 1, MasterId != 0) Sell -> Undo -> Redo -> Buy -> Undo -> Redo -> Undo.
             var doorCandidates = world.WalkOrder.Where(o =>
             {
                 if (o.RuntimeClass != ObjectClass.Portal || o.MultiTileMasterId != 0 ||
@@ -491,7 +480,6 @@ public sealed class Wave12DaemonSaveAndUndoTests
             Assert.True(ResponseFor(DrainEvents(outputStream, writer), "redoDoorBuy").GetProperty("result").GetProperty("applied").GetBoolean());
             Assert.Contains(world.WalkOrder, o => o.TypeRecord?.Key == doorLeadTileGuid && o.Position == doorOrigPos);
 
-            // Part B: Outdoor Build-mode plant (BuildModeType == 4, MasterId == 0) Buy -> Move -> Sell -> Undo x3 -> Redo x3.
             var plantCandidates = reg.Entries
                 .Where(e => e.Definition[ObjdField.Disabled] == 0 &&
                             e.Definition[ObjdField.RoomSort] == 0 &&
@@ -530,7 +518,6 @@ public sealed class Wave12DaemonSaveAndUndoTests
             Assert.True(plantId > 0);
             Assert.True(budgetAfterBuyPlant < budgetBeforePlant);
 
-            // Move the plant 1 tile right.
             Assert.True(server.Handle(JsonSerializer.Serialize(new
             {
                 id = "movePlant",
@@ -545,7 +532,6 @@ public sealed class Wave12DaemonSaveAndUndoTests
             Assert.True(movePlantResp.GetProperty("ok").GetBoolean(), movePlantResp.ToString());
             Assert.Equal((wx + 2) * 16 + 8, world.ObjectById(plantId)!.Position.X);
 
-            // Sell the plant.
             Assert.True(server.Handle(JsonSerializer.Serialize(new
             {
                 id = "sellPlant",
@@ -557,7 +543,6 @@ public sealed class Wave12DaemonSaveAndUndoTests
             var budgetAfterSellPlant = sellPlantResp.GetProperty("result").GetProperty("budget").GetInt32();
             Assert.Null(world.ObjectById(plantId));
 
-            // Undo Sell -> plant is restored at moved tile (wx+2, wy+1) and budget matches budgetAfterBuyPlant!
             Assert.True(server.Handle("""{"id":"uSell","op":"undo"}"""));
             var uSellResp = ResponseFor(DrainEvents(outputStream, writer), "uSell");
             Assert.True(uSellResp.GetProperty("ok").GetBoolean(), uSellResp.ToString());
@@ -567,21 +552,18 @@ public sealed class Wave12DaemonSaveAndUndoTests
                 o.TypeRecord?.Key == unchecked((int)plantGuid) && o.Position.X == (wx + 2) * 16 + 8 && o.Position.Y == (wy + 1) * 16 + 8);
             Assert.NotNull(restoredPlant);
 
-            // Undo Move -> plant moves back to (wx+1, wy+1)!
             Assert.True(server.Handle("""{"id":"uMove","op":"undo"}"""));
             var uMoveResp = ResponseFor(DrainEvents(outputStream, writer), "uMove");
             Assert.True(uMoveResp.GetProperty("ok").GetBoolean(), uMoveResp.ToString());
             Assert.True(uMoveResp.GetProperty("result").GetProperty("applied").GetBoolean());
             Assert.Equal((wx + 1) * 16 + 8, restoredPlant!.Position.X);
 
-            // Undo Buy -> plant removed, budget restored to budgetBeforePlant!
             Assert.True(server.Handle("""{"id":"uBuy","op":"undo"}"""));
             var uBuyResp = ResponseFor(DrainEvents(outputStream, writer), "uBuy");
             Assert.True(uBuyResp.GetProperty("ok").GetBoolean(), uBuyResp.ToString());
             Assert.Equal(budgetBeforePlant, uBuyResp.GetProperty("result").GetProperty("budget").GetInt32());
             Assert.Null(world.ObjectById(restoredPlant.Id));
 
-            // Redo Buy -> Redo Move -> Redo Sell!
             Assert.True(server.Handle("""{"id":"rBuy","op":"redo"}"""));
             Assert.True(ResponseFor(DrainEvents(outputStream, writer), "rBuy").GetProperty("result").GetProperty("applied").GetBoolean());
             Assert.True(server.Handle("""{"id":"rMove","op":"redo"}"""));
@@ -591,7 +573,6 @@ public sealed class Wave12DaemonSaveAndUndoTests
             Assert.True(rSellResp.GetProperty("result").GetProperty("applied").GetBoolean());
             Assert.Equal(budgetAfterSellPlant, rSellResp.GetProperty("result").GetProperty("budget").GetInt32());
 
-            // Part C: Test terrain strokeId coalescing: two consecutive TERRAIN_RAISE batches with same strokeId coalesce into 1 undo entry.
             var budgetBeforeTerrain = budget.ReadFamilyBudget();
             Assert.True(server.Handle(JsonSerializer.Serialize(new
             {
@@ -613,13 +594,11 @@ public sealed class Wave12DaemonSaveAndUndoTests
             var ter2Resp = ResponseFor(DrainEvents(outputStream, writer), "ter2");
             Assert.True(ter2Resp.GetProperty("ok").GetBoolean());
 
-            // A single undo reverts BOTH terrain raises!
             Assert.True(server.Handle("""{"id":"uTer","op":"undo"}"""));
             var uTerResp = ResponseFor(DrainEvents(outputStream, writer), "uTer");
             Assert.True(uTerResp.GetProperty("result").GetProperty("applied").GetBoolean());
             Assert.Equal(budgetBeforeTerrain, uTerResp.GetProperty("result").GetProperty("budget").GetInt32());
 
-            // Buying a Buy-mode object (buildMode == 0) clears undoStack and redoStack.
             var buyCandidates = reg.Entries
                 .Where(e => e.Definition[ObjdField.Disabled] == 0 &&
                             e.Definition[ObjdField.RoomSort] != 0 &&

@@ -2,9 +2,6 @@ using System.IO.Compression;
 
 namespace SimsSDL.Core;
 
-/// <summary>
-/// Self-contained PNG decoder (all colour types, bit depths, and Adam7 interlacing) yielding straight-alpha top-down RGBA8888 pixels.
-/// </summary>
 public sealed class PNGImage
 {
     private static readonly (int X0, int Y0, int Dx, int Dy)[] Adam7Passes =
@@ -135,7 +132,7 @@ public sealed class PNGImage
 
         int Sample(byte[] row, int index) => depth switch
         {
-            16 => row[index * 2], // high byte keeps 8-bit precision
+            16 => row[index * 2],
             8 => row[index],
             _ => (row[(index * depth) / 8] >> (8 - depth - ((index * depth) % 8))) & ((1 << depth) - 1),
         };
@@ -291,9 +288,6 @@ public sealed class PNGImage
     }
 }
 
-/// <summary>
-/// Writes 8-bit RGBA8888 PNG images compressed via <see cref="ZLibStream"/>.
-/// </summary>
 public static class PNGEncoder
 {
     private static readonly uint[] CrcTable = CreateCrcTable();
@@ -336,8 +330,8 @@ public static class PNGEncoder
         byte[] ihdr = new byte[13];
         BinaryPrimitives.WriteUInt32BigEndian(ihdr.AsSpan(0, 4), (uint)width);
         BinaryPrimitives.WriteUInt32BigEndian(ihdr.AsSpan(4, 4), (uint)height);
-        ihdr[8] = 8; // bit depth
-        ihdr[9] = 6; // RGBA
+        ihdr[8] = 8;
+        ihdr[9] = 6;
         ihdr[10] = 0;
         ihdr[11] = 0;
         ihdr[12] = 0;

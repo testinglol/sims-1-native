@@ -57,11 +57,8 @@ internal static class AnimationAuthor
         return Compile(document, destination, game);
     }
 
-    /// <summary>
-    /// Compiles the document. With the installed game folder, every clip's bones are checked against its installed
-    /// skeletons: against the named <c>skeleton</c> when the document gives one, otherwise each clip must fit at least one
-    /// skeleton. A bone name the skeleton lacks would otherwise be skipped silently when the clip plays.
-    /// </summary>
+    /// <summary>Compiles the animation document, verifying that clip bones exist in target skeletons so
+    /// missing bones are not silently skipped at playback.</summary>
     internal static object Compile(Document document, string destination, string? game = null)
     {
         if (document.Skeleton != null && game == null)
@@ -109,7 +106,7 @@ internal static class AnimationAuthor
                     [
                         track.Translations != null ? 1 : 0,
                         track.Rotations != null ? 1 : 0,
-                        // -1 marks a missing channel, as in every shipped motion.
+                        // A count of -1 marks an omitted translation or rotation track.
                         track.Translations != null ? translations.Count : -1,
                         track.Rotations != null ? rotations.Count : -1
                     ],
@@ -474,7 +471,8 @@ internal static class AnimationAuthor
             : $"Clip {clip.Name} animates bones from more than one skeleton; name its skeleton to see which bones it lacks");
     }
 
-    /// <summary>The skeletons defined by the installed BCF and CMX files, loose or in FAR archives, by case-insensitive name.</summary>
+    /// <summary>Loads skeletons defined across loose or archived BCF and CMX files, keyed by
+    /// case-insensitive name.</summary>
     internal static Dictionary<string, Skeleton> InstalledSkeletons(string game)
     {
         var skeletons = new Dictionary<string, Skeleton>(StringComparer.OrdinalIgnoreCase);
@@ -490,7 +488,6 @@ internal static class AnimationAuthor
             }
             catch (Exception error) when (error is ResourceFormatException or IOException or FormatException or ArgumentException or IndexOutOfRangeException or OverflowException or InvalidDataException)
             {
-                // Files that are not readable animation containers define no skeletons.
             }
         }
         InstalledFiles.Visit(game, name => name.EndsWith(".cmx", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".bcf", StringComparison.OrdinalIgnoreCase),

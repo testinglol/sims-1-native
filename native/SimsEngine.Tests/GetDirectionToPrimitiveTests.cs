@@ -12,7 +12,6 @@ public sealed class GetDirectionToPrimitiveTests
         return definition;
     }
 
-    // Me is person 1 at the origin, the chair is object 2 and the stack object is object 3.
     private static (TreeContext Context, XPerson Me, XObject Chair, XObject Stack) World(short stackObject = 3)
     {
         var world = new SimulationWorld();
@@ -23,7 +22,8 @@ public sealed class GetDirectionToPrimitiveTests
         return (new TreeContext(world, me, new StackFrame(stackObject, [], [])), me, chair, stack);
     }
 
-    // The output is temporary 3 (data at 0, owner short 8 at 2). Flags at 4, the object's owner at 5 and its data at 6.
+    // GetDirectionTo operand encodes the output variable reference at bytes 0–3, flags at byte 4, and the
+    // target object variable reference at bytes 5–7.
     private static byte[] Operand(byte flags = 0, byte owner = 0, short data = 0) =>
         [3, 0, 8, 0, flags, owner, (byte)data, (byte)(data >> 8)];
 
@@ -53,7 +53,9 @@ public sealed class GetDirectionToPrimitiveTests
     [InlineData(-100, -200, 7)]
     public void TheEdgeBetweenTwoOctantsFollowsTheComparison(int dx, int dy, int expected)
     {
-        // FUN_00452129: absX * 2 < absY yields 4; absX <= absY * 2 yields 3; otherwise 2.
+        // Direction quantization compares coordinate deltas against two-to-one slope thresholds, mapping
+        // steep slopes to direction 4, intermediate diagonal slopes to direction 3, and shallow slopes to
+        // direction 2.
         var (context, me, _, stack) = World();
         stack.Position = new ObjectPosition(dx, dy, 0);
         Assert.Equal(PrimitiveResult.True, GetDirectionToPrimitive.Execute(context, Operand()));
@@ -63,7 +65,6 @@ public sealed class GetDirectionToPrimitiveTests
     [Fact]
     public void ReadsTheObjectNamedByAVariable()
     {
-        // Flag bit 0 with a literal owner (7) and data 2 names the chair. Me sits at the stack object, which would give 3.
         var (context, me, chair, stack) = World();
         chair.Position = new ObjectPosition(-256, 0, 0);
         stack.Position = new ObjectPosition(0, 0, 0);
@@ -74,7 +75,6 @@ public sealed class GetDirectionToPrimitiveTests
     [Fact]
     public void RefusesAnOutputThatIsNotAShortVariable()
     {
-        // A literal owner cannot be written (inferred error 19, see the primitive's documentation).
         var (context, me, _, stack) = World();
         stack.Position = new ObjectPosition(256, 0, 0);
         byte[] operand = [3, 0, 7, 0, 0, 0, 0, 0];
@@ -95,7 +95,7 @@ public sealed class GetDirectionToPrimitiveTests
     [Fact]
     public void TheOutputIsResolvedBeforeTheObjects()
     {
-        // Output owner 0xEE is not an owner, and the stack object is missing too; the reference is resolved first.
+        // Destination variable references are resolved and validated before checking the target object.
         var (context, _, _, _) = World(stackObject: 77);
         byte[] operand = [3, 0, 0xEE, 0, 0, 0, 0, 0];
         Assert.Equal(SimulationError.IllegalOwnerFieldInDataReference, Fails(() => GetDirectionToPrimitive.Execute(context, operand)));
@@ -104,7 +104,8 @@ public sealed class GetDirectionToPrimitiveTests
     [Fact]
     public void DirectionBetweenIsFromSelfToOther()
     {
-        // dx = other.X - self.X (cWorldPt[1]) and dy = other.Y - self.Y (cWorldPt[0]): +X is 2 and -X is 6.
+        // World direction orientation maps positive X displacements to direction 2 and negative X
+        // displacements to direction 6.
         var self = new ObjectPosition(500, 500, 0);
         Assert.Equal(2, GetDirectionToPrimitive.DirectionBetween(self, new ObjectPosition(900, 500, 0)));
         Assert.Equal(6, GetDirectionToPrimitive.DirectionBetween(self, new ObjectPosition(100, 500, 0)));

@@ -3,13 +3,9 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using SimsEngine.Formats;
 
-/// <summary>
-/// Compiles new outfits into a content pack. An outfit is a copy of an installed one under a new name: its appearance
-/// (the CMX that binds meshes to bones) keeps the template's meshes, and each skin tone gets a new body texture, recolored
-/// from the template's or painted. The game finds outfits by name alone (<c>b001mafit_01</c>: collection, three-digit
-/// number, body type, then anything after the underscore), and a body texture by the prefix <c>b001mafitlgt</c>, so a
-/// new outfit needs a number no installed outfit or texture of its collection and body type uses.
-/// </summary>
+/// <summary>Compiles outfits into content packs. Outfit naming follows a strict pattern combining
+/// collection, three-digit index, body type, and suffix, with body textures referenced by collection,
+/// index, body type, and skin tone prefix.</summary>
 internal static class OutfitAuthor
 {
     internal sealed record Document
@@ -23,21 +19,15 @@ internal static class OutfitAuthor
 
     internal sealed record Outfit
     {
-        /// <summary>The installed outfit to copy, by appearance name, such as b002mafit_01.</summary>
         public required string Template { get; init; }
-        /// <summary>The new outfit's number, 0..999. It must be unused for its collection and body type.</summary>
         public required int Number { get; init; }
-        /// <summary>The part after the underscore: letters and digits.</summary>
         public required string Suffix { get; init; }
-        /// <summary>b (everyday, offered when creating Sims), f (formal), s (swimwear), l (pajamas), w (winter) or h
-        /// (high fashion); the template's collection by default.</summary>
+        /// <summary>Specifies the clothing collection prefix: 'b' for everyday, 'f' for formal, 's' for
+        /// swimwear, 'l' for sleepwear, 'w' for winterwear, or 'h' for high fashion.</summary>
         public string? Collection { get; init; }
         public ObjectAuthor.Recolor? Recolor { get; init; }
-        /// <summary>Painted body textures by skin tone (lgt, med or drk): PNGs relative to the document. A painted tone
-        /// replaces the recolored template texture for that tone.</summary>
+        /// <summary>Maps skin tone codes ('lgt', 'med', 'drk') to replacement body texture image paths.</summary>
         public Dictionary<string, string> Textures { get; init; } = [];
-        /// <summary>Reshaped body meshes: OBJ paths relative to the document, keyed by the template mesh they replace (as
-        /// <c>--export-outfit-mesh</c> names them). Each is skinned like the mesh it replaces.</summary>
         public Dictionary<string, string> Meshes { get; init; } = [];
     }
 
@@ -52,14 +42,12 @@ internal static class OutfitAuthor
     private static readonly string[] Tones = ["lgt", "med", "drk"];
     private static readonly string[] HandKinds = ["huao", "huap", "huac"];
 
-    /// <summary>Installed outfit appearances and avatar textures (lower-case names without extension).</summary>
     private sealed class Installed
     {
         public readonly Dictionary<string, Appearance> Appearances = new(StringComparer.OrdinalIgnoreCase);
         public readonly Dictionary<string, (string Extension, byte[]? Data)> Textures = new(StringComparer.OrdinalIgnoreCase);
         public readonly Dictionary<string, (string Extension, byte[]? Data)> Meshes = new(StringComparer.OrdinalIgnoreCase);
 
-        /// <summary>Scans the game; texture and mesh data is kept only for names starting with one of <paramref name="keep"/>.</summary>
         public Installed(string game, IReadOnlyCollection<string> keep)
         {
             InstalledFiles.Visit(game, name => Extension(name) is ".cmx" or ".bcf" or ".bmp" or ".tga" or ".skn" or ".bmf", entry =>
@@ -84,7 +72,6 @@ internal static class OutfitAuthor
                 }
                 catch (Exception error) when (error is ResourceFormatException or IOException or FormatException or ArgumentException or IndexOutOfRangeException or OverflowException or InvalidDataException or NullReferenceException)
                 {
-                    // Not a readable appearance container.
                 }
             });
         }
@@ -92,7 +79,6 @@ internal static class OutfitAuthor
         private static string Extension(string name) => Path.GetExtension(name).ToLowerInvariant();
     }
 
-    /// <summary>The parts of an outfit name, as the game's clothing collections split it.</summary>
     private sealed record OutfitName(string Collection, string Number, string BodyType, string Suffix)
     {
         public string Id => Collection + Number + BodyType;
@@ -154,7 +140,8 @@ internal static class OutfitAuthor
         {
             if (!installed.Appearances.TryGetValue(template.Name, out var appearance))
                 throw new InvalidDataException($"Template {spec.Template} is not an installed outfit");
-            // The game picks an outfit's texture by prefix, so nothing installed may start with the new outfit's ID.
+            // Outfit textures are resolved by prefix matching, requiring new outfit identifiers to be
+            // unique against all existing appearance and texture names.
             var clash = installed.Appearances.Keys.Concat(installed.Textures.Keys)
                 .FirstOrDefault(name => name.StartsWith(target.Id, StringComparison.OrdinalIgnoreCase))
                 ?? installed.Meshes.Keys.FirstOrDefault(name => name.StartsWith(MeshPrefix + target.Id, StringComparison.OrdinalIgnoreCase));
@@ -218,7 +205,6 @@ internal static class OutfitAuthor
             }
             if (tones.Count == 0 && spec.Meshes.Count > 0)
             {
-                // A reshaped outfit without new colors keeps the template's textures under its own name.
                 foreach (var tone in Tones)
                     if (TemplateTexture(installed, template, tone) is { } original)
                     {
@@ -228,7 +214,7 @@ internal static class OutfitAuthor
             }
             if (tones.Count == 0) throw new InvalidDataException($"Template {spec.Template} has no skin-tone textures to recolor; paint one");
 
-            // Gloves and other hand textures follow the outfit's suffix; carry the template's over unchanged.
+            // Hand and accessory texture bindings share the suffix of their parent outfit.
             var hands = new List<string>();
             foreach (var kind in HandKinds)
                 if (installed.Textures.TryGetValue(kind + template.Suffix, out var hand) && hand.Data != null)
@@ -266,7 +252,8 @@ internal static class OutfitAuthor
     }
 
     private const string MeshPrefix = "xskin-";
-    /// <summary>How far, in mesh units, an imported vertex may be from the original body. An adult is about 3 units tall.</summary>
+    /// <summary>Defines the maximum vertex distance threshold for mesh retargeting, where an adult Sim
+    /// model stands approximately three units tall.</summary>
     private const float MaximumReach = 1.5f;
 
     private static Mesh LoadMesh(Installed installed, string name)
@@ -286,7 +273,8 @@ internal static class OutfitAuthor
         }
     }
 
-    /// <summary>The skeleton a Sim of the outfit's body type wears: <c>mafit</c> is an adult, <c>fcchd</c> a child.</summary>
+    /// <summary>Resolves the skeleton for a body type, mapping adult bodies to adult skeletons and child
+    /// bodies to child skeletons.</summary>
     private static Skeleton SkeletonFor(Dictionary<string, Skeleton> skeletons, OutfitName outfit)
     {
         var name = outfit.BodyType.Length >= 2 && outfit.BodyType[1] == 'c' ? "child" : outfit.BodyType.Length >= 2 && outfit.BodyType[1] == 'a' ? "adult" : null;
@@ -295,7 +283,6 @@ internal static class OutfitAuthor
         return skeleton;
     }
 
-    /// <summary>Writes each body mesh of an installed outfit as an OBJ in the skeleton's rest pose, to reshape.</summary>
     internal static object ExportMeshes(string template, string game, string output)
     {
         var name = OutfitName.Parse(template) ?? throw new InvalidDataException($"Template {template} is not an outfit name such as b002mafit_01");
@@ -316,10 +303,6 @@ internal static class OutfitAuthor
         return new { directory = Path.GetFullPath(output), template = name.Name, skeleton = skeleton.Name, meshes };
     }
 
-    /// <summary>
-    /// Writes an installed outfit's body textures as PNGs (lgt.png, med.png, drk.png, for the tones it has) to paint
-    /// over, and an outfit.json that compiles them.
-    /// </summary>
     internal static object ExportTextures(string template, string game, string output)
     {
         var name = OutfitName.Parse(template) ?? throw new InvalidDataException($"Template {template} is not an outfit name such as b002mafit_01");
@@ -350,7 +333,8 @@ internal static class OutfitAuthor
 
     private static (string Name, string Extension, byte[] Data)? TemplateTexture(Installed installed, OutfitName template, string tone)
     {
-        // The same lookup as the game's: the first texture starting with ID + tone, preferring the template's own suffix.
+        // Texture lookup selects the first texture matching the outfit ID and skin tone prefix, preferring
+        // an exact match for the outfit suffix.
         var prefix = template.Id + tone;
         var name = installed.Textures.ContainsKey(prefix + template.Suffix) ? prefix + template.Suffix
             : installed.Textures.Keys.Where(item => item.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)).Order(StringComparer.Ordinal).FirstOrDefault();
@@ -373,7 +357,7 @@ internal static class OutfitAuthor
     private static bool PackIdentifier(string value) => value != null && value.Length is >= 1 and <= 120 && char.IsAsciiLetterOrDigit(value[0]) &&
         value.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '.');
 
-    /// <summary>A bottom-up 24-bit BMP; skins have no transparency.</summary>
+    /// <summary>Encodes skin texture data as an uncompressed bottom-up 24-bit bitmap without transparency.</summary>
     internal static byte[] WriteBitmap(int width, int height, byte[] rgba)
     {
         var stride = (width * 3 + 3) & ~3;
@@ -400,7 +384,8 @@ internal static class OutfitAuthor
         return data;
     }
 
-    /// <summary>Decodes the BMPs skins use: 8-bit (plain or RLE8), 24- and 32-bit, to top-down RGBA.</summary>
+    /// <summary>Decodes skin bitmaps supporting 8-bit uncompressed, 8-bit RLE, 24-bit, and 32-bit encodings
+    /// into top-down RGBA pixel buffers.</summary>
     internal static (int Width, int Height, byte[] Rgba) ReadBitmap(byte[] data)
     {
         if (data.Length < 54 || data[0] != 'B' || data[1] != 'M') throw new InvalidDataException("Not a BMP");

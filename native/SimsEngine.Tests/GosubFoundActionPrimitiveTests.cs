@@ -62,14 +62,11 @@ public sealed class GosubFoundActionPrimitiveTests
     [Fact]
     public void FoundActionMapsTheTtabActionTreeFromStoredWordPlusTwo()
     {
-        // FUN_004760ae reads ActionTree into TTAB +2 and TtaIndex into +0x18.
         var source = new Interaction(8408, 8348, 0, 7, 0, 0, 50, 0, [], null);
 
         Assert.Equal(new FoundAction(7, 8408), FoundAction.FromTtab(source));
     }
 
-    // Person 100 with Tree Table Entry 7. The stack object is object 2, at object table index 2. The target TTAB has
-    // key 7 (action 8408); the person's conflicting key 7 maps to action 55.
     private static (TreeContext Context, XPerson Me, PrimitiveTestHost Host) World(short stackObject = 2,
         bool targetHasScope = true, bool targetTreeAvailable = true)
     {
@@ -89,7 +86,6 @@ public sealed class GosubFoundActionPrimitiveTests
     [Fact]
     public void TheKeyFindBestStoresAtWord72IsTheTreeTableEntryGoSubFoundActionReads()
     {
-        // FUN_0045dea5 writes the chosen key to cXPerson +0x72 and FUN_0045a9c5 reads it back; both are object data 20.
         var (_, me, _) = World();
         me.InteractionActionWord72 = 41;
         Assert.Equal((short)41, me[ObjectData.TreeTableEntry]);
@@ -156,7 +152,6 @@ public sealed class GosubFoundActionPrimitiveTests
         Assert.Empty(host.Calls);
         Assert.Equal((short)8408, context.Stack!.Frames[1].TreeId);
         var person = Assert.IsType<XPerson>(context.World.Objects[100]);
-        // FUN_0045a9c5 starts the record through FUN_0045e839; it never enters the queue.
         Assert.Empty(person.ActionQueue.Take(person.ActionQueueEnd));
         Assert.Equal(2, person.ActivePriority);
         Assert.Equal(7, person.CurrentActionRecord!.RawDword10);

@@ -6,8 +6,8 @@ using SimsEngine.World;
 
 namespace SimsSimulation;
 
-/// <summary>Resource-backed floor catalog projection for the native runtime. Dynamic floors follow the provider's
-/// stable .flr filename order and use SPR2 513 from that resource; base floors use floors.iff SPR2 pattern+256.</summary>
+/// <summary>Builds the floor catalog where dynamic floor files provide thumbnail sprite 513 and base floors
+/// use pattern ID plus 256.</summary>
 internal static class FloorCatalogPage
 {
     private sealed record Item(int Id, string Name, string Description, int Price, string File, IffFile Art, ushort SpriteId, ushort PreviewSpriteId);
@@ -98,9 +98,8 @@ internal static class FloorCatalogPage
         return items.OrderBy(item => item.Id).Select(item => (object)new { id = item.Id, file = item.File, name = item.Name, price = item.Price }).ToArray();
     }
 
-    /// <summary>Water patterns are separate from ordinary floors in Build.iff: FUN_004a01ca reads
-    /// STR# 0x85, registering the pool first (65535) and pond second (65534). Their global SPR2
-    /// catalog art is 0x420 and 0x800 respectively.</summary>
+    /// <summary>Water floor patterns are registered from build strings as pool (-1) and pond (-2) with
+    /// catalog sprite IDs 0x420 and 0x800.</summary>
     public static object WaterPage(string game, ObjectRegistry registry, byte language, int offset, int count, string session)
     {
         if (offset is < 0 or > 1_000_000 || count is < 1 or > 64) throw new ArgumentException("Invalid native water catalog page");
@@ -122,8 +121,8 @@ internal static class FloorCatalogPage
             if (int.TryParse(strings[3].Trim(), out var pondPrice))
                 items.Add((65534, null, strings[4], strings[5], pondPrice, "global", Icon(globals, 0x800, session), Icon(globals, 0x800, session)));
         }
-        // TS1ObjectProvider admits BuildModeType 7 into water catalog category 14 (category = type + 7),
-        // including linked group roots. This is the pool ladder/board and other pack-specific pool content.
+        // Maps build mode type 7 into water catalog category 14 (category equals type plus 7) for pool
+        // accessories.
         foreach (var source in registry.ByGuid.Values)
         {
             var definition = source.Definition;
@@ -185,7 +184,7 @@ internal static class FloorCatalogPage
         { return null; }
     }
 
-    /// <summary>FUN_004cbf52 / FUN_004e58e7 / FUN_004e5c2f: box-averages dynamic .flr sprites into a 74x37 two-frame catalog thumbnail.</summary>
+    /// <summary>Box-averages dynamic floor sprites into a 74x37 two-frame catalog thumbnail.</summary>
     private static object? FloorThumbnailIcon(IffFile file, ushort spriteId, string session)
     {
         try

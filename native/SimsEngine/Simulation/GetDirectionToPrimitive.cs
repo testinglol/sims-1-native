@@ -1,13 +1,7 @@
 namespace SimsEngine.Simulation;
 
-/// <summary>The Get Direction To primitive (opcode 0xc), after Sims.exe FUN_00452043. Traced from the disassembly.
-/// <para>Operand: the variable that receives the direction is a reference, named by the data short at 0 and the owner
-/// short at 2. Byte 4 bit 0 takes the object from a variable: the owner is byte 5 and the data the short at 6. Without it
-/// the object is me (owner My, data 11). Errors: 23 when the object is missing, and 21 when there is no stack object.</para>
-/// <para>The direction is <see cref="DirectionBetween"/> from the object to the stack object. Sims.exe stores it as
-/// (direction + 8) % 8 in the variable, which keeps a direction 0 to 7 unchanged. The primitive always returns true.
-/// A read-only or non-short variable is refused with error 19 (inferred: Sims.exe writes through the reference without
-/// that check, which is not traced).</para></summary>
+/// <summary>Calculates the compass direction (0 to 7) from the source object to the stack object and writes
+/// the result into the destination variable.</summary>
 public static class GetDirectionToPrimitive
 {
     private const short ObjectIdData = (short)ObjectData.ObjectId;
@@ -29,10 +23,9 @@ public static class GetDirectionToPrimitive
         return PrimitiveResult.True;
     }
 
-    /// <summary>FUN_00452129: the direction 0 to 7 from <paramref name="self"/> to <paramref name="other"/>, from
-    /// dx = other.X − self.X (cWorldPt[1]) and dy = other.Y − self.Y (cWorldPt[0]). The eight values run round the
-    /// compass from 0 (dy dominant, dy &lt; 0) through 2 (dx dominant, dx &gt;= 0), 4 (dy dominant, dy &gt;= 0) and
-    /// 6 (dx dominant, dx &lt; 0), with the diagonals odd. Equal positions give 3.</summary>
+    /// <summary>Calculates the discrete compass direction from <paramref name="self"/> to
+    /// <paramref name="other"/>, where 0 represents north (-Y), 2 east (+X), 4 south (+Y), and 6 west (-X).
+    /// Identical positions return direction 3.</summary>
     public static short DirectionBetween(ObjectPosition self, ObjectPosition other)
     {
         var dx = unchecked(other.X - self.X);

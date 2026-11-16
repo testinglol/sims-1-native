@@ -4,28 +4,23 @@ using System.Text.Json.Serialization;
 
 namespace SimsSDL.Core;
 
-/// <summary>The <c>plugin</c> object of a pack manifest.</summary>
 public sealed record PluginDeclaration
 {
     public const int MinSupportedAPIVersion = 1;
     public const int MaxSupportedAPIVersion = 3;
 
-    /// <summary>Pack-relative path of the .NET assembly, under <c>plugin/</c>.</summary>
     [JsonRequired]
     [JsonPropertyName("assembly")]
     public required string Assembly { get; init; }
 
-    /// <summary>Full name of the type implementing <c>SimsNative.Plugins.ISimsPlugin</c>.</summary>
     [JsonRequired]
     [JsonPropertyName("entryType")]
     public required string EntryType { get; init; }
 
-    /// <summary>Plugin contract version; see <see cref="IsSupportedAPIVersion"/>.</summary>
     [JsonRequired]
     [JsonPropertyName("apiVersion")]
     public required int ApiVersion { get; init; }
 
-    /// <summary>Version of the plugin's own save state, starting at 1. Raise it when <c>SaveState</c> output changes shape.</summary>
     [JsonRequired]
     [JsonPropertyName("stateVersion")]
     public required int StateVersion { get; init; }
@@ -33,17 +28,14 @@ public sealed record PluginDeclaration
     public static bool IsSupportedAPIVersion(int version) => version is >= MinSupportedAPIVersion and <= MaxSupportedAPIVersion;
 }
 
-/// <summary>The <c>saveMigration</c> object of a pack manifest.</summary>
 public sealed class SaveMigration
 {
     [JsonRequired]
     [JsonPropertyName("from")]
     public IReadOnlyList<string> From { get; init; }
 
-    /// <summary>
-    /// Objects replaced in this version: old GUID to new GUID, both as <c>0x</c> hex strings. Saved instances of
-    /// an old object load as the new one; the new object must belong to this pack and occupy the same tiles.
-    /// </summary>
+    /// <summary>Maps replaced object GUIDs from older versions to new GUIDs. Saved instances load as the
+    /// replacement object, which must belong to this pack and occupy the same tile footprint.</summary>
     [JsonPropertyName("objects")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyDictionary<string, string>? Objects { get; set; }
@@ -68,7 +60,8 @@ public sealed class SaveMigration
             : null;
     }
 
-    /// <summary>The object map as GUIDs, rejecting malformed entries, an object mapped to itself and chains.</summary>
+    /// <summary>Parses the object GUID migration map, rejecting malformed entries, self-mappings, and
+    /// chained migrations.</summary>
     internal Dictionary<uint, uint> ObjectMap(string packID)
     {
         var map = new Dictionary<uint, uint>();
@@ -98,7 +91,6 @@ public sealed class SaveMigration
     }
 }
 
-/// <summary>A saved object GUID that loads as another object of the same pack.</summary>
 public sealed record ObjectMigrationReport(
     [property: JsonPropertyName("from")] uint From,
     [property: JsonPropertyName("to")] uint To);
@@ -193,7 +185,6 @@ public sealed partial class ContentPack
         return result;
     }
 
-    /// <summary>Resolves a pack-relative path that must stay inside <paramref name="folder"/> and must not be a symbolic link.</summary>
     private static string ContainedFile(string path, string folder, HashSet<string> extensions, string packID, string root)
     {
         var normalized = path.Replace('\\', '/');
@@ -233,7 +224,6 @@ public sealed partial class ContentPack
     }
 }
 
-/// <summary>Report entry for a code-bearing plugin.</summary>
 public sealed record PackPluginReport(
     [property: JsonPropertyName("packID")] string PackID,
     [property: JsonPropertyName("version")] string Version,
@@ -243,14 +233,12 @@ public sealed record PackPluginReport(
     [property: JsonPropertyName("apiVersion")] int ApiVersion,
     [property: JsonPropertyName("stateVersion")] int StateVersion);
 
-/// <summary>Report entry for a declarative panel.</summary>
 public sealed record PackPanelReport(
     [property: JsonPropertyName("packID")] string PackID,
     [property: JsonPropertyName("id")] string Id,
     [property: JsonPropertyName("path")] string Path,
     [property: JsonPropertyName("sha256")] string Sha256);
 
-/// <summary>Report entry describing a pack's save-migration sources.</summary>
 public sealed record PackDetailReport(
     [property: JsonPropertyName("id")] string Id,
     [property: JsonPropertyName("version")] string Version,
@@ -260,10 +248,8 @@ public sealed record PackDetailReport(
 
 public static class PackPlugins
 {
-    /// <summary>
-    /// Files of a plugin folder that are copied into the mount and covered by trust: regular <c>.dll</c> and <c>.json</c>
-    /// files directly inside the folder, sorted by lowercase name.
-    /// </summary>
+    /// <summary>Collects payload files for a plugin folder covered by trust verification, including regular
+    /// <c>.dll</c> and <c>.json</c> files sorted by lowercase name.</summary>
     public static List<string> PluginPayload(string folder)
     {
         if (!Directory.Exists(folder))
@@ -285,10 +271,8 @@ public static class PackPlugins
             .ToList();
     }
 
-    /// <summary>
-    /// Trust digest of a plugin folder: SHA-256 of <c>name:sha256</c> lines (lowercase names, one per payload file, each
-    /// ending in a newline). The simulation host computes the same digest over the mounted copy.
-    /// </summary>
+    /// <summary>Computes the trust digest of a plugin folder as the SHA-256 hash of newline-terminated
+    /// <c>name:sha256</c> entries.</summary>
     public static string PluginDigest(string folder)
     {
         var sb = new StringBuilder();
@@ -306,7 +290,6 @@ public static class PackPlugins
 
 public sealed partial class PackStack
 {
-    /// <summary>Where <see cref="GameContent.Materialize"/> copies plugin assemblies inside a content mount.</summary>
     public const string MountedPluginFolder = ".plugins";
 
     public List<PackPluginReport> PluginReports()
@@ -383,7 +366,6 @@ public sealed partial class PackStack
         return result;
     }
 
-    /// <summary>Panel descriptions keyed by pack ID and panel ID, for the client renderer.</summary>
     public Dictionary<string, Dictionary<string, PanelDescription>> PanelDescriptions()
     {
         var result = new Dictionary<string, Dictionary<string, PanelDescription>>(StringComparer.Ordinal);
@@ -404,10 +386,8 @@ public sealed partial class PackStack
     }
 }
 
-/// <summary>
-/// The local, per-user record of plugin assemblies the player explicitly trusted. Trust names a pack ID, version
-/// and assembly SHA-256; any change to the assembly needs a new trust action.
-/// </summary>
+/// <summary>Stores trusted plugin assembly records. Each entry binds a pack ID, version, and assembly
+/// SHA-256 hash, requiring reauthorization when an assembly changes.</summary>
 public sealed class PluginTrustStore
 {
     public sealed record Entry(
@@ -464,7 +444,6 @@ public sealed class PluginTrustStore
         return _entries.Any(e => e.PackId == plugin.PackID && e.Version == plugin.Version && e.Sha256 == plugin.Sha256);
     }
 
-    /// <summary>Records trust for exactly this assembly, replacing any earlier trust for the same pack.</summary>
     public void Trust(PackPluginReport plugin, DateTimeOffset? now = null)
     {
         var timestamp = (now ?? DateTimeOffset.UtcNow).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture);
@@ -473,7 +452,6 @@ public sealed class PluginTrustStore
         Save();
     }
 
-    /// <summary>Removes trust for a pack. Returns <see langword="false"/> when it was not trusted.</summary>
     public bool Revoke(string packID)
     {
         var removed = _entries.RemoveAll(e => e.PackId == packID);
@@ -528,7 +506,6 @@ public sealed class PluginTrustStore
                 }
                 catch
                 {
-                    // Ignore cleanup errors.
                 }
             }
         }

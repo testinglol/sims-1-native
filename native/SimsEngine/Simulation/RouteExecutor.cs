@@ -1,6 +1,7 @@
+using System.Buffers;
+
 namespace SimsEngine.Simulation;
 
-/// <summary>Runtime state retained while Sims.exe's asynchronous route callback continues.</summary>
 public sealed record RouteState(short AnchorObjectId, ObjectPosition Destination, RoutingSlotRequest Slot,
     short PendingPortalId = 0, int PortalCallerDepth = -1, StackFrame? OwnerFrame = null, short OpenedPortalId = 0,
     short ArrivalFacing = 0, short PendingPortalFunctionObjectId = 0, short OpenedPortalFunctionObjectId = 0,
@@ -16,36 +17,29 @@ public sealed record RouteState(short AnchorObjectId, ObjectPosition Destination
     int AnimatorFollowState = 1, bool EndFollowPending = false, bool FollowPlacementRejected = false,
     int LocomotionFadeEndMils = 0, int PendingFailureFeedbackDepth = -1, short FailureReason = 0)
 {
-    /// <summary>The polyline the pending motion target came from. Mac SAnimator::FollowOneStep keeps projecting onto the
-    /// TileList it was started with until the step ends; a fresh plan from the Sim's mid-segment position can route
-    /// elsewhere and leave the Sim projected onto a different line than the one its target belongs to.</summary>
+    /// <summary>The waypoint path providing the active motion target, retained until the segment completes
+    /// to prevent projection errors during replanning.</summary>
     internal IReadOnlyList<RouteExecutor.RouteWaypoint>? MotionPath { get; init; }
-    /// <summary>MotionPath point currently targeted by the route cursor. Mac BeginFollow sets +0x178=0,
-    /// and SAnimator::Tick uses that cursor for segment [cursor,cursor+1]. This index is cursor+1.</summary>
+    /// <summary>The index of the motion path waypoint currently targeted by the route cursor.</summary>
     internal int MotionTargetPathIndex { get; init; } = -1;
     internal IReadOnlyList<RouteExecutor.RouteWaypoint>? FollowPath { get; init; }
     internal int FollowWaypointIndex { get; init; }
     internal bool LookTowardsFollow { get; init; }
-    /// <summary>Continuous [0, 8) target heading computed from here toward LookTowards's target point.</summary>
+    /// <summary>Continuous [0, 8) directional heading toward a look-towards target.</summary>
     internal float? LookTowardsHeading { get; init; }
-    /// <summary>BeginFollow initializes the animator target to its current root and heading until its first Tick.</summary>
+    /// <summary>Indicates that route following has initialized and is awaiting its first movement tick.</summary>
     internal bool BeginFollowPendingTick { get; init; }
     internal bool AwaitingBeginFollow { get; init; }
     internal bool EndFollowOnArrival { get; init; }
-    /// <summary>State 7 runs for a deferred pool exit even when GetStdSkill(0x13) returns no practice.</summary>
+    /// <summary>Indicates a deferred swimming pool exit sequence is pending completion.</summary>
     internal bool PoolSwimExitPending { get; init; }
-    /// <summary>Mac's deferred pool EndFollow copies animator root +0x80/+0x84/+0x88 to +0x1d4/+0x1d8/+0x1dc;
-    /// state 7 restores those endpoints when its primary-practice phase is already complete.</summary>
     internal float? PoolSwimExitRootX { get; init; }
     internal float? PoolSwimExitRootY { get; init; }
     internal float? PoolSwimExitDirection { get; init; }
-    /// <summary>Mac SAnimator states 6/11 retain the standing-start root lerp endpoints at +0x1c8/+0x1cc
-    /// and +0x1bc/+0x1c0 while the primary Practice phase advances.</summary>
     internal float? StartRootOriginX { get; init; }
     internal float? StartRootOriginY { get; init; }
     internal float? StartRootTargetX { get; init; }
     internal float? StartRootTargetY { get; init; }
-    /// <summary>Mac SAnimator state 5 retains current root and the route target adjusted by StdAnimOffset.</summary>
     internal float? TurnRootOriginX { get; init; }
     internal float? TurnRootOriginY { get; init; }
     internal float? TurnRootTargetX { get; init; }
@@ -54,29 +48,20 @@ public sealed record RouteState(short AnchorObjectId, ObjectPosition Destination
     internal float? TurnRootPracticeScale { get; init; }
     internal float? TurnRootStartDirection { get; init; }
     internal float? TurnRootPracticeDirection { get; init; }
-    /// <summary>Mac SAnimator::Tick's non-zero route-preference arrival writes the current root to the state-3
-    /// transition target +0x1bc/+0x1c0 instead of committing the terminal point (SAnimator.s 0x10350750–0x10350774).</summary>
     internal float? TransitionTargetX { get; init; }
     internal float? TransitionTargetY { get; init; }
-    /// <summary>The selected goal candidate's +0xe entry flags (one-hot slot-relative sector), copied to
-    /// PersonData.RouteEntryFlags when the route arrives (FUN_0045c4fa) or before a seated stand (FUN_0045aecf).</summary>
+    /// <summary>Bitmask representing the slot-relative entry sector, recorded to route entry flags upon
+    /// arrival or before standing from a chair.</summary>
     internal short EntryFlags { get; init; }
-    /// <summary>Selected chair goal's object id (+0xc in FUN_00483572 / FUN_0045c4fa), or 0 for standing goals.</summary>
     internal short ChairObjectId { get; init; }
-    /// <summary>Caller stack depth while waiting in route state 4 for a pushed chair Sit (OBJf 0x1a) tree.</summary>
     internal int PendingSitDepth { get; init; } = -1;
 }
 
-/// <summary>A native route slice. Sims.exe FUN_0045aecf owns the asynchronous route lifecycle;
-/// Opcode 0x2d enters FUN_0045ad3a and its endpoint planner is FUN_00483572. The partition search permits room changes at saved
-/// door portal positions. Sims.exe FUN_0045c92e pushes portal functions; its return value is the push result, not the
-/// eventual BHAV result. Route-slot endpoint sampling follows FUN_00483572; movement curves remain inferred.</summary>
 internal static class RouteExecutor
 {
-    /// <summary>An accepted route goal. <paramref name="EntryFlags"/> is the candidate record's +0xe word: FUN_00483572
-    /// stores <c>1 &lt;&lt; localSector</c> (00483572.c:236-237, 294-295) or chair-relative <c>1 &lt;&lt; chairSide</c>
-    /// (00483572.c:349-350), and FUN_0045c4fa copies it into the person's +0x5d6 route-entry flags (0045c4fa.c:40).
-    /// <paramref name="ChairObjectId"/> is candidate +0xc (chair object id when routing to a sitting goal).</summary>
+    /// <summary>Represents an accepted route goal. <paramref name="EntryFlags"/> stores a one-hot bitmask
+    /// for the local sector or chair-relative approach side, and <paramref name="ChairObjectId"/>
+    /// identifies the target chair for sitting goals.</summary>
     internal readonly record struct SelectedRouteGoal(ObjectPosition Position, short SearchDirection,
         short EntryFlags = 0, short ChairObjectId = 0);
     private readonly record struct RouteGoalCandidate(ObjectPosition Position, double Cost, short SearchDirection,
@@ -84,20 +69,18 @@ internal static class RouteExecutor
     internal readonly record struct RouteWaypoint(int TileX, int TileY, int X, int Y,
         int CellCenterX, int CellCenterY, bool IsDestination);
 
-    /// <summary>Mac TryLookTowards replaces the remaining person TileList points and calls BeginFollow.
-    /// The first FollowOneStep result is busy (SAnimator +0x180 is 1), so movement starts on the next callback.</summary>
     internal static PrimitiveResult BeginLookTowardsFollow(SimulationWorld world, XPerson person, StackFrame frame,
         IReadOnlyList<ObjectPosition> points)
     {
         if (points.Count < 2) throw new ArgumentException("A follow path needs at least two points.", nameof(points));
-        person.AnimatorControlState = 3; // SAnimator::BeginFollow writes +0x188 = 3.
-        person.AnimatorRouteTransitionState = 0; // SAnimator::BeginFollow clears +0x280.
+        person.AnimatorControlState = 3;
+        person.AnimatorRouteTransitionState = 0;
         person.AnimationPlayback = null;
         person.AnimatorCurrentSkill = -1;
         person.AnimatorRootX = person.Position.X;
         person.AnimatorRootY = person.Position.Y;
         person.AnimatorRootDirection = person[ObjectData.Direction];
-        person.SetAnimatorDisplacements(0f, 0f, 0f); // Mac BeginFollow clears +0x8c/+0x90/+0x94.
+        person.SetAnimatorDisplacements(0f, 0f, 0f);
         var path = points.Select((point, index) => new RouteWaypoint(
             point.X >> 4, point.Y >> 4, point.X, point.Y, point.X, point.Y, index == points.Count - 1)).ToArray();
         var here = points[0];
@@ -107,8 +90,6 @@ internal static class RouteExecutor
         var lookHeading = lookDx == 0 && lookDy == 0
             ? (float)(person[ObjectData.Direction] & 7)
             : SimsEngine.Character.AvatarDirection.Toward(lookDx, lookDy);
-        // Mac TryLookTowards pushes [me, me, lookPoint]: points[0..1] match me.Position, so SAnimator's
-        // terminal look-at heading is towards points[^1] while staying on points[0] with AnimatorFollowState = -1.
         person.NativeRoute = new RouteState(person.Id, here, new RoutingSlotRequest(), OwnerFrame: frame,
             DirectPositionRequest: true, ArrivalFacing: SimsEngine.Character.AvatarDirection.ToObjectDirection(lookHeading),
             MotionTargetTileX: here.X >> 4, MotionTargetTileY: here.Y >> 4, MotionTargetX: here.X,
@@ -130,8 +111,6 @@ internal static class RouteExecutor
         return PrimitiveResult.Stop;
     }
 
-    /// <summary>Seeds an active walking follow (AnimatorFollowState = 1) directly along <paramref name="points"/>
-    /// for SAnimator polyline-locomotion unit tests without entering a slot route planner.</summary>
     internal static PrimitiveResult BeginDirectWalkFollow(SimulationWorld world, XPerson person, StackFrame frame,
         IReadOnlyList<ObjectPosition> points)
     {
@@ -168,8 +147,6 @@ internal static class RouteExecutor
         return PrimitiveResult.Stop;
     }
 
-    // Sims.exe's SAnimator tick advances Animator::GetMils by 42 ms. Practice::SetScale divides
-    // Skill +0x1c duration by the active scale, and Practice::Apply advances +0x28 by elapsed / duration.
     private const float AnimationFramesPerTick = 1.2f;
     private const float AnimatorTickMilliseconds = 42f;
     private const float StartTransitionProgress = 0.95f;
@@ -180,6 +157,28 @@ internal static class RouteExecutor
             throw new NotSupportedException("Sims.exe dispatches Go To Routing Slot only for a person.");
         if (person.ActiveActionCancelRequested && person[PersonData.NonInterruptible] == 0)
             return FailRouteBeforeStart(person, anchor, slot, frame, stack, failureReason: 4);
+        if ((person[PersonData.IsGhost] & 1) != 0 && (slot.Flags & 0x0800u) == 0)
+        {
+            // Ghosts set routing flag 0x0800 to bypass wall and room boundaries during pathfinding.
+            slot = new RoutingSlotRequest
+            {
+                X = slot.X,
+                Y = slot.Y,
+                Z = slot.Z,
+                Standing = slot.Standing,
+                Sitting = slot.Sitting,
+                Ground = slot.Ground,
+                Flags = slot.Flags | 0x0800u,
+                CheckCandidateFootprintAgainstWall = slot.CheckCandidateFootprintAgainstWall,
+                SnapTargetSlot = slot.SnapTargetSlot,
+                MinProximity = slot.MinProximity,
+                MaxProximity = slot.MaxProximity,
+                OptimalProximity = slot.OptimalProximity,
+                Gradient = slot.Gradient,
+                Facing = slot.Facing,
+                Resolution = slot.Resolution,
+            };
+        }
         var goal = SelectDestination(world, person, anchor, slot, stack);
         if (goal is null && person[PersonData.Sitting] == 1 &&
             ResolveSeatedContainer(world, person) is { } currentSeat &&
@@ -201,8 +200,8 @@ internal static class RouteExecutor
             chairObjectId: goal.Value.ChairObjectId);
     }
 
-    /// <summary>Explicit-position helper route with ordinary placement at the destination.
-    /// User Go Here commands use Destination.iff's queued action instead.</summary>
+    /// <summary>Starts an explicit-position route using standard destination placement, distinct from
+    /// player-queued movement handled through destination object interactions.</summary>
     internal static PrimitiveResult StartDirectPosition(SimulationWorld world, XPerson person, StackFrame frame,
         ObjectPosition destination, TreeStack? stack)
     {
@@ -211,9 +210,7 @@ internal static class RouteExecutor
             person[PersonData.RouteResult] = 4;
             return PrimitiveResult.False;
         }
-        // The direct caller's +0x1c/+0x24 flags are zero. FUN_004550e0 checks the local route edge only
-        // when the candidate remains in the current room; a room change is handled by the route manager.
-        var slot = new RoutingSlotRequest();
+        var slot = (person[PersonData.IsGhost] & 1) != 0 ? new RoutingSlotRequest { Flags = 0x0800u } : new RoutingSlotRequest();
         if (!Walkable(world, person, person, destination, slot, stack: stack))
         {
             Trace(world, person, person.Id, destination, "destination-rejected",
@@ -225,9 +222,9 @@ internal static class RouteExecutor
         return StartResolved(world, person, frame, person, slot, destination, stack, directPositionRequest: true);
     }
 
-    /// <summary>Clears an interruptible explicit-position helper route before its replacement starts.
-    /// Do not detach a BHAV-owned route or a route currently nested in a portal function: those need their owner stack to
-    /// consume cancellation and release its portal state first.</summary>
+    /// <summary>Clears an interruptible direct-position route before replacement. Routes owned by running
+    /// interaction trees or nested inside active portal functions must be cancelled by their owning stack
+    /// to release portal state.</summary>
     internal static bool CancelDirectPosition(SimulationWorld world, XPerson person, StackFrame ownerFrame)
     {
         var route = person.NativeRoute;
@@ -247,15 +244,13 @@ internal static class RouteExecutor
         bool directPositionRequest = false, short? routeSearchDirection = null, short routeEntryFlags = 0,
         short chairObjectId = 0)
     {
-        // cXPerson::TryGotoRoutingSlot calls ForceLocation immediately before route setup (person.s 0x10105CBC).
         person.AnimatorPoolTile = world.IsPoolTile(person.Position);
         var openedPortalId = (short)0;
         if (person.NativeRoute is { } parent && !ReferenceEquals(parent.OwnerFrame, frame))
         {
             person.NativeRouteParents.Add(parent);
-            // FUN_0045aecf retains the portal in route-record +0x68 while its function tree runs. A nested
-            // Go To Routing Slot from that portal function must cross the already-active portal without
-            // recursively starting the same function again.
+            // Nested routing requests within a portal function cross the active portal directly to avoid
+            // recursively triggering its transition tree.
             if (parent.PendingPortalId == anchor.Id) openedPortalId = anchor.Id;
         }
         person.NativeRoute = new RouteState(anchor.Id, destination, slot,
@@ -281,10 +276,8 @@ internal static class RouteExecutor
         var route = person.NativeRoute;
         if (route is null)
         {
-            // FUN_0045ad3a resumes a nonzero frame through FUN_0045aecf with a null route-record
-            // pointer. When FUN_0045c4b5 finds no active per-person route record, the manager returns 0.
-            // Route records are not part of the saved BHAV stack, so a restored continuation can reach
-            // this source-defined false result without any native route state to resume.
+            // Route records are not persisted in saved execution stacks, so restored continuations without
+            // active route state evaluate to false.
             frame.Waiting = false;
             return PrimitiveResult.False;
         }
@@ -300,8 +293,8 @@ internal static class RouteExecutor
             frame.Waiting = false;
             return PrimitiveResult.False;
         }
-        // FUN_0045aecf state 4 (0045aecf.c:204-215): wait for the pushed chair Sit (OBJf 0x1a) tree to finish,
-        // completing the route when Sitting != 0 in that chair or failing with RouteResult / reason 5.
+        // Waits for the pushed chair Sit interaction to finish, completing the route if seated in the
+        // target chair or failing with route error code 5.
         if (route.PendingSitDepth >= 0)
         {
             if (stack is not null && stack.Frames.Count > route.PendingSitDepth)
@@ -323,14 +316,11 @@ internal static class RouteExecutor
                 failureReason: sitFailure);
         }
         var actionCancelled = person.ActiveActionCancelRequested && person[PersonData.NonInterruptible] == 0;
-        // Look Towards uses FUN_0045aafa's FollowOneStep/EndFollow path; unlike the routing-slot callback,
-        // it does not branch on the active interaction's cancellation flag.
+        // Orientation adjustments ignore interaction cancellation flags, unlike standard slot routing.
         if (actionCancelled && !route.LookTowardsFollow)
         {
-            // Mac's person route callback checks ShouldInterrupt on every callback and retries EndFollow even
-            // after its first deferred result. EndFollow sets SAnimator +0x27c and returns false while +0x180
-            // is 1 or -1; once it can finish, the route takes its interrupted/failure exit. Keep retrying while
-            // pending so a cancellation during an already-at-destination wait cannot become successful arrival.
+            // Cancellation during arrival retries until follow termination finishes so that an interrupted
+            // wait cannot be treated as a successful arrival.
             var cancelReason = route.FailureReason != 0 ? route.FailureReason : (short)4;
             person[PersonData.RouteResult] = cancelReason;
             route = route with { EndFollowPending = true, EndFollowOnArrival = false, FailureReason = cancelReason };
@@ -343,16 +333,11 @@ internal static class RouteExecutor
             frame.Waiting = true;
             return PrimitiveResult.Stop;
         }
-        // A deferred EndFollow is consumed by SAnimator::Tick, not by the next behavior callback.
-        // Tick advances +0x180 from 1 to 3 when the active practice permits it; this callback then
-        // retries EndFollow and takes its immediate-success branch.
         if (route.EndFollowPending && !route.EndFollowOnArrival)
         {
             if (route.AnimatorFollowState is not (1 or -1))
             {
                 CompleteEndFollow(world, person, route);
-                // TryLookTowards converts FollowOneStep's 0 result to 1; the routed-movement callback's
-                // state-0xA arm instead transitions to its failed-route state after EndFollow succeeds.
                 if (route.FollowPlacementRejected)
                 {
                     person.AnimatorRootX = null;
@@ -372,8 +357,6 @@ internal static class RouteExecutor
         }
         if (route.AnimatorFollowState == -1)
         {
-            // Mac FollowOneStep returns status 2 for +0x180 == -1; TryGotoRoutingSlot propagates
-            // that pending status without advancing the route or changing its BHAV continuation.
             frame.Waiting = true;
             return PrimitiveResult.Stop;
         }
@@ -422,9 +405,9 @@ internal static class RouteExecutor
             return EndFollowAndClearRoute(world, person, route, frame, stack, failureReason: 1);
         }
 
-        // FUN_0045aecf state 1: a seated Sim first checks FUN_004818d9 to complete immediately when already seated
-        // in the target seat; otherwise it runs that seat's function 0x1b (stand) as a pushed tree, passing the route
-        // entry direction, and waits in state 5 until it returns (failing with reason 6 if Sitting remains nonzero).
+        // If already seated in the target chair, routing succeeds immediately; otherwise, it pushes the
+        // chair's stand function (entry 0x1b) with the entry direction, failing with reason 6 if still
+        // seated upon return.
         if (route.PendingStandDepth >= 0)
         {
             if (stack is null || stack.Frames.Count > route.PendingStandDepth) return PrimitiveResult.Stop;
@@ -460,19 +443,16 @@ internal static class RouteExecutor
             }
         }
 
-        // FUN_0045aecf's route-record state 2 compares the Sim's current room with the final target room and
-        // calls FUN_0045c92e before it advances the route waypoint queue. Let the portal function approach its
-        // portal from the Sim's current position; waiting until the next path edge changes rooms can first move
-        // the Sim onto a closed door tile, where that function's own Go To Relative request is blocked. The
-        // portal callback also precedes our inferred path search: a closed doorway can make that search fail.
+        // Portal functions must be invoked from the character's current position before advancing across a
+        // room boundary, preventing movement onto a closed door tile that would block the portal
+        // interaction.
         var currentRoom = unchecked((ushort)person.RoomWord84);
         var destinationRoom = route.LookTowardsFollow ? currentRoom : route.DirectPositionRequest
             ? RoomKeyAt(world, route.Destination)
             : PortalRoomKey(anchor);
 
-        // FUN_0045aecf route state 2 marks the previous portal and linked function part used,
-        // then calls FUN_0045c92e again while the Sim remains outside the destination room.
-        // A returned portal callback is not proof that its portal crossed the room boundary.
+        // A completed portal callback does not guarantee the room boundary was crossed; if still outside
+        // the target room, routing must select the next portal.
         if (portalCallbackCompleted && currentRoom != destinationRoom)
         {
             var usedPortalIds = route.UsedPortalIds?.ToHashSet() ?? [];
@@ -490,7 +470,8 @@ internal static class RouteExecutor
             person.NativeRoute = route;
         }
 
-        if (!route.LookTowardsFollow && currentRoom != destinationRoom && route.OpenedPortalId == 0)
+        var isGhost = (person[PersonData.IsGhost] & 1) != 0;
+        if (!isGhost && !route.LookTowardsFollow && currentRoom != destinationRoom && route.OpenedPortalId == 0)
         {
             InitializeRoutePortalCosts(world, person, route);
             var routeSourceRoom = unchecked((ushort)person.RoomWord84);
@@ -501,9 +482,6 @@ internal static class RouteExecutor
                 Trace(world, person, anchor.Id, route.Destination, "portal-rejected", "no portal connects the route rooms");
                 return EndFollowAndClearRoute(world, person, route, frame, stack, failureReason: 2);
             }
-            // FUN_0045aecf calls FUN_0045c92e whenever the route Sim is outside the target
-            // room. FUN_0045c92e pushes the selected portal's function 0x0f without filtering
-            // by the target's lot coordinates or by what that BHAV does to its caller.
             var failure = stack is null ? "active BHAV stack is missing" : null;
             if (stack is null || !StartPortalFunction(world, person, portal, stack, frame, route, out failure))
             {
@@ -515,10 +493,8 @@ internal static class RouteExecutor
             return PrimitiveResult.Again;
         }
 
-        // In Sims.exe (0045aecf.c:95-137), FUN_004824b8 (SelectDestination) runs in state 1 AFTER
-        // portal callbacks bring the Sim into destinationRoom. Re-evaluating radial/multi-candidate
-        // slots upon entering destinationRoom allows SelectDestination to score and path-test
-        // candidates from the Sim's post-portal entry position rather than pre-portal coordinates.
+        // Re-evaluating multi-candidate routing slots upon entering the destination room allows scoring and
+        // path testing from the post-portal entry position rather than pre-portal coordinates.
         if (portalCallbackCompleted && currentRoom == destinationRoom &&
             !route.LookTowardsFollow && !route.DirectPositionRequest &&
             (route.Slot.Flags & 0xff) != 0 && route.Slot.SnapTargetSlot < 0)
@@ -539,9 +515,8 @@ internal static class RouteExecutor
             }
         }
 
-        // FUN_0045aecf state 0x12 -> FUN_0045c4fa (0045c4fa.c:40-69): when the selected goal is a chair
-        // (+0xc != 0), copy its chair-relative entry bit into PersonData.RouteEntryFlags and push that chair's
-        // Sit tree (OBJf 0x1a) before BeginFollow, waiting in route state 4 until Sit finishes.
+        // When routing to a chair, copies the chair-relative entry bit into route entry flags and pushes
+        // the chair's Sit interaction (entry 0x1a) before following the route.
         if (!route.LookTowardsFollow && !route.DirectPositionRequest && route.ChairObjectId != 0)
         {
             person[PersonData.RouteEntryFlags] = route.EntryFlags;
@@ -584,7 +559,7 @@ internal static class RouteExecutor
                                          route.WaypointCellCenterX != int.MinValue
                     ? (route.WaypointCellCenterX, route.WaypointCellCenterY)
                     : null,
-                allowCrossRoom: route.DirectPositionRequest || person.NativeRouteParents.Count != 0))
+                allowCrossRoom: isGhost || route.DirectPositionRequest || person.NativeRouteParents.Count != 0))
         {
             Trace(world, person, anchor.Id, route.Destination, "path-rejected", "no route path to selected destination");
             return EndFollowAndClearRoute(world, person, route, frame, stack, failureReason: 1);
@@ -593,9 +568,6 @@ internal static class RouteExecutor
 
         if (route.AnimatorFollowState == 2)
         {
-            // FUN_00589d4b does not read a skill: state 2 places the completed animator root
-            // and returns 1. FUN_0045aecf state 3 then takes state 9 (EndFollow / successful route).
-            // The practice may already have been stopped by the animator's terminal transition.
             var rootX = person.AnimatorRootX ?? route.MotionX;
             var rootY = person.AnimatorRootY ?? route.MotionY;
             var completedProjection = FindNearestRoutePoint(path, FTileIntegerCoordinate(rootX), FTileIntegerCoordinate(rootY));
@@ -638,9 +610,6 @@ internal static class RouteExecutor
 
         if (route.AwaitingBeginFollow)
         {
-            // FUN_0045aecf state 0x12 constructs the path before state 0x0c calls BeginFollow.
-            // FUN_00589c89 and Mac SAnimator.s 0x10356B38–0x10356BD4 seed the root from the
-            // current actor position, including a position changed by the completed portal callback.
             if (!route.LookTowardsFollow)
                 world.PlaySoundEvent?.Invoke("begin_route", person.Id, false, false);
             person.AnimatorControlState = 3;
@@ -692,13 +661,8 @@ internal static class RouteExecutor
             if (route.AnimatorFollowState == 1 && !route.EndFollowPending && !route.LookTowardsFollow &&
                 MathF.Abs(atDestinationError) > 0.000001f)
             {
-                // FUN_0045c4fa still appends its look point when the Sim already stands on the goal, and returns 2
-                // unless that point equals the final point (0045c4fa.c:122-132); route state 0x0c then BeginFollows
-                // (FUN_00589c89) and the animator turns toward it. Native has no walking segment here, so enter
-                // the same terminal transition the fade end produces (+0x1bc/+0x1c0 = current root, +0x180 = -1,
-                // SAnimator.s 0x103509A0–0x103509CC): the state-3 gate in TryBeginRouteTurnRoot plays the turn,
-                // TickRouteFollowTransition promotes follow state 2 once the heading matches, and the follow-2
-                // branch above places the Sim and writes RouteEntryFlags before the BHAV resumes.
+                // When already standing at the destination, an in-place turn transition aligns with the
+                // target heading before committing route entry flags and resuming execution.
                 var here = person.Position;
                 person.AnimatorControlState = 3;
                 person.AnimatorRootX = here.X;
@@ -741,9 +705,8 @@ internal static class RouteExecutor
             CommitArrivalHeading(person, route);
             ApplyRoutePlacement(world, person, anchor, route.Destination, route.Slot, stack);
             SetRouteEntryFlags(world, person, anchor, route);
-            // The already-at-destination path must finish SAnimator's follow state too. Otherwise
-            // +0x188 remains Walking/Running and TryAnimate keeps returning busy after the route ends
-            // (EndFollow__9SAnimatorFv 0x103568A4–0x103568E8; cXPerson routing 0x10106434–0x101064DC).
+            // Routes starting already at the destination must terminate locomotion state so subsequent
+            // animation primitives do not report busy.
             CompleteEndFollow(world, person, route);
             ClearRoute(person);
             frame.Waiting = false;
@@ -759,19 +722,16 @@ internal static class RouteExecutor
                        (uint)next.TileX < routeMap.Width && (uint)next.TileY < routeMap.Height
             ? routeMap.RoomAt(next.TileX, next.TileY)
             : SimsEngine.World.RoomMap.NoRoom;
-        // A route nested inside a portal function walks through that portal; it has no further room gate.
-        if (!route.LookTowardsFollow && person.NativeRouteParents.Count == 0 && currentRoom != nextRoom && currentRoom != SimsEngine.World.RoomMap.NoRoom && nextRoom != SimsEngine.World.RoomMap.NoRoom)
+        // Ghosts and routes nested inside portal functions bypass room-transition portal checks.
+        if (!isGhost && !route.LookTowardsFollow && person.NativeRouteParents.Count == 0 && currentRoom != nextRoom && currentRoom != SimsEngine.World.RoomMap.NoRoom && nextRoom != SimsEngine.World.RoomMap.NoRoom)
         {
-            // FUN_0045c92e initializes the route-cost state (including the person's unique Route ID) before
-            // selecting the first portal for this route segment. A nested route on an already-open portal skips it.
             InitializeRoutePortalCosts(world, person, route);
             var routeSourceRoom = unchecked((ushort)person.RoomWord84);
             var routeDestinationRoom = route.DirectPositionRequest
                 ? RoomKeyAt(world, route.Destination)
                 : PortalRoomKey(anchor);
-            // FUN_0045aecf retains the portal selected by FUN_0045c92e in route-record +0x68 while its
-            // function tree runs. Reuse that portal at the room edge; re-ranking here can select a second
-            // manager entry for the same multi-tile door before the retained route portal is marked used.
+            // Reuses the active portal at room boundaries to prevent re-ranking from selecting another tile
+            // of the same multi-tile door before it is marked used.
             var portal = route.OpenedPortalId != 0
                 ? world.ObjectById(route.OpenedPortalId)
                 : PortalForStep(world, person, anchor, routeSourceRoom, routeDestinationRoom,
@@ -830,8 +790,8 @@ internal static class RouteExecutor
             }
             else if (route.MotionDirection != desiredDirection)
             {
-                // Once the Sim is in walking-start or the loop, the animator follows the route polyline with the
-                // same skill. The standing-adjust skills only turn a Sim that is standing at the route's start.
+                // Standing adjustment turns only trigger from a standstill; active locomotion follows the
+                // route polyline directly.
                 var walking = route.MotionAnimationIndex >= 19;
                 route = route with
                 {
@@ -842,9 +802,8 @@ internal static class RouteExecutor
                 };
             }
         }
-        // Mac SAnimator transitions a start skill to its matching loop at practice progress 0.95.
-        // The run path is skill 0x16 -> 0x15 for WalkStyle 1; the walk path is 0x13 -> 0x14.
-        // See Mac SAnimator.s 0x103502AC–0x10350378 and Windows FUN_0058dc76.
+        // Locomotion start animations transition to their matching loop at 95% progress (walk start 19 to
+        // loop 20, run start 22 to loop 21).
         if (route.MotionAnimationIndex is 19 or 22 &&
             ResolveWalkAnimation(world, person, route.MotionAnimationIndex)?.StandardRootMotionSamples is { Count: > 1 } startSamples &&
             route.MotionPracticeFrame >= startSamples.Count * StartTransitionProgress)
@@ -856,11 +815,7 @@ internal static class RouteExecutor
                 MotionPracticeFrame = 0f,
             };
             person.AnimatorControlState = person[ObjectData.WalkStyle] == 1 ? 10 : 9;
-            // Mac's state-6/11 threshold paths write SAnimator +0x194 = 1 alongside +0x288
-            // (0x1034FF44–0x1034FFC0, 0x10350378–0x103503F4).
             person.AnimatorGaitEntryState = 1;
-            // SAnimator's state 9/10 transition writes +0x288 = 1 when the start skill reaches
-            // its transition threshold (Mac SAnimator.s 0x1034FFB8–0x1034FFC0, 0x103503EC–0x103503F4).
             person.AnimatorPoolTransitionState = 1;
             person.NativeRoute = route;
         }
@@ -892,15 +847,11 @@ internal static class RouteExecutor
         var playbackScale = turnPractice && route.TurnRootPracticeScale is { } turnScale
             ? turnScale
             : person.AnimatorWalkingScale;
-        // FollowOneStep reads the scale from the preceding SAnimator::Tick. This route callback executes before
-        // the current person's animator tick advances +0x220.
         route = route with { MotionPlaybackScale = playbackScale };
         var effectivePlaybackScale = playbackScale;
         var oneShot = turnPractice || route.MotionAnimationIndex is >= 4 and <= 18;
-        // Route root motion advances every SAnimator tick, including root-only camera ticks. The skeleton's
-        // Practice::Apply is skipped by VitaBoy::AnimationTickRootOnly, so its phase must use the elapsed time
-        // since the last full practice application when full ticks resume (Practice +0x18; skeleton.s
-        // 0x10361960–0x103619BC). Root movement below continues to use one per-tick frameDelta.
+        // Root motion advances every tick even when bone poses are skipped, so animation phase calculation
+        // must measure elapsed time since the last full evaluation when full updates resume.
         var practiceApplyMils = unchecked(person.AnimatorMilliseconds + AnimatorTickMilliseconds);
         var elapsedPracticeMils = person.AnimationPlayback?.LastPracticeApplyMils is { } lastApplyMils
             ? unchecked(practiceApplyMils - lastApplyMils)
@@ -914,29 +865,20 @@ internal static class RouteExecutor
         var targetDxNow = targetX - motionX;
         var targetDyNow = targetY - motionY;
         var targetDistanceNow = MathF.Sqrt(targetDxNow * targetDxNow + targetDyNow * targetDyNow);
-        // FollowOneStep tests the root left by the previous animator Tick. The next root step and its
-        // second placement happen later in TickAvatarAnimations.
         var movedX = motionX;
         var movedY = motionY;
-        // Tick keeps the floating animator root even when FindNearestPoint projects it onto the
-        // end of the route segment. Once FollowOneStep has placed that endpoint, route progress
-        // is at the waypoint even if the retained root is a fraction beyond it (SAnimator::Tick
-        // stores the unprojected root at +0x80/+0x84 after placing the projected FTile).
+        // Route arrival occurs once the projected waypoint is placed, even if continuous root coordinates
+        // extend slightly beyond it.
         var activeFollowPlacement = route.AnimatorFollowState == 2;
         var arrived = activeFollowPlacement && (targetDistanceNow <= 0.0001f ||
                       (person.Position.X == targetX && person.Position.Y == targetY));
 
-        // FollowOneStep adds 0.5 to the current root before fctiwz (Mac SAnimator.s
-        // 0x103569F0–0x10356A20), then projects the resulting FTile onto this saved route.
         var movedXInteger = FTileIntegerCoordinate(movedX);
         var movedYInteger = FTileIntegerCoordinate(movedY);
         var nearestRoutePoint = FindNearestRoutePoint(path, movedXInteger, movedYInteger);
         var movedPosition = nearestRoutePoint is { } nearest
             ? new ObjectPosition(nearest.X, nearest.Y, person.Position.Height)
             : new ObjectPosition(movedXInteger, movedYInteger, person.Position.Height);
-        // SAnimator::Tick keeps this projected per-step root vector at +0x28c/+0x290 and tests its
-        // squared length in the route-entry gate (Mac SAnimator.s 0x10350F4C–0x10350FFC,
-        // 0x10350798–0x103507A8).
         person.AnimatorProjectedRootStepX = movedX - motionX;
         person.AnimatorProjectedRootStepY = movedY - motionY;
         var positionBefore = person.Position;
@@ -949,25 +891,17 @@ internal static class RouteExecutor
                 $"owner={route.OwnerFrame?.TreeId}:{route.OwnerFrame?.Instruction}; next=({next.TileX},{next.TileY})@({targetX},{targetY}); " +
                 RouteWorldSnapshot(world, person, positionBefore, movedPosition));
         }
-        // Mac FollowOneStep validates and places the current root here; Tick performs the predicted-root
-        // placement later in the same Simulate pass (SAnimator.s 0x10351004–0x1035109C). Windows
-        // FUN_00589d4b corroborates FollowOneStep's check/rollback/place order. cXPerson::CanPlace
-        // (Windows FUN_004355c7) forwards null reference-object and slot arguments, so this is ordinary
-        // placement rather than referenced-slot validation. ObjectPosition stores ground as height 0, while
-        // FUN_00432a70's placement spec stores it as level 1.
+        // Ground elevation is represented as height 0 in world positions, but corresponds to floor level 1
+        // in placement checks.
         var canPlacePosition = movedPosition with
         {
             Height = movedPosition.Height == 0 ? 1 : movedPosition.Height,
         };
-        // FollowOneStep writes the discrete person facing from SAnimator +0x88 before it
-        // validates and places the current root (Mac SAnimator.s 0x10356978–0x103569E4).
-        // Keep the continuous root heading for the skeleton; ObjectData.Direction is the
-        // separately quantized eight-way placement facing.
+        // Continuous root heading drives avatar animation, while object direction stores the quantized
+        // eight-way placement facing.
         if (route.AnimatorFollowState == 2)
             person[ObjectData.Direction] = QuantizeRootDirection(
                 person.AnimatorRootDirection ?? person[ObjectData.Direction]);
-        // FUN_00589d4b returns pending for follow state 1 without invoking object callbacks.
-        // Path/practice preparation still feeds the separately scheduled animator Tick.
         var accepted = !activeFollowPlacement || CanPlaceArrival(world, person, anchor, route.Slot, canPlacePosition, stack);
         if (!accepted && world.CaptureExecutionTrace)
             Trace(world, person, anchor.Id, route.Destination, "follow-placement-rejected",
@@ -998,7 +932,6 @@ internal static class RouteExecutor
                 $"owner={route.OwnerFrame?.TreeId}:{route.OwnerFrame?.Instruction}; next=({next.TileX},{next.TileY})@({targetX},{targetY}); " +
                 RouteWorldSnapshot(world, person, positionBefore, person.Position));
 
-        // FollowOneStep returns 0 after a rejected preflight and does not advance the animation step.
         if (!accepted)
         {
             if (!route.LookTowardsFollow)
@@ -1006,8 +939,6 @@ internal static class RouteExecutor
             route = route with { MotionX = movedX, MotionY = movedY, FailureReason = 1 };
             if (route.AnimatorFollowState is 1 or -1)
             {
-                // TryLookTowards calls EndFollow after result 0; routed movement enters callback state 0xA,
-                // which does the same. EndFollow defers while +0x180 is 1/-1.
                 person.NativeRoute = route with { EndFollowPending = true, FollowPlacementRejected = true };
                 return PrimitiveResult.Stop;
             }
@@ -1035,8 +966,8 @@ internal static class RouteExecutor
                                   route.MotionAnimationIndex is >= 11 and <= 18;
         if (standingAdjustEnded)
         {
-            // The route heading belongs to the animator while a standing-adjust skill runs. Commit
-            // the person's discrete placement facing only after that turn skill has completed.
+            // Discrete placement facing is only committed after standing adjustment turns complete,
+            // allowing the animation to drive orientation during the turn.
             person[ObjectData.Direction] = route.MotionDirection;
             person.AnimatorRootDirection = route.MotionDirection;
             person.RefreshFootprintBounds();
@@ -1068,19 +999,14 @@ internal static class RouteExecutor
         person.AnimatorRootY = movedY;
         if (standingAdjustEnded)
         {
-            // Mac's state 6/11 handlers clear +0x194 and +0x288 before starting WalkingStart or
-            // RunningStart (SAnimator.s 0x1034FF44–0x1034FF54 and 0x10350378–0x10350388).
-            // The route's standing-adjust one-shot has just completed, so enter that same state
-            // before the start skill begins.
             person.AnimatorControlState = person[ObjectData.WalkStyle] == 1 ? 11 : 6;
             person.AnimatorGaitEntryState = 0;
             person.AnimatorPoolTransitionState = 0;
             var startClip = ResolveWalkAnimation(world, person, nextAnimationIndex);
             if (startClip is { StandardDistance: > 0f })
             {
-                // State 6/11 setup calls StdAnimDist(start skill), converts its skill units to FTile
-                // with 16/3, and rotates the displacement by (root direction + 6) * pi/4
-                // (SAnimator.s 0x1034FEBC–0x1034FF40 and 0x10350300–0x10350374).
+                // Converts standard animation distance to tile units using a 16/3 scale factor, rotating
+                // displacement by (direction + 6) * π/4.
                 var angle = ((person.AnimatorRootDirection ?? person[ObjectData.Direction]) + 6f) * (MathF.PI / 4f);
                 var startDistance = startClip.StandardDistance * (16f / 3f);
                 route = route with
@@ -1099,7 +1025,7 @@ internal static class RouteExecutor
             CompleteEndFollow(world, person, route);
             ClearRoute(person);
             frame.Waiting = false;
-            return PrimitiveResult.True; // FUN_0045aafa converts a completed FollowOneStep result of 0 to true.
+            return PrimitiveResult.True;
         }
         if (arrived && next.IsDestination)
         {
@@ -1148,8 +1074,6 @@ internal static class RouteExecutor
             }
             else
             {
-                // BeginFollow retains its TileList; Tick advances +0x178 rather than rebuilding the graph
-                // after every partition point (Mac SAnimator.s 0x10350BB4–0x10350BF0).
                 var nextIndex = Math.Max(1, route.MotionTargetPathIndex) + 1;
                 if (nextIndex < path.Count)
                 {
@@ -1177,8 +1101,8 @@ internal static class RouteExecutor
         return PrimitiveResult.Stop;
     }
 
-    // The practice phase selects the visible pose. Root-only VitaBoy ticks keep that phase fixed while route root
-    // motion continues to move the Sim; full ticks advance both independently from the same skill.
+    // Root-only animation updates hold the visible skeletal pose fixed while advancing root displacement
+    // along the route.
     internal static void ShowWalkSkill(XPerson person, AvatarAnimationClip clip, float routeFrame, int sampleCount)
     {
         var loop = true;
@@ -1190,8 +1114,6 @@ internal static class RouteExecutor
         if (person.AnimationPlayback is not { RouteDriven: true } playback || playback.Clip.Name != clip.Name)
             person.AnimationPlayback = playback = new AvatarAnimationPlayback(clip, backwards: false, loop: loop,
                 startedAtMils: person.AnimatorMilliseconds)
-                // Skill::NewPractice initializes Practice +0x68 to -1, and Practice::Bind leaves it intact.
-                // SAnimator::Tick treats any nonzero value as interruptible.
                 { RouteDriven = true, Interruptible = true };
         playback.SetFrame(Math.Min(routeFrame * clip.FrameCount / Math.Max(sampleCount, 1), clip.FrameCount - 0.001f));
     }
@@ -1205,7 +1127,6 @@ internal static class RouteExecutor
             world.CustomWalkAvatarAnimationTable.TryGetValue((unchecked((uint)typeRecord.Key), standardIndex), out var customClip))
             clip = customClip;
 
-        // GetStdSkill reads cXPerson's cached +0x60c after the ObjSelector entry; ForceLocation is the writer.
         if (person.AnimatorPoolTile)
         {
             var poolTable = child ? (ushort)(158 + (person[PersonData.Gender] & 1)) : (ushort)160;
@@ -1214,17 +1135,13 @@ internal static class RouteExecutor
         }
         if (clip is not null) return clip;
 
-        // Mac SkillLookup.s::GetStdSkill uses Global STR# 151 for age <= 17, then 152/153 by gender.
-        // It falls back to STR# 150 when the selected table entry is empty.
+        // Resolves walk animations using global STR# 151 for children, 152 for adult males, and 153 for
+        // adult females, falling back to STR# 150 if empty.
         var fallbackTable = child ? (ushort)151 : (ushort)(152 + (person[PersonData.Gender] & 1));
         if (world.StandardWalkFallbackAnimationTable.TryGetValue((fallbackTable, standardIndex), out clip)) return clip;
         return world.StandardWalkFallbackAnimationTable.GetValueOrDefault(((ushort)150, standardIndex));
     }
 
-    // FUN_0045aecf stores the direction returned by FUN_00452129 for the accepted next route point.
-    // Mac SAnimator::Tick normalizes atan2(y, x) into eight sectors by adding 1/16 turn, multiplying
-    // by 8, and truncating after +0.5 (0x1034F69C-0x1034F790). Its sector table is
-    // [15,13,11,12,14,16,18,17]; converting FUN_00452129's route octants yields this mapping.
     internal static short DirectionalWalkAnimation(short direction) => direction switch
     {
         0 => 18,
@@ -1238,9 +1155,8 @@ internal static class RouteExecutor
         _ => 15,
     };
 
-    /// <summary>Matches the route step in Mac SAnimator::Tick. It divides Skill +0x20 by 3, multiplies by 16,
-    /// and scales by elapsed milliseconds over Practice duration (Skill +0x1c / scale +0x24), at
-    /// 0x10350F68–0x10350FB0. The constants are lbl_1059BBC4 +0x3c and +0x9c.</summary>
+    /// <summary>Calculates route step distance by scaling standard animation distance by 16/3 and advancing
+    /// proportionally by elapsed time over scaled animation duration.</summary>
     internal static float RouteStepDistance(float standardDistance, float skillDurationMilliseconds, float practiceScale,
         float elapsedMilliseconds)
     {
@@ -1250,9 +1166,6 @@ internal static class RouteExecutor
         return (16f * skillDistancePerTile) / ticksPerPractice;
     }
 
-    // Mac TileList::FindNearestPoint(this, FTilePt*, -1), 0x10164010, scans segment
-    // indices 0 through count-3. The original TileList includes a trailing entry that
-    // this port's path does not, so its last segment is count-2 here.
     internal static (int X, int Y)? FindNearestRoutePoint(IReadOnlyList<RouteWaypoint> path, int x, int y)
     {
         var nearest = FindNearestRouteSegment(path, x, y);
@@ -1278,8 +1191,6 @@ internal static class RouteExecutor
         {
             var start = path[index];
             var end = path[index + 1];
-            // The Mac routine computes the segment vector from the next point back to
-            // the previous point, then projects from the next point using that vector.
             var dx = start.X - end.X;
             var dy = start.Y - end.Y;
             var lengthSquared = MathF.FusedMultiplyAdd(dy, dy, (float)dx * dx);
@@ -1287,8 +1198,6 @@ internal static class RouteExecutor
 
             var numerator = MathF.FusedMultiplyAdd(y - end.Y, dy, (float)(x - end.X) * dx);
             var amount = Math.Clamp(numerator / lengthSquared, 0f, 1f);
-            // Mac TileList::FindNearestPoint applies fctiwz directly to these projections
-            // (XRouting.s 0x10164218–0x10164248); its only 0.5 bias is earlier in FollowOneStep.
             var projectedX = (int)MathF.FusedMultiplyAdd(amount, dx, end.X);
             var projectedY = (int)MathF.FusedMultiplyAdd(amount, dy, end.Y);
             var projectedDx = projectedX - x;
@@ -1304,17 +1213,12 @@ internal static class RouteExecutor
         return (bestX, bestY, bestSegmentIndex);
     }
 
-    /// <summary>Matches FollowOneStep's lbl_1059BBC4[0] bias before PowerPC fctiwz (Mac SAnimator.s
-    /// 0x103569F0–0x10356A20): add 0.5, then truncate toward zero.</summary>
     internal static int FTileIntegerCoordinate(float coordinate) => (int)(coordinate + 0.5f);
 
-    /// <summary>Matches SAnimator::Tick's fctiwz conversion for the newly computed root
-    /// (Mac SAnimator.s 0x10351004–0x10351028); this conversion has no +0.5 bias.</summary>
     internal static int TickRootIntegerCoordinate(float coordinate) => (int)coordinate;
 
-    /// <summary>Applies the source Practice-phase root interpolation in standing-start states 6/11.
-    /// SAnimator.s writes root +0x80/+0x84 as origin (+0x1c8/+0x1cc) to target (+0x1bc/+0x1c0)
-    /// while primary Practice +0x28 is below 1 (0x1034FF44–0x1034FFF8, 0x10350378–0x1035042C).</summary>
+    /// <summary>Interpolates root position from start origin to target during the standing-start animation
+    /// phase.</summary>
     internal static void TickStandingStartRootInterpolation(SimulationWorld world, XPerson person)
     {
         var startSkill = person.AnimatorControlState switch
@@ -1338,9 +1242,8 @@ internal static class RouteExecutor
         person.NativeRoute = route with { MotionX = rootX, MotionY = rootY };
     }
 
-    /// <summary>Builds state 5's destination from the route target and the authored StdAnimOffset translation.
-    /// Mac obtains the final "ROOT" motion translation and subtracts its angle-rotated X/Y components from
-    /// +0x1bc/+0x1c0 (SAnimator.s 0x1034F780–0x1034F8A0; Windows FUN_0058dc76).</summary>
+    /// <summary>Computes turn root coordinates by subtracting the angle-rotated standard root motion offset
+    /// from the target position.</summary>
     internal static (float X, float Y) TurnRootTarget(float targetX, float targetY, float angle,
         System.Numerics.Vector3 standardOffset)
     {
@@ -1350,9 +1253,6 @@ internal static class RouteExecutor
             targetY - (standardOffset.X * sine + standardOffset.Y * cosine));
     }
 
-    /// <summary>Writes the arrival heading to the animator root (+0x88) and the person facing (+0x4c, SAnimator
-    /// state 7's fctiwz(direction + 0.5) wrap). After the animated state-3 turn this matches the current heading;
-    /// for octant facings it equals the previous ArrivalFacing write.</summary>
     private static void CommitArrivalHeading(XPerson person, RouteState route)
     {
         var heading = ArrivalHeading(route);
@@ -1360,14 +1260,9 @@ internal static class RouteExecutor
         person.AnimatorRootDirection = heading;
     }
 
-    /// <summary>The terminal heading Tick derives at the last walking point: atan2 from TileList[count-2] toward the
-    /// look point FUN_0045c4fa appends with FUN_0045f7c5 (0045c4fa.c:70-132), stored in +0x1c4 at the fade end
-    /// (SAnimator.s 0x10350598–0x10350690, 0x103509C4) and in +0x1dc for the pool exit. Slot facing modes -1/-2 and
-    /// explicit facings build that point one FUN_004222bd tile along an octant, which native keeps as ArrivalFacing.
-    /// Facing -3 (0045c4fa.c:80-92) instead continues the final path segment (last point minus the previous
-    /// one), so the Sim keeps its travel heading; a zero-length final segment falls back to the person's +0x4c
-    /// direction, the ArrivalFacing captured when the route started. Direct-position helper routes are treated
-    /// the same way (their native ArrivalFacing is that same captured +0x4c). Look Towards keeps ArrivalFacing.</summary>
+    /// <summary>Determines arrival heading for completed routes. Slot facing modes -1 and -2 face along
+    /// specified octants, while mode -3 preserves travel heading along the final path segment, falling back
+    /// to initial orientation if zero-length.</summary>
     internal static float ArrivalHeading(RouteState route)
     {
         if (route.LookTowardsFollow)
@@ -1385,9 +1280,8 @@ internal static class RouteExecutor
         return route.ArrivalFacing;
     }
 
-    /// <summary>Enters Mac SAnimator state 4 or 5 from state 3 according to the wrapped heading error and
-    /// route-target distance gates (SAnimator.s 0x1034F438–0x1034F610). State 4 uses its body-turn skill
-    /// buckets; state 5 uses the standing-turn skill's authored offset and scaled practice.</summary>
+    /// <summary>Selects body-turn animations or standing-turn offset adjustments based on heading error and
+    /// distance thresholds to the route target.</summary>
     internal static bool TryBeginRouteTurnRoot(SimulationWorld world, XPerson person)
     {
         if (person.AnimatorControlState != 3 || person.NativeRoute is not
@@ -1400,11 +1294,6 @@ internal static class RouteExecutor
         if (!float.IsFinite(rootX) || !float.IsFinite(rootY)) return false;
         if (route.TransitionTargetX is { } transitionX && route.TransitionTargetY is { } transitionY)
         {
-            // The state-3 gate adjusts toward +0x1bc/+0x1c0 after a route-preference arrival. Within +0x90
-            // (0.5, or 0.1 for special body modes) it snaps the root there (0x1034F438–0x1034F4F8); farther away
-            // its state-5 turn also ends with the root on +0x1bc. The arrival's one repeated step is shorter
-            // than +0x90 for authored walk clips, so native snaps in both cases. The heading target +0x1c4 is
-            // not written by that arrival; keeping the current heading is a native inference.
             person.AnimatorRootX = transitionX;
             person.AnimatorRootY = transitionY;
             person.NativeRoute = route with { MotionX = transitionX, MotionY = transitionY };
@@ -1439,23 +1328,17 @@ internal static class RouteExecutor
         var headingError = targetDirection - currentDirection;
         while (headingError >= 4f) headingError -= 8f;
         while (headingError < -4f) headingError += 8f;
-        // A matching terminal pose needs no standing-adjust practice. The original state-3
-        // match gate redispatches follow/gait completion (0x1034F438–0x1034F4F4).
+        // Heading error thresholds are tightened for special body types and scaled by walking speed.
         if (distance <= 0.000001f && MathF.Abs(headingError) <= 0.000001f) return false;
         var angleThreshold = (specialBody ? 0.0625f : 0.25f) / person.AnimatorWalkingScale;
         if (MathF.Abs(headingError) >= angleThreshold || (route.AnimatorFollowState != 1 && distance >= maximumDistance))
             return TryBeginRouteBodyTurn(world, person, route, rootX, rootY, targetDirection, currentDirection,
                 headingError);
-        // During active follow (AnimatorFollowState == 1) once heading is within angleThreshold, a distant
-        // target (>= maximumDistance) enters gait rather than a short state-5 standing-adjust step.
+        // During active following within angle threshold, distant targets enter locomotion rather than
+        // standing turns.
         if (distance >= maximumDistance)
             return false;
 
-        // Within the angle limit and nearer than +0x90, the gate does not start a practice: it copies
-        // +0x1bc/+0x1c0 to the root, calls SetDirection(+0x1c4), stores fctiwz(+0x88 + 0.5) wrapped to [0,7]
-        // in cXObject +0x4c and redispatches state 3 (SAnimator.s 0x1034F60C–0x1034F698). Native applies this
-        // only to the follow-state -1 arrival, where the destination point and ArrivalHeading are the
-        // transition target the fade end stored (0x103509A0–0x103509CC).
         if (route.AnimatorFollowState == -1 && route.MotionTargetIsDestination && distance < snapDistance)
         {
             person.AnimatorRootX = route.MotionTargetX;
@@ -1466,15 +1349,11 @@ internal static class RouteExecutor
             return false;
         }
 
-        // This turn selector uses the atan2 octant boundaries at 22.5 degrees, unlike the route
-        // waypoint direction's 2:1 slope boundaries (SAnimator.s 0x1034F69C–0x1034F790).
+        // Turn selection uses standard 22.5-degree octant boundaries rather than 2:1 slope thresholds.
         var skill = StandingTurnAnimationForVector(dx, dy);
         var clip = ResolveWalkAnimation(world, person, skill);
         if (clip?.StandardRootMotionSamples is not { Count: > 1 }) return false;
 
-        // State 3 snaps +0x80/+0x84 to the route point before setting the state-5 interpolation
-        // anchor when its distance is below +0x90 (0.5, or 0.1 for special body modes).
-        // This is not the 0.1 threshold used below to choose Practice scale 0.5.
         if (distance < snapDistance)
         {
             rootX = route.MotionTargetX;
@@ -1483,8 +1362,6 @@ internal static class RouteExecutor
             person.AnimatorRootY = rootY;
         }
 
-        // SAnimator retains the start and target directions (+0x1d0 and +0x1c4/1dc),
-        // interpolating heading across practice playback (SAnimator.s 0x1034FCF8–0x1034FD10).
         var practiceDirection = currentDirection + headingError;
         var adjustedTarget = TurnRootTarget(route.MotionTargetX, route.MotionTargetY,
             MathF.Atan2(dy, dx), clip.StandardOffset);
@@ -1517,9 +1394,6 @@ internal static class RouteExecutor
         return true;
     }
 
-    /// <summary>Starts Mac state 4's body-turn practice when the state-3 direction or distance gate requires it.
-    /// Skill buckets, heading correction, endpoint fields, and +0x220 practice scale follow SAnimator.s
-    /// 0x1034F938–0x1034FAE8; state 4 interpolates those endpoints at 0x1034FB04–0x1034FBEC.</summary>
     private static bool TryBeginRouteBodyTurn(SimulationWorld world, XPerson person, RouteState route,
         float rootX, float rootY, float targetDirection, float currentDirection, float headingError)
     {
@@ -1528,9 +1402,8 @@ internal static class RouteExecutor
         var clip = ResolveWalkAnimation(world, person, skill);
         if (clip?.StandardRootMotionSamples is not { Count: > 1 } samples) return false;
         var practiceDirection = currentDirection + headingError - correction;
-        // SAnimator::Tick stores +0x1bc/+0x1c0 = +0x80/+0x84 before entering state 4 from active polyline follow
-        // (0058dc76.c:902-903, 353-360), turning the Sim in place rather than sliding root across the segment;
-        // direct state-3 transition targets without an active polyline interpolate toward MotionTarget.
+        // Body turns during active path following rotate in place rather than translating along the
+        // segment, whereas direct transitions interpolate toward the target.
         var turnInPlace = route.AnimatorFollowState == 1 && route.MotionPath is { Count: > 1 };
         var turnTargetX = turnInPlace ? rootX : (float)route.MotionTargetX;
         var turnTargetY = turnInPlace ? rootY : (float)route.MotionTargetY;
@@ -1559,8 +1432,8 @@ internal static class RouteExecutor
         return true;
     }
 
-    /// <summary>Maps state 4's wrapped route-heading error to the Mac standing-body turn skill and correction
-    /// (SAnimator.s 0x1034F938–0x1034FA58).</summary>
+    /// <summary>Maps heading error to the appropriate standing body turn animation and heading correction
+    /// angle.</summary>
     internal static (short Skill, float Correction) BodyTurnSkillForHeadingError(float headingError)
     {
         if (headingError < -3f) return (5, -4f);
@@ -1590,8 +1463,8 @@ internal static class RouteExecutor
         };
     }
 
-    /// <summary>Applies state 5's Practice phase interpolation from root anchor (+0x1c8/+0x1cc) to its
-    /// StdAnimOffset-adjusted route target (+0x1bc/+0x1c0); Mac SAnimator.s 0x1034FCD0–0x1034FDB0.</summary>
+    /// <summary>Interpolates root position from anchor to offset-adjusted turn target during turn animation
+    /// playback.</summary>
     internal static void TickRouteTurnRootInterpolation(SimulationWorld world, XPerson person)
     {
         var controlState = person.AnimatorControlState;
@@ -1600,7 +1473,6 @@ internal static class RouteExecutor
             route.TurnRootOriginX is not { } originX || route.TurnRootOriginY is not { } originY ||
             route.TurnRootTargetX is not { } targetX || route.TurnRootTargetY is not { } targetY)
             return;
-        // States 4 and 5 clear +0x194 and +0x288 on every Tick, before checking primary Practice phase.
         person.AnimatorGaitEntryState = 0;
         person.AnimatorPoolTransitionState = 0;
         var turnClip = ResolveWalkAnimation(world, person, route.MotionAnimationIndex);
@@ -1609,10 +1481,6 @@ internal static class RouteExecutor
         var arrivalTurn = route.AnimatorFollowState == -1;
         if (arrivalTurn && !world.AvatarAnimationRootOnly && turnClip!.DurationMilliseconds > 0f)
         {
-            // The arrival turn runs while follow state is -1, where FollowOneStep only reports busy (2), so the
-            // route callback does not advance this practice. Mac advances the primary Practice from Tick
-            // (Practice::Apply: +0x28 += elapsed / (Skill +0x1c / scale)); mirror that here using the same
-            // elapsed-since-last-full-apply rule as the route callback.
             var elapsedMils = person.AnimationPlayback?.LastPracticeApplyMils is { } lastApplyMils
                 ? unchecked(person.AnimatorMilliseconds - lastApplyMils)
                 : AnimatorTickMilliseconds;
@@ -1628,8 +1496,6 @@ internal static class RouteExecutor
         {
             person.AnimatorRootX = targetX;
             person.AnimatorRootY = targetY;
-            // State 5 calls StopCurAnim, restores the saved direction through SetDirection, then redispatches
-            // the state-3 branch (SAnimator.s 0x1034FDB0–0x1034FE18).
             person.AnimationPlayback = null;
             person.AnimatorCurrentSkill = -1;
             person.AnimatorControlState = 3;
@@ -1642,8 +1508,8 @@ internal static class RouteExecutor
             {
                 MotionX = targetX,
                 MotionY = targetY,
-                // StopCurAnim (0058dc76.c:490, 590) clears the turn skill on both active-follow and arrival turns
-                // so Continue never replays standing-turn-180 on top of the committed TurnRootSavedDirection.
+                // Clearing the turn animation index upon stopping prevents 180-degree turn animations from
+                // replaying over committed directions.
                 MotionAnimationIndex = -1,
                 MotionFrame = 0f,
                 MotionPracticeFrame = 0f,
@@ -1656,8 +1522,6 @@ internal static class RouteExecutor
                 TurnRootStartDirection = null,
                 TurnRootPracticeDirection = null,
             };
-            // States 4 and 5 break back into the state-3 dispatch loop in SAnimator::Tick (0058dc76.c:501, 610),
-            // immediately entering gait when AnimatorFollowState is 1.
             if (route.AnimatorFollowState == 1)
                 world.ApplyAnimatorRouteEntryGate(person, routeHeadingClamped: false);
             return;
@@ -1679,8 +1543,8 @@ internal static class RouteExecutor
     internal readonly record struct RouteLookahead(RouteState Route, int ActiveSegmentIndex, float TargetX,
         float TargetY, bool ReachedSegmentEnd, bool AdvancedCursor);
 
-    /// <summary>Selects SAnimator::Tick's route lookahead sample for the given root, advancing the
-    /// TileList cursor (+0x178) across reached segment ends (SAnimator.s 0x103504A8–0x10350BF4).</summary>
+    /// <summary>Selects a route lookahead sample point along the path from the current root position,
+    /// advancing across reached segment endpoints.</summary>
     internal static RouteLookahead ResolveRouteLookahead(SimulationWorld world, XPerson person, RouteState route,
         float rootX, float rootY)
     {
@@ -1688,7 +1552,6 @@ internal static class RouteExecutor
         var activeTargetIndex = route.MotionTargetPathIndex;
         if (motionPath is { Count: > 1 } && (activeTargetIndex < 1 || activeTargetIndex >= motionPath.Count))
         {
-            // Recover older transient route states from their active target coordinates.
             for (var index = 1; index < motionPath.Count; index++)
             {
                 if (motionPath[index].X != route.MotionTargetX || motionPath[index].Y != route.MotionTargetY) continue;
@@ -1701,12 +1564,8 @@ internal static class RouteExecutor
             ? activeTargetIndex - 1
             : -1;
 
-        // Mac SAnimator::Tick projects the floating root onto its active TileList segment (+0x1e4),
-        // then samples that segment in one-unit increments until the first rounded route point lies
-        // outside the squared half-stride radius (+0x1f4/+0x1f8). StartVitaBoy derives both radii
-        // from StdAnimDist(walk loop 0x14 for +0x1f8, run loop 0x15 for +0x1f4) * 0.5 * 16/3
-        // (SAnimator.s 0x10358C24–0x10358C70; selected at 0x10350B70).
-        // Recompute the projection from the saved root each tick; this keeps it correct across saves.
+        // Samples along the active route segment until exceeding half the standard animation stride scaled
+        // by 16/3.
         var targetX = (float)route.MotionTargetX;
         var targetY = (float)route.MotionTargetY;
         var progressReachedSegmentEnd = false;
@@ -1719,9 +1578,6 @@ internal static class RouteExecutor
                 rootX, rootY, halfStride);
             while (progressTarget.ReachedSegmentEnd && activeTargetIndex + 1 < progressPath.Count)
             {
-                // SAnimator advances +0x178 when its lookahead sample reaches the segment endpoint, then
-                // branches back to lbl_103504A8 and samples the next segment in the same Tick
-                // (SAnimator.s 0x10350BCC–0x10350BF4), before projecting the candidate placement.
                 activeTargetIndex++;
                 activeSegmentIndex++;
                 advancedProgressCursor = true;
@@ -1747,19 +1603,11 @@ internal static class RouteExecutor
             advancedProgressCursor);
     }
 
-    /// <summary>Runs SAnimator::Tick's second route placement after FollowOneStep placed the current root.
-    /// Mac computes the next root, truncates it with fctiwz, projects it through the route TileList, calls
-    /// CanPlace/Place, and only then stores the floating root (+0x80/+0x84; 0x10350F4C–0x1035109C).</summary>
     internal static void TickRouteRootMovement(SimulationWorld world, XPerson person, TreeStack? stack)
     {
-        // Mac reaches the route-distance block from the active follow state 3 and walk/run gait
-        // states 9/10. Standing-adjust (6/11) and other states return through their own branches
-        // (SAnimator.s control-state dispatch into 0x10350F4C).
         if (person.AnimatorControlState is not (3 or 9 or 10)) return;
         if (person.NativeRoute is not { MotionTargetX: not int.MinValue, MotionTargetY: not int.MinValue } route)
             return;
-        // After the non-zero route-preference arrival, follow state -1 waits for the state-3 match gate,
-        // whose follow state 2 is completed by FollowOneStep rather than another root step.
         if (route.TransitionTargetX is not null || route.AnimatorFollowState is -1 or 2) return;
         var rootX = person.AnimatorRootX ?? route.MotionX;
         var rootY = person.AnimatorRootY ?? route.MotionY;
@@ -1783,13 +1631,9 @@ internal static class RouteExecutor
         var arrival = false;
         if (person.AnimatorPoolTile && IsRoutePreferenceArrival(person, route, rootX, rootY))
         {
-            // The pool variant (0x10350714–0x1035074C, then 0x1035115C) sets +0x280=1 and records the root and
-            // heading at +0x1c8/+0x1cc/+0x1d0, and the terminal point at +0x1d4/+0x1bc and +0x1d8/+0x1c0.
             person.AnimatorRouteTransitionState = 1;
             if (person.AnimatorPoolTransitionState == 0)
             {
-                // Zero +0x288: +0x188=3, +0x180=-1 (from +0x280=1), and +0x1bc/+0x1c0/+0x1c4 are rewritten to the
-                // current root and heading before state 3 redispatches (0x10351168–0x103511E8). No step is taken.
                 person.AnimatorControlState = 3;
                 person.NativeRoute = route with
                 {
@@ -1801,9 +1645,6 @@ internal static class RouteExecutor
                 };
                 return;
             }
-            // Nonzero +0x288 starts skill 0x13 in state 7. Its terminal branch restores +0x1d4/+0x1d8/+0x1dc (the
-            // terminal point, and the direction Tick computed toward the facing entry at 0x10350598–0x10350690)
-            // and maps +0x280=1 to +0x180=-1; the state-3 gate then matches +0x1bc, the same point.
             world.StartPoolSwimExitPractice(person);
             person.NativeRoute = route with
             {
@@ -1818,10 +1659,6 @@ internal static class RouteExecutor
         }
         if (IsRoutePreferenceArrival(person, route, rootX, rootY))
         {
-            // SAnimator::Tick's non-zero route-preference arrival (0x10350750–0x103507AC): +0x280=1,
-            // +0x1bc/+0x1c0 = current root, +0x188=3, +0x180=-1, +0x284=1. Without a primary practice it
-            // redispatches state 3; otherwise it repeats the stored +0x28c/+0x290 step direction at this
-            // Tick's speed (0x10350F4C–0x10350FFC) and runs the common placement test.
             person.AnimatorRouteTransitionState = 1;
             person.AnimatorLocomotionFadeGate = 1;
             person.AnimatorControlState = 3;
@@ -1842,7 +1679,6 @@ internal static class RouteExecutor
             var storedX = person.AnimatorProjectedRootStepX;
             var storedY = person.AnimatorProjectedRootStepY;
             var storedLength = MathF.Sqrt(storedX * storedX + storedY * storedY);
-            // A zero stored step divides by the source's substitute constant, leaving no movement.
             stepX = storedLength > 1e-6f ? storedX * step / storedLength : 0f;
             stepY = storedLength > 1e-6f ? storedY * step / storedLength : 0f;
             arrival = true;
@@ -1851,8 +1687,6 @@ internal static class RouteExecutor
         {
             var deltaX = targetX - rootX;
             var deltaY = targetY - rootY;
-            // A lookahead sample on the root itself ends the Tick before the step and placement test
-            // (SAnimator.s 0x10350BF8–0x10350C14: |dx²+dy²| <= 1e-6 branches to lbl_10351244).
             if (MathF.Abs(deltaX * deltaX + deltaY * deltaY) <= 1e-6f)
             {
                 person.NativeRoute = route;
@@ -1886,23 +1720,14 @@ internal static class RouteExecutor
             : world.CanPlaceObject(person, canPlacePosition, stack);
         if (!stepAccepted)
         {
-            if (!arrival && world.LastPlacementFailureCode == 0x0b &&
-                person.Position.X != 0 && person.Position.Y != 0 &&
-                world.CanPlaceObject(person, person.Position, stack))
+            person.NativeRoute = route with
             {
-                nextPosition = person.Position;
-            }
-            else
-            {
-                person.NativeRoute = route with
-                {
-                    AnimatorFollowState = 3,
-                    FollowPlacementRejected = true,
-                    MotionX = rootX,
-                    MotionY = rootY,
-                };
-                return;
-            }
+                AnimatorFollowState = 3,
+                FollowPlacementRejected = true,
+                MotionX = rootX,
+                MotionY = rootY,
+            };
+            return;
         }
 
         world.PlaceObject(person, nextPosition, stack);
@@ -1918,14 +1743,6 @@ internal static class RouteExecutor
         if (!advancedProgressCursor && motionPath is { } routePath && nearest is { SegmentIndex: >= 0 } &&
             activeTargetIndex >= 1 && activeTargetIndex < routePath.Count)
         {
-            // Mac SAnimator's +0x178 cursor selects one TileList segment for its root projection and
-            // advances by exactly one after the root passes that segment's endpoint
-            // (0x103504A8–0x10350590, 0x10350AE4–0x10350BF0). Windows FUN_0045c4fa clears the actor
-            // point vector; FUN_00482558 appends generated points; FUN_0046a1f7 emits retained node
-            // points seed-to-target before a conditional midpoint from reverse-chain index 1. The
-            // seed record's +4 is the last partition-cell index, so it retains the exact seed
-            // coordinate; the target record's +4 is -1 and is filtered. The optional midpoint then
-            // comes from the target side (SIMS.EXE 0x0045c4fa, 0x00482558, 0x0046a7c5, 0x0046a1f7).
             var start = routePath[activeTargetIndex - 1];
             var end = routePath[activeTargetIndex];
             var segmentX = end.X - start.X;
@@ -1950,9 +1767,8 @@ internal static class RouteExecutor
         person.NativeRoute = nextRoute;
     }
 
-    /// <summary>Tick's final-approach gate when person data 9 (route preference) is non-zero: it arrives once +0x280 is set or the terminal point is nearer than +0x68 times the walk/run
-    /// multiplier, 3 FTile walking and 4.5 running (SAnimator.s 0x10350588–0x10350594, 0x10350694–0x10350710).
-    /// Door portal functions and the pool idle set data 9 around their routes.</summary>
+    /// <summary>Evaluates final-approach arrival when route preference (person data 9) is non-zero,
+    /// triggering within 3 tiles for walking or 4.5 tiles for running.</summary>
     internal static bool IsRoutePreferenceArrival(XPerson person, RouteState route, float rootX, float rootY)
     {
         if (person[ObjectData.RoutePreference] == 0) return false;
@@ -1994,7 +1810,7 @@ internal static class RouteExecutor
         var deltaX = to.X - from.X;
         var absY = Math.Abs(deltaY);
         var absX = Math.Abs(deltaX);
-        // Preserve FUN_00452129's strict/inclusive boundaries at both 2:1 slopes (cWorldPt[0] = Y, cWorldPt[1] = X).
+        // Applies strict and inclusive 2:1 slope boundaries to classify direction octants.
         int direction;
         if (absX * 2 < absY)
         {
@@ -2021,9 +1837,9 @@ internal static class RouteExecutor
     private static short QuantizeRootDirection(float direction) =>
         SimsEngine.Character.AvatarDirection.ToObjectDirection(direction);
 
-    /// <summary>FUN_0045c92e runs FUN_00463a0f only while the route record holds no portal (+0x68 is 0): it keeps the
-    /// Sim's Route ID, or allocates one, and resets every portal's cost for that ID. Later selections in the same route
-    /// keep the used-portal costs.</summary>
+    /// <summary>Initializes routing costs and allocates a route ID before portal selection, resetting
+    /// portal costs while preserving used portal costs across subsequent selections in the same route.
+    /// </summary>
     private static void InitializeRoutePortalCosts(SimulationWorld world, XPerson person, RouteState route)
     {
         if (route.OpenedPortalId != 0 || route.UsedPortalIds is { Length: > 0 }) return;
@@ -2046,9 +1862,8 @@ internal static class RouteExecutor
         person.NativeRouteParents.RemoveAt(last);
     }
 
-    /// <summary>Failure exits from the routing callback still pass through cXPerson's EndFollow path. EndFollow
-    /// defers while SAnimator +0x180 is 1 or -1; the waiting behavior callback completes it after Tick advances the
-    /// follow state. Once complete, drop only this route so a nested portal caller regains its parent route.</summary>
+    /// <summary>Terminates route following on failure and clears the active route, allowing nested portal
+    /// callers to resume their parent route.</summary>
     private static PrimitiveResult EndFollowAndClearRoute(SimulationWorld world, XPerson person, RouteState route,
         StackFrame frame, TreeStack? stack = null, short failureReason = 1)
     {
@@ -2063,8 +1878,6 @@ internal static class RouteExecutor
         }
 
         CompleteEndFollow(world, person, route);
-        // FUN_0045aafa returns true when FollowOneStep reports the completed result 0. The routed movement
-        // callback propagates failure instead.
         if (route.LookTowardsFollow)
         {
             ClearRoute(person);
@@ -2116,8 +1929,8 @@ internal static class RouteExecutor
         return route.LookTowardsFollow ? PrimitiveResult.True : PrimitiveResult.False;
     }
 
-    // FUN_0045aecf case 0x10 (0045aecf.c:383-399): when route slot flag 0x4000 is set, push the named tree
-    // "Route failure feedback" with parameters [failureReason, blockerObjectId, 0, 0] and wait in state 0x11.
+    // When route slot flag 0x4000 is set, pushes 'Route failure feedback' with the failure reason and
+    // blocker object ID.
     private static bool TryPushRouteFailureFeedback(XPerson person, XObject anchor, StackFrame frame, TreeStack stack,
         short failureReason, out int callerDepth)
     {
@@ -2154,14 +1967,8 @@ internal static class RouteExecutor
 
     private static void CompleteEndFollow(SimulationWorld world, XPerson person, RouteState route)
     {
-        // FUN_0045aecf LAB_0045b4f7 (0045aecf.c:283): emit "end_route" when SAnimator::EndFollow completes
-        // for a route that previously entered BeginFollow (state 0x0c).
         if (!route.LookTowardsFollow && !route.AwaitingBeginFollow)
             world.PlaySoundEvent?.Invoke("end_route", person.Id, false, false);
-        // SAnimator::EndFollow's successful branch (Mac SAnimator.s lines 13887-13906):
-        // clear follow state (0x180 = 0), reset waypoint cursor (0x178 = -1),
-        // set control state +0x188 to 3, lock transition targets to current root,
-        // and commit discrete heading to cXPerson + 0x4c.
         person.AnimatorControlState = 3;
         var rootX = float.IsFinite(route.MotionX) ? route.MotionX : person.Position.X;
         var rootY = float.IsFinite(route.MotionY) ? route.MotionY : person.Position.Y;
@@ -2193,8 +2000,8 @@ internal static class RouteExecutor
     private static bool StartPortalFunction(SimulationWorld world, XPerson person, XObject portal, TreeStack stack,
         StackFrame caller, RouteState route, out string? failure)
     {
-        // FUN_0045c92e initializes and reads function 0x0f from the selected portal's own type record.
-        // FUN_00463804 follows linked members for route-cost propagation; that is a separate lookup.
+        // Resolves portal crossing tree 0x0f from the selected portal's definition rather than its linked
+        // multi-tile parts.
         var treeId = SimulationWorld.FunctionTreeId(portal, 0x0f);
         if (treeId == 0)
         {
@@ -2216,8 +2023,8 @@ internal static class RouteExecutor
         failure = null;
         if (!route.AwaitingBeginFollow)
         {
-            // End active locomotion before the portal function runs so portal BHAV AnimateSim primitives
-            // (which require AnimatorControlState in 0..3; 0058950f.c) never stall on a gait/turn state.
+            // Halts active locomotion before running portal functions so that portal animation primitives
+            // do not stall on active gait or turn states.
             if (person.AnimationPlayback is { RouteDriven: true })
                 world.StopCurrentAnimation(person);
             person.AnimatorControlState = 3;
@@ -2251,8 +2058,6 @@ internal static class RouteExecutor
         return true;
     }
 
-    // Sims.exe FUN_0045aecf calls FUN_00463f5f on the previous route portal when the Sim reaches
-    // another room transition; FUN_00463f5f writes the used-route state to it and FUN_00463804's part.
     internal static void MarkPortalRouteCostUsed(SimulationWorld world, short portalId, short functionObjectId,
         short routeId)
     {
@@ -2261,12 +2066,12 @@ internal static class RouteExecutor
         world.ObjectById(functionObjectId)?.SetPortalRouteCost(routeId, 1101f);
     }
 
-    // FUN_00463804 resolves function 0x0f on cXPortal/cXMTObject chain members through +0x18c
-    // before FUN_0045c92e dispatches the selected tree with the route portal as its stack object.
+    // Resolves portal function 0x0f across linked multi-tile portal parts, targeting the root portal as the
+    // stack object.
     internal static (XObject FunctionObject, ITreeTable? Scope, short TreeId)? PortalFunction(SimulationWorld world, XObject portal)
     {
-        // FUN_00463804 checks linked members, not the selected manager-vector root itself. For
-        // BuildModeType 1 it starts at +0x190 (or the root) and filters on OBJD +0x10 (InteractionGroup).
+        // For objects with BuildModeType 1, multi-tile chain traversal filters linked parts by matching
+        // OBJD InteractionGroup.
         var matchInteractionGroup = portal.Definition[(int)SimsEngine.Formats.ObjdField.BuildModeType] == 1;
         var visited = new HashSet<short>();
         var nextId = matchInteractionGroup
@@ -2287,12 +2092,10 @@ internal static class RouteExecutor
                 if (nextId == firstId) return null;
                 continue;
             }
-            // FUN_00463804 returns 0 once the walk reaches the portal itself.
             if (!matchInteractionGroup && current.Id == portal.Id) return null;
             var treeId = SimulationWorld.FunctionTreeId(current, 0x0f);
             if (treeId != 0)
                 return (current, current.TypeRecord?.BehaviorScope, treeId);
-            // Without the interaction-group filter each step takes +0x18c, falling back to +0x190 when that is empty.
             nextId = current.MultiTileNextId != 0 || matchInteractionGroup
                 ? current.MultiTileNextId
                 : current.MultiTileMasterId;
@@ -2301,8 +2104,8 @@ internal static class RouteExecutor
         return null;
     }
 
-    /// <summary>FUN_00463f99 stores a first-use room rank (1001..1100) or marks an already-ranked portal used
-    /// (1101), on the selected portal and its linked function-bearing part.</summary>
+    /// <summary>Records first-use room ranking (1001..1100) or marks an already-ranked portal as used
+    /// (1101) on the portal and its linked parts.</summary>
     internal static void RecordPortalRouteCostAfterSelection(SimulationWorld world, XPerson person, XObject portal,
         XObject functionObject)
     {
@@ -2316,8 +2119,8 @@ internal static class RouteExecutor
             return;
         }
 
-        // FUN_00463f99 compares each portal's stored cXObject +0x84 room word. This can
-        // differ from a room-map lookup after runtime wall changes.
+        // Uses the portal's cached room attribute, which can differ from dynamic room map queries following
+        // wall modifications.
         var room = portal.RoomWord84;
         var greatestRoomCost = 1001f;
         foreach (var candidate in Portals(world))
@@ -2334,8 +2137,6 @@ internal static class RouteExecutor
         }
     }
 
-    // FUN_00463dd9 ranks portal-manager entries whose room word (+0x84) matches the routing Sim's
-    // current room. A portal recorded in the destination room is not a candidate for this crossing.
     internal static bool PortalIsEligibleFromCurrentRoom(ushort portalRoom, ushort currentRoom) =>
         portalRoom == currentRoom;
 
@@ -2352,9 +2153,7 @@ internal static class RouteExecutor
     internal static IEnumerable<XObject> PortalCandidatesForStep(SimulationWorld world, ushort fromRoom,
         ushort toRoom, (int X, int Y) from, (int X, int Y) to, short? currentRoomWord = null, int? level = null)
     {
-        // Sims.exe's live route portal vector only contains cXPortal instances with
-        // function 0x0f (FUN_0044350d); a physical portal without that function cannot
-        // authorize a room transition.
+        // Portals without a defined crossing function (table entry 0x0f) cannot authorize room transitions.
         if (Math.Abs(from.X - to.X) + Math.Abs(from.Y - to.Y) != 1) return [];
         var verticalCrossing = from.X == to.X;
         var sourceCurrentRoom = currentRoomWord is { } roomWord && roomWord != -5
@@ -2365,8 +2164,6 @@ internal static class RouteExecutor
             if (level is { } requestedLevel && portal.Position.Height != requestedLevel) return false;
             var tile = (X: portal.Position.X >> 4, Y: portal.Position.Y >> 4);
             if (tile != from && tile != to) return false;
-            // FUN_00463dd9 compares the portal's stored +0x84 room word with the routing Sim's +0x84 word.
-            // Position-derived room lookup is only a fallback for hand-built objects before room reconciliation.
             var portalRoom = portal.RoomWord84 != -5
                 ? unchecked((ushort)portal.RoomWord84)
                 : RoomKeyAt(world, portal.Position);
@@ -2375,7 +2172,6 @@ internal static class RouteExecutor
         });
     }
 
-    /// <summary>FUN_004341ed's portal/object transition cost. FUN_00433ef5 writes the position level to +0x110.</summary>
     internal static float PortalTransitionDistanceCost(XObject from, XObject to)
     {
         if (to.TypeRecord?.ObjectType == 7) return XObject.UnallocatedPortalRouteCost;
@@ -2390,8 +2186,8 @@ internal static class RouteExecutor
         return MathF.Sqrt((dx * dx + dy * dy) * (1f / 256f) + dz * dz);
     }
 
-    /// <summary>FUN_00463a65 caches the shortest transition distances from a portal to every reachable portal,
-    /// keyed by a Route ID stored on the source portal itself.</summary>
+    /// <summary>Caches the shortest transition distances from an origin portal to every reachable portal,
+    /// keyed by route ID.</summary>
     internal static float ProjectPortalRouteDistance(SimulationWorld world, XObject origin, XObject target)
     {
         ProjectPortalRoutes(world, origin);
@@ -2399,8 +2195,7 @@ internal static class RouteExecutor
         return routeId > 0 ? target.PortalRouteCostAt(routeId) : XObject.UnallocatedPortalRouteCost;
     }
 
-    // FUN_00463a65 (this = origin, stack argument = target) relaxes the route heap with edge cost
-    // FUN_004341ed(settled, candidate) + 1.0, then returns the target's cost at the origin's route id.
+    // Relaxes portal route distances using transition distance plus a 1.0 penalty per hop.
     private static void ProjectPortalRoutes(SimulationWorld world, XObject origin)
     {
         var routeId = origin[ObjectData.RouteId];
@@ -2432,15 +2227,15 @@ internal static class RouteExecutor
                 if (settled.Contains(candidate.Id) ||
                     (candidate.RoomWord84 != current.RoomWord84 && !ReferenceEquals(candidate, linkedFunction))) continue;
                 var priorCost = candidate.PortalRouteCostAt(routeId);
-                var projected = currentCost + PortalTransitionDistanceCost(current, candidate) + 1f; // FUN_00463a65 adds 1.0 per hop
+                var projected = currentCost + PortalTransitionDistanceCost(current, candidate) + 1f;
                 if (projected < priorCost)
                     candidate.SetPortalRouteCost(routeId, projected);
             }
         }
     }
 
-    /// <summary>FUN_00463dd9 combines each current-room portal's Sim-to-portal distance, its per-origin portal
-    /// projection to a portal in the destination room, and that destination portal's distance to the target.</summary>
+    /// <summary>Selects optimal portals by summing character-to-portal distance, projected portal-to-portal
+    /// distance to the target room, and portal-to-target distance.</summary>
     internal static XObject? SelectPortalForDestination(SimulationWorld world, XPerson person, XObject destination,
         ushort currentRoom, ushort destinationRoom, IReadOnlySet<short>? excludedPortalIds = null,
         bool recordTrace = true, ObjectPosition? destinationPosition = null)
@@ -2458,8 +2253,6 @@ internal static class RouteExecutor
             foreach (var destinationPortal in portals)
             {
                 if (PortalRoomKey(destinationPortal) != destinationRoom) continue;
-                // 0x463e8a/0x463ea4: FUN_00463a65 runs with the SOURCE portal as `this` and the destination portal as its
-                // stack argument, returning the destination portal's cost; the second call runs from FUN_00463804(source).
                 var projectedCost = ProjectPortalRouteDistance(world, sourcePortal, destinationPortal);
                 if (projectedCost == 10000f) continue;
                 var functionObject = PortalFunction(world, sourcePortal)?.FunctionObject ?? sourcePortal;
@@ -2486,21 +2279,18 @@ internal static class RouteExecutor
         return selected;
     }
 
-    // FUN_00463dd9 compares the stored +0x84 words directly. A room-map lookup here would
-    // turn the native -5 sentinel into a real room and admit portal candidates Sims.exe rejects.
+    // Compares stored room attributes directly to prevent dynamic map queries from resolving sentinel room
+    // values into valid rooms.
     private static ushort PortalRoomKey(XObject item) => unchecked((ushort)item.RoomWord84);
 
-    // FUN_00463dd9 excludes the projected 10000 and used-route 1101 costs. Its 10001 initialization
-    // still requires the unresolved projection path, so preserve manager order for those candidates.
+    // Excludes unreachable portals (cost 10000) and previously used portals (cost 1101) while preserving
+    // evaluation order for unprojected candidates (cost 10001).
     internal static XObject? SelectPreRankedPortal(IReadOnlyList<XObject> candidates, short routeId)
     {
         if (candidates.Count == 0) return null;
         if (routeId == 0) return null;
         var eligible = candidates.Where(candidate => candidate.PortalRouteCostAt(routeId) is not (10000f or 1101f)).ToArray();
         if (eligible.Length == 0) return null;
-        // FUN_00463dd9 excludes only 10000 and 1101, then replaces the current winner
-        // only for a strictly lower cost. Unprojected 10001 values remain comparable
-        // until FUN_00463a65 projection is implemented; equal costs keep first order.
         var selected = eligible[0];
         var selectedCost = selected.PortalRouteCostAt(routeId);
         for (var index = 1; index < eligible.Length; index++)
@@ -2514,12 +2304,8 @@ internal static class RouteExecutor
         return selected;
     }
 
-    // Sims.exe FUN_0045c4fa (0045c4fa.c:80-120) & Mac XRoute::SetDirectionForGoalSearch:
-    // explicit Facing 0..7 always uses (anchorDirection + Facing) & 7 and Facing -3 preserves the person's
-    // current direction, even when no radial direction bits (Flags & 0xff == 0) are set (e.g. GoToRelativePosition
-    // exact-offset calls on stair.iff BHAV 4112 where Flags == 0x4000 and MinProximity == 16).
-    // For Facing -1/-2 with (Flags & 0xff) == 0, FUN_0045c4fa (0045c4fa.c:94-105) faces toward/away from anchorOrigin
-    // (or anchorDirection when destination == anchorOrigin, reversing for -1).
+    // Calculates arrival facing: explicit facings 0..7 evaluate as (anchorDirection + Facing) & 7, facing
+    // -3 retains current direction, and facings -1/-2 face toward or away from the anchor.
     internal static short RelativeArrivalFacing(SimulationWorld world, XPerson person, XObject anchor,
         RoutingSlotRequest slot, ObjectPosition destination, short? routeSearchDirection)
     {
@@ -2558,9 +2344,8 @@ internal static class RouteExecutor
         };
     }
 
-    // Mac XRoute::ConstructGoals uses GetAverageLocation when RoutingSlot flags contain 0x10000.
-    // GetAverageLocation walks the multi-tile lead/next chain and truncates each coordinate's
-    // integer average toward zero; ordinary objects without a linked chain keep their own location.
+    // When slot flag 0x10000 is set, calculates the anchor origin by averaging coordinates across linked
+    // multi-tile parts and truncating toward zero.
     private static ObjectPosition RouteAnchorOrigin(SimulationWorld world, XObject anchor, RoutingSlotRequest slot)
     {
         if ((slot.Flags & 0x00010000) == 0) return anchor.Position;
@@ -2584,9 +2369,8 @@ internal static class RouteExecutor
             : new ObjectPosition(unchecked((int)(sumX / count)), unchecked((int)(sumY / count)), anchor.Position.Height);
     }
 
-    // FUN_004549b6 passes uVar14 to FUN_004550e0 as its temporary wall-probe direction.
-    // Ordinarily it is the Sim's current direction; slots with flag 0x1000 instead select
-    // the first authored approach bit (0 through 6) relative to the anchor's direction.
+    // When slot flag 0x1000 is set, wall-probe validation tests the first enabled approach direction
+    // relative to the anchor instead of current character facing.
     private static short CandidateValidationDirection(XPerson person, XObject anchor, RoutingSlotRequest slot)
     {
         if ((slot.Flags & 0x1000) == 0) return person[ObjectData.Direction];
@@ -2600,8 +2384,8 @@ internal static class RouteExecutor
     {
         var orientation = (slot.Flags & 0x0200) != 0 ? (short)0 : anchor[ObjectData.Direction];
         var center = LotGeometry.SlotPosition(RouteAnchorOrigin(world, anchor, slot), orientation, slot.X, slot.Y);
-        // FUN_00483572's zero-direction branch preserves the authored point. Snap slots also
-        // keep the reference object's position so their placement callback can bind the slot.
+        // Routing slots with no directional flags or with active snap targets preserve the exact authored
+        // position.
         if ((slot.Flags & 0xff) == 0 || slot.SnapTargetSlot >= 0)
         {
             var exact = slot.SnapTargetSlot >= 0 ? anchor.Position : center;
@@ -2622,46 +2406,44 @@ internal static class RouteExecutor
                 continue;
             }
 
-            // FUN_00483572 stores validated candidates in a bounded pool; FUN_004817ed
-            // initializes that pool to 48 entries and FUN_004824b8 lowers it to 8 for
-            // large current rooms. It evaluates the full authored candidate scan before
-            // reducing an overfull pool, so do not stop at the first accepted points.
+            // The candidate pool is capped at 48 entries (reduced to 8 in large rooms), evaluating all
+            // authored points before downsampling.
             placeable.Add(candidate);
             TraceCandidate(world, person, anchor, candidate.Position, true, slot.Flags);
         }
 
-        // FUN_00483572 downsamples an overfull candidate pool with the Sims.exe RNG. It
-        // draws an index into the original pool and takes the first still-present entry
-        // at or after it (the source's scan does not wrap). Keep the draw order for stable
-        // tie-breaking after the route planner evaluates the selected goals.
+        // Downsamples overfull candidate pools by selecting random indices and taking the first remaining
+        // candidate at or after each index without wrapping.
         var routeCandidates = SampleRouteCandidates(world, placeable, capacity);
         RouteGoalCandidate? bestGoal = null;
         RouteGoalCandidate? bestCrossFloorGoal = null;
         var bestPathCost = double.PositiveInfinity;
         var bestCrossFloorRouteCost = double.PositiveInfinity;
+        Dictionary<(ushort CurrentRoom, ushort DestinationRoom), (XObject? Portal, float Cost)>? portalCache = null;
+        FloorPartition? floorPartition = null;
+        var floorPartitionAttempted = false;
         foreach (var candidate in routeCandidates)
         {
-            // FUN_0045aecf resolves room transitions through portal function 0x0f before
-            // walking to the endpoint. A different floor has a different room-key band;
-            // do not reject its endpoint by asking the current-floor tile pathfinder to
-            // connect directly to it. The stair portal callback owns that transition. Keep
-            // scanning the sampled pool: returning its first cross-floor point ignored the
-            // score that FUN_00483572 calculated for each accepted endpoint.
+            // Cross-floor goals rely on stair portal transitions rather than direct floor-level tile
+            // pathfinding, scoring candidates across floors normally.
             if (candidate.Position.Height != person.Position.Height)
             {
                 var currentRoom = unchecked((ushort)person.RoomWord84);
-                // FUN_0045c92e passes the route record's target object to FUN_00463dd9.
-                // Portal ranking therefore uses the target object's room and position; the
-                // sampled arrival point is a later walking goal within that target room.
+                // Portal ranking evaluates the target object's room and position rather than the specific
+                // candidate arrival tile within that room.
                 var destinationRoom = PortalRoomKey(anchor);
                 if (currentRoom == SimsEngine.World.RoomMap.NoRoom ||
                     destinationRoom == SimsEngine.World.RoomMap.NoRoom) continue;
-                var (selectedPortal, portalRouteCost) = PreviewPortalForDestination(world, person, anchor,
-                    currentRoom, destinationRoom);
-                // A placeable tile on another floor is not a routable goal when the native
-                // portal manager cannot select a transition to its room. Do not retain an
-                // infinite-cost candidate as a fallback; the live route manager would fail
-                // before it could walk to that endpoint.
+                portalCache ??= new Dictionary<(ushort, ushort), (XObject? Portal, float Cost)>();
+                var roomPair = (currentRoom, destinationRoom);
+                if (!portalCache.TryGetValue(roomPair, out var portalPreview))
+                {
+                    portalPreview = PreviewPortalForDestination(world, person, anchor, currentRoom, destinationRoom);
+                    portalCache[roomPair] = portalPreview;
+                }
+                var (selectedPortal, portalRouteCost) = portalPreview;
+                // Cross-floor goal candidates are rejected if no valid portal transition can be found to
+                // the destination room.
                 if (selectedPortal is null) continue;
                 if (portalRouteCost < bestCrossFloorRouteCost ||
                     (portalRouteCost == bestCrossFloorRouteCost &&
@@ -2672,8 +2454,13 @@ internal static class RouteExecutor
                 }
                 continue;
             }
-            if (TryPath(world, person, candidate.Position, anchor, out _, out var pathCost, directPositionRequest: false,
-                    directSlot: slot, stack: stack))
+            if (!floorPartitionAttempted)
+            {
+                floorPartitionAttempted = true;
+                floorPartition = TryBuildFloorPartition(world, person, anchor, allowCrossRoom: true, stack: stack);
+            }
+            if (floorPartition is not null &&
+                TryPathWithPartition(floorPartition, candidate.Position, out _, out var pathCost))
             {
                 if (pathCost < bestPathCost ||
                     (pathCost == bestPathCost && (bestGoal is null || candidate.Cost > bestGoal.Value.Cost)))
@@ -2694,22 +2481,26 @@ internal static class RouteExecutor
         return null;
     }
 
-    /// <summary>Runs the portal manager's target-room ranking for candidate selection without committing its
-    /// lazy Route IDs or distance caches. Sims.exe initializes those values later, when the live route manager
-    /// enters state 2 and calls FUN_0045c92e.</summary>
+    /// <summary>Previews destination portal ranking for candidate scoring without committing route IDs or
+    /// mutating cached routing distances.</summary>
     private static (XObject? Portal, float Cost) PreviewPortalForDestination(SimulationWorld world,
         XPerson person, XObject destination, ushort currentRoom, ushort destinationRoom)
     {
-        var objects = world.WalkOrder.ToArray();
-        var routeIds = objects.ToDictionary(item => item, item => item[ObjectData.RouteId]);
-        var routeCosts = objects.ToDictionary(item => item, item => item.PortalRouteCosts.ToArray());
+        var savedPersonRouteId = person[ObjectData.RouteId];
+        var portals = Portals(world).ToArray();
+        var savedPortalState = new (short RouteId, KeyValuePair<short, float>[] Costs)[portals.Length];
+        for (var i = 0; i < portals.Length; i++)
+        {
+            var portal = portals[i];
+            savedPortalState[i] = (portal[ObjectData.RouteId], portal.PortalRouteCosts.ToArray());
+        }
         try
         {
             var routeId = person[ObjectData.RouteId];
             if (routeId == 0) routeId = world.InitializePortalRouteCosts(person);
             if (routeId <= 0) return (null, float.PositiveInfinity);
 
-            foreach (var portal in Portals(world))
+            foreach (var portal in portals)
                 portal.SetPortalRouteCost(routeId, XObject.UninitializedPortalRouteCost);
             var selected = SelectPortalForDestination(world, person, destination, currentRoom,
                 destinationRoom, recordTrace: false);
@@ -2717,11 +2508,14 @@ internal static class RouteExecutor
         }
         finally
         {
-            foreach (var item in objects)
+            person[ObjectData.RouteId] = savedPersonRouteId;
+            for (var i = 0; i < portals.Length; i++)
             {
-                item[ObjectData.RouteId] = routeIds[item];
-                item.PortalRouteCosts.Clear();
-                foreach (var (routeId, cost) in routeCosts[item]) item.PortalRouteCosts.Add(routeId, cost);
+                var portal = portals[i];
+                var (routeId, costs) = savedPortalState[i];
+                portal[ObjectData.RouteId] = routeId;
+                portal.PortalRouteCosts.Clear();
+                foreach (var (id, cost) in costs) portal.PortalRouteCosts.Add(id, cost);
             }
         }
     }
@@ -2746,9 +2540,8 @@ internal static class RouteExecutor
 
     internal static int AuthoredRouteCandidateCapacity(SimulationWorld world, XPerson person)
     {
-        // FUN_004824b8 calls FUN_004681ec on the current room and switches from 48 to 8
-        // when that room's +0x38-derived half-area exceeds 250. FUN_00467c93 contributes
-        // two per ordinary tile and one for a diagonal-wall tile.
+        // Reduces candidate pool capacity from 48 to 8 when room area exceeds 250, where normal tiles
+        // contribute two units and diagonal walls contribute one.
         var position = person.Position;
         if (world.HasRoomRecord(person.RoomWord84) && world.LotRoomMaps.TryGetValue(position.Height, out var map))
         {
@@ -2758,12 +2551,8 @@ internal static class RouteExecutor
         return 48;
     }
 
-    // Source authority: analysis/Sims.original.exe (SHA-256 6e598c22512a24659cbd0e533306abf3129733d67b1d120916b1b6b1581e29f2),
-    // opcode 0x2d dispatch FUN_0045cd1f -> FUN_0045ad3a -> FUN_0045aecf -> FUN_004824b8 -> FUN_00483572.
-    // The planner samples each enabled local direction from the rounded -min/res bound
-    // through -max/res, scans each x row from y to -y, rotates it by anchor facing + sector,
-    // and scores accepted points in insertion order. Keeping this projection here prevents
-    // an exact-center fallback from silently routing outside the authored SLOT region.
+    // Samples enabled local directions between minimum and maximum bounds by resolution, scanning each row
+    // from y to -y and rotating by anchor facing plus sector.
     private static List<RouteGoalCandidate> AuthoredRouteSlotCandidates(
         SimulationWorld world, XPerson person, XObject anchor, ObjectPosition center, RoutingSlotRequest slot,
         short orientation)
@@ -2778,19 +2567,19 @@ internal static class RouteExecutor
         }
 
         var petActor = person[PersonData.Gender] > 1;
-        // FUN_004824b8 (004824b8.c:43-49) and FUN_0045c4fa (0045c4fa.c:29-31): pets (>1) cannot sit in Sim chairs
-        // and fall back to Standing=1 when Sitting!=0; Sims (<2) evaluate Sitting*10 alongside max(Standing,Ground)*10.
+        // Pets cannot sit in Sim chairs and fall back to standing when sitting is requested; human Sims
+        // score sitting multiplied by 10.
         var sittingScore = !petActor && slot.Sitting > 0 ? slot.Sitting * 10d : 0d;
         var effectiveStanding = petActor && slot.Sitting > 0 && slot.Standing == 0 ? 1 : slot.Standing;
         var floorPreference = Math.Max(effectiveStanding, slot.Ground) * 10d;
-        // Keep hand-constructed zero-posture test requests standing-eligible while suppressing standing goals on
-        // real sit-only SLOT definitions (Sitting > 0 && Standing == 0 && Ground == 0, 00483572.c:225-234).
+        // Suppresses standing goals on sit-only SLOT definitions where Sitting is positive while Standing
+        // and Ground are zero.
         var allowStanding = floorPreference > 0d || sittingScore <= 0d;
         var resolution = sittingScore > 0d ? 16 : slot.Resolution;
 
         var directionMask = slot.Flags & 0xff;
-        // FUN_00483572 converts both negative proximity/resolution ratios with __ftol, then widens
-        // [maxY..minY] by 1 tile when sittingScore > 0 (00483572.c:177-183) so side/back chair entries are scanned.
+        // Widens the sampled proximity bounds by one tile when chair scoring is active so side and rear
+        // approach positions are scanned.
         var minY = (int)Math.Round(-(double)slot.MinProximity / resolution, MidpointRounding.ToEven);
         var maxY = (int)Math.Round(-(double)slot.MaxProximity / resolution, MidpointRounding.ToEven);
         if (sittingScore > 0d)
@@ -2803,11 +2592,8 @@ internal static class RouteExecutor
         var wallMask = 0u;
         if ((slot.Flags & 0x0800) == 0 && (slot.Flags & 0x0400) == 0 && world.LotRoomMaps.TryGetValue(center.Height, out var roomMap))
         {
-            // RouteMaskAt returns world-direction bits. FUN_00435a8f rotates the wall
-            // sectors back by the anchor orientation before FUN_00483572 compares them
-            // with the slot's local direction bits.
-            // FUN_00483572 obtains this mask from the referenced anchor's +0xfc route
-            // mask field, before transforming the sampled SLOT offsets into world space.
+            // Rotates world-space wall sectors back by the anchor orientation before comparing them against
+            // the routing slot's local direction bits.
             var worldWallMask = RouteMaskAt(world, roomMap, anchor.Position.X, anchor.Position.Y);
             var rotation = orientation & 7;
             wallMask = rotation == 0
@@ -2818,15 +2604,11 @@ internal static class RouteExecutor
         double ScoreCandidate(long distanceSquared, double posturePreference, int wallSector, ObjectPosition bonusTarget)
         {
             var radius = Math.Sqrt(distanceSquared);
-            // FUN_00483572 converts both the sampled radius and its gradient penalty
-            // through MSVC __ftol (x87 round-to-nearest, ties-to-even), not truncation.
             var roundedRadius = Math.Round(radius, MidpointRounding.ToEven);
             var gradientPenalty = Math.Round(
                 Math.Abs(roundedRadius - slot.OptimalProximity) * slot.Gradient,
                 MidpointRounding.ToEven);
             var score = 100d + posturePreference - gradientPenalty;
-            // FUN_00483572 consumes the shared Sims.exe RNG for each in-range
-            // endpoint when request flag 0x2000 is set, before placement filtering.
             if ((slot.Flags & 0x2000) != 0) score += -10 + (int)(world.NextRandom() % 20);
             var wallSectorAndNeighbors = (1u << wallSector) |
                 (1u << ((wallSector + 1) & 7)) | (1u << ((wallSector + 7) & 7));
@@ -2845,9 +2627,8 @@ internal static class RouteExecutor
             var candidateDirectionBit = 1u << ((localSector + 2) & 7);
             for (var localY = minY; localY >= maxY; localY--)
             {
-                // FUN_00483572 starts each row at localY and derives its inclusive upper-X
-                // bound from -localY. If the next sector is enabled, it decrements that upper
-                // bound once so the shared boundary candidate belongs to only one sector.
+                // Decrements the row upper bound when the adjacent sector is enabled so shared boundary
+                // candidates are evaluated only once.
                 var startX = localY;
                 var endX = -localY - ((directionMask & candidateDirectionBit) != 0 ? 1 : 0);
                 for (var localX = startX; localX <= endX; localX++)
@@ -2918,8 +2699,6 @@ internal static class RouteExecutor
                         return false;
                     }
 
-                    // FUN_00483572 (00483572.c:224-230, 301): standing precedes chairs when floorPreference >= sittingScore;
-                    // chairs precede standing when floorPreference < sittingScore; the first match at (localX,localY) wins.
                     if (floorPreference >= sittingScore)
                     {
                         if (!TryEmitStanding()) TryEmitChair();
@@ -2932,9 +2711,6 @@ internal static class RouteExecutor
             }
         }
 
-        // FUN_00483572 appends valid candidates to the bounded vector in sector/row/column scan order.
-        // FUN_00460a05 and the following reduction sample that vector without sorting it by score.
-        // Preserve this order so the shared RNG selects the same candidate subset as Sims.exe.
         return results;
     }
 
@@ -3034,8 +2810,6 @@ internal static class RouteExecutor
         if (writeCandidateResults)
         {
             person[ObjectData.PrimitiveResultId] = blockerId;
-        // The primitive result fields expose each source candidate validator's final state,
-        // whether the candidate was accepted or rejected.
             person[ObjectData.PrimitiveResult] = 0;
         }
         return accepted;
@@ -3054,9 +2828,8 @@ internal static class RouteExecutor
         }
         var x = position.X >> 4;
         var y = position.Y >> 4;
-        // FUN_004550e0's nonzero +0x1c request argument jumps directly to the placement callback,
-        // bypassing its local bounds, room, and route-edge checks. Pedestrian portal anchors also bypass
-        // inner bounds to permit valid playable perimeter sidewalk tiles (e.g. House 5 sidewalk exit).
+        // Pedestrian portal anchors bypass inner lot bounds and route edge checks to allow routing onto
+        // playable perimeter sidewalk tiles.
         var isPortalAnchor = unchecked((uint)(anchor.TypeRecord?.Key ?? 0)) == 0x81E6BEF9 || anchor.RuntimeClass == Formats.ObjectClass.Portal;
         var bypassRouteEdgeChecks = (destinationSlot is not null && (destinationSlot.Flags & 0x0800) != 0) || isPortalAnchor;
         if (!bypassRouteEdgeChecks && (x < 1 || y < 1 || x >= map.Width - 1 || y >= map.Height - 1))
@@ -3075,19 +2848,15 @@ internal static class RouteExecutor
             world.LastRouteCandidateFailureReason = "no room at candidate";
             return false;
         }
-        // FUN_00483572 / FUN_00481593 check the route edge between the anchor origin and the
-        // candidate tile when the candidate is on a different tile in the same room and SLOT
-        // flag 0x0800 is clear. When the candidate is on the anchor's own tile (e.g. a door
-        // portal's zero-direction slot), FUN_00483572 passes direction -1 (0xffffffff) and
-        // FUN_00481593 skips the edge check.
+        // Route edges between the anchor origin and candidate tile are only checked when targeting a
+        // different tile in the same room without the bypass flag. Candidates on the anchor's own tile
+        // bypass edge checks.
         var anchorOrigin = destinationSlot is not null ? RouteAnchorOrigin(world, anchor, destinationSlot) : anchor.Position;
         var anchorTileX = anchorOrigin.X >> 4;
         var anchorTileY = anchorOrigin.Y >> 4;
         var personPosition = person.Position;
         var currentTileX = personPosition.X >> 4;
         var currentTileY = personPosition.Y >> 4;
-        // FUN_00481593 compares the candidate's mapped room with the Sim's stored +0x84 word
-        // directly. In particular, its -5 sentinel does not get resolved through the room map.
         var currentRoom = unchecked((ushort)person.RoomWord84);
         if (destinationSlot is not null && (destinationSlot.Flags & 0x0800) == 0 && (destinationSlot.Flags & 0x0400) == 0)
         {
@@ -3101,7 +2870,9 @@ internal static class RouteExecutor
                     var toBlocked = world.BlocksRouteDirectionAt(map, x, y, reverseDirection);
                     if (fromBlocked || toBlocked)
                     {
-                        world.LastRouteCandidateFailureReason = $"same-room route edge blocked; from={RouteBlockDetails(world, map, currentTileX, currentTileY, direction, fromBlocked)}; to={RouteBlockDetails(world, map, x, y, reverseDirection, toBlocked)}";
+                        world.LastRouteCandidateFailureReason = world.CaptureExecutionTrace
+                            ? $"same-room route edge blocked; from={RouteBlockDetails(world, map, currentTileX, currentTileY, direction, fromBlocked)}; to={RouteBlockDetails(world, map, x, y, reverseDirection, toBlocked)}"
+                            : "same-room route edge blocked";
                         return false;
                     }
                 }
@@ -3119,51 +2890,51 @@ internal static class RouteExecutor
                 }
                 if (room == anchorRoom && (x != anchorTileX || y != anchorTileY))
                 {
-                    // FUN_00483572 passes worldSector (-0x4c) for radial/chair slots (00483572.c:272) and
-                    // DirectionToWaypoint(anchorOrigin, exactPos) for zero-direction slots (00483572.c:59,69).
                     var direction = candidateSector ?? DirectionToWaypoint((anchorOrigin.X, anchorOrigin.Y), (position.X, position.Y));
                     var reverseDirection = (direction + 4) & 7;
                     var fromBlocked = !radialSlot && world.BlocksRouteDirectionAt(map, anchorTileX, anchorTileY, direction);
                     var toBlocked = world.BlocksRouteDirectionAt(map, x, y, reverseDirection);
-                    // FUN_00481593 (00481593.c:51): when the step from anchor to candidate is diagonal
-                    // ((direction & 1) != 0), also reject when either adjacent cardinal wall bit at the
-                    // candidate tile ((reverseDirection + 1) & 7 or (reverseDirection + 7) & 7, i.e. 0x82
-                    // rotated by reverseDirection) is blocked.
+                    // When moving diagonally, the step is rejected if either adjacent cardinal wall at the
+                    // candidate tile is blocked.
                     var diagonalCornerBlocked = (direction & 1) != 0 &&
                         (world.BlocksRouteDirectionAt(map, x, y, (reverseDirection + 1) & 7) ||
                          world.BlocksRouteDirectionAt(map, x, y, (reverseDirection + 7) & 7));
                     if (fromBlocked || toBlocked || diagonalCornerBlocked)
                     {
-                        world.LastRouteCandidateFailureReason = $"same-room route edge blocked; from={RouteBlockDetails(world, map, anchorTileX, anchorTileY, direction, fromBlocked)}; to={RouteBlockDetails(world, map, x, y, reverseDirection, toBlocked)}; diagonalCornerBlocked={diagonalCornerBlocked}";
+                        world.LastRouteCandidateFailureReason = world.CaptureExecutionTrace
+                            ? $"same-room route edge blocked; from={RouteBlockDetails(world, map, anchorTileX, anchorTileY, direction, fromBlocked)}; to={RouteBlockDetails(world, map, x, y, reverseDirection, toBlocked)}; diagonalCornerBlocked={diagonalCornerBlocked}"
+                            : "same-room route edge blocked";
                         return false;
                     }
                 }
             }
         }
-        // Route slots with SnapTargetSlot < 0 use ordinary person placement. Snap-target placement
-        // uses the selected footprint slot and remains a separate placement branch.
         var placementAccepted = destinationSlot is { SnapTargetSlot: >= 0 } snappedSlot
             ? world.CanPlaceRouteCandidate(person, position, anchor, snappedSlot.SnapTargetSlot)
-            // FUN_00589d4b validates intermediate movement with null reference/slot
-            // arguments. Using the action target as a reference rejects every step for
-            // Destination.iff, whose Flags bit 2 deliberately makes it non-solid.
+            // Intermediate movement validation omits the destination reference object because non-solid
+            // destination markers would otherwise cause placement checks to fail.
             : world.CanPlaceObject(person, position, stack);
         if (!placementAccepted)
         {
-            var referenceSlot = destinationSlot?.SnapTargetSlot ?? -1;
-            var referencedHeightCode = referenceSlot >= 0 && referenceSlot < anchor.FootprintSlots.Count
-                ? anchor.FootprintSlots[referenceSlot].HeightCode
-                : (byte)0;
-            world.LastRouteCandidateFailureReason =
-                $"person placement callback rejected candidate (error=0x{world.LastPlacementFailureCode:X2}; referenceSlot={referenceSlot}; heightCode={referencedHeightCode}; allowedHeight=0x{unchecked((ushort)person[ObjectData.AllowedHeightFlags]):X4}; overlapObject={world.LastPlacementBlockingObjectId})";
+            if (world.CaptureExecutionTrace)
+            {
+                var referenceSlot = destinationSlot?.SnapTargetSlot ?? -1;
+                var referencedHeightCode = referenceSlot >= 0 && referenceSlot < anchor.FootprintSlots.Count
+                    ? anchor.FootprintSlots[referenceSlot].HeightCode
+                    : (byte)0;
+                world.LastRouteCandidateFailureReason =
+                    $"person placement callback rejected candidate (error=0x{world.LastPlacementFailureCode:X2}; referenceSlot={referenceSlot}; heightCode={referencedHeightCode}; allowedHeight=0x{unchecked((ushort)person[ObjectData.AllowedHeightFlags]):X4}; overlapObject={world.LastPlacementBlockingObjectId})";
+            }
+            else
+            {
+                world.LastRouteCandidateFailureReason = "person placement callback rejected candidate";
+            }
             blockerId = world.LastPlacementBlockingObjectId != 0
                 ? world.LastPlacementBlockingObjectId
                 : BlockingRootObjectId(world, person, anchor, x, y, position.Height);
             return false;
         }
 
-        // FUN_004550e0 next calls FUN_00476f33 only when the reference object and request flag bit 2 are set.
-        // It temporarily applies the candidate direction while building the person's footprint, then restores it.
         if (destinationSlot is { CheckCandidateFootprintAgainstWall: true })
         {
             var originalDirection = person[ObjectData.Direction];
@@ -3185,10 +2956,6 @@ internal static class RouteExecutor
             }
         }
 
-        // The source FUN_004550e0 candidate path ends with the cXPerson placement callback
-        // (vtable +0x54); there is no later tile-root equality test. The callback has already
-        // checked every intersecting object and its placement flags. A separate TileValueAt
-        // check rejects valid slots on a pass-through child tile of multi-tile objects.
         return true;
     }
 
@@ -3220,16 +2987,22 @@ internal static class RouteExecutor
         var personKey = person.HasRequestKey ? person.RequestKey : person.ClockManagerIndex;
         var anchorKey = anchor.HasRequestKey ? anchor.RequestKey : anchor.ClockManagerIndex;
         if (occupant == 0 || occupant == personKey || occupant == anchorKey) return 0;
-        var blocker = world.WalkOrder.FirstOrDefault(candidate => candidate.Position.Height == height &&
-            (candidate.Position.X >> 4) == x && (candidate.Position.Y >> 4) == y &&
-            (candidate.HasRequestKey ? candidate.RequestKey : candidate.ClockManagerIndex) == occupant);
+        var tableCandidate = occupant is > 0 and <= short.MaxValue ? world.ObjectTableEntry((short)occupant) : null;
+        var blocker = tableCandidate is not null &&
+            tableCandidate.Position.Height == height &&
+            (tableCandidate.Position.X >> 4) == x &&
+            (tableCandidate.Position.Y >> 4) == y &&
+            (tableCandidate.HasRequestKey ? tableCandidate.RequestKey : tableCandidate.ClockManagerIndex) == occupant
+            ? tableCandidate
+            : world.WalkOrder.FirstOrDefault(candidate => candidate.Position.Height == height &&
+                (candidate.Position.X >> 4) == x && (candidate.Position.Y >> 4) == y &&
+                (candidate.HasRequestKey ? candidate.RequestKey : candidate.ClockManagerIndex) == occupant);
         if (blocker is null || blocker.RuntimeClass == SimsEngine.Formats.ObjectClass.Portal) return 0;
         return blocker.ClockManagerIndex;
     }
 
-    // cXPerson::MoveOutOfWay (Mac 0x10104710) creates Destination (GUID 0x7c4), installs a temporary
-    // routing slot, and queues interaction 3 when this route crosses another Sim. Its overload's guard
-    // (Mac 0x10105000; Windows FUN_0045c06f/FUN_0045c02d) avoids duplicate active or queued requests.
+    // Creates a temporary destination marker, installs an evasive routing slot, and queues an interaction
+    // asking blocking characters along the path to step aside.
     internal static void AskPeopleOnRouteToMove(SimulationWorld world, XPerson requester, XObject anchor,
         IReadOnlyList<RouteWaypoint> path)
     {
@@ -3237,20 +3010,33 @@ internal static class RouteExecutor
         var map = world.LotRoomMaps.GetValueOrDefault(requester.Position.Height);
         if (map is null) return;
 
-        foreach (var other in world.WalkOrder.OfType<XPerson>().ToList())
+        var reqLevel = requester.Position.Height;
+        var reqRoom = unchecked((ushort)requester.RoomWord84);
+        List<(XPerson Other, short CrossingDirection)>? blockers = null;
+        for (var i = 0; i < world.WalkOrder.Count; i++)
         {
-            var crossingDirection = RouteCrossingDirection(other, path);
+            if (world.WalkOrder[i] is not XPerson other) continue;
             if (ReferenceEquals(other, requester) || ReferenceEquals(other, anchor) ||
-                world.ResolveParentContainer(other) is not null ||
                 other[PersonData.Sitting] != 0 ||
-                other.Position.Height != requester.Position.Height ||
-                unchecked((ushort)other.RoomWord84) != unchecked((ushort)requester.RoomWord84) ||
+                other.Position.Height != reqLevel ||
+                unchecked((ushort)other.RoomWord84) != reqRoom ||
                 other.NativeRoute is not null ||
-                crossingDirection is null ||
                 GetDistanceToPrimitive.DistanceBetween(requester, other) > 3.0 ||
+                world.ResolveParentContainer(other) is not null ||
                 HasMoveAsideAction(other))
                 continue;
 
+            if (RouteCrossingDirection(other, path) is not { } crossingDirection)
+                continue;
+
+            blockers ??= [];
+            blockers.Add((other, crossingDirection));
+        }
+
+        if (blockers is null) return;
+
+        foreach (var (other, crossingDirection) in blockers)
+        {
             var guid = 0x7c4;
             var aside = world.ObjectFactory?.Invoke(guid);
             if (aside is null) continue;
@@ -3263,18 +3049,11 @@ internal static class RouteExecutor
                 world.InitializeCreatedObject(aside);
                 world.SetObjectPosition(aside, other.Position);
 
-                var intersection = ClosestRoutePoint(other, path);
-                var direction = crossingDirection ?? (intersection.Index > 0
-                    ? DirectionToWaypoint((intersection.Before.X, intersection.Before.Y),
-                        (intersection.Point.X, intersection.Point.Y))
-                    : DirectionToWaypoint((other.Position.X, other.Position.Y),
-                        (intersection.After.X, intersection.After.Y)));
+                var direction = crossingDirection;
                 var firstDirection = (direction + 2) & 7;
                 var secondDirection = (direction + 6) & 7;
                 var moveSlot = new RoutingSlotRequest
                 {
-                    // FUN_0046df4f(16, 80, 16), AllowDirection(base+2/base+6),
-                    // AllowAnyFacing, SetMultiplier(standing, 1), and route flag 0x2000.
                     Flags = 0x2100u | (1u << firstDirection) | (1u << secondDirection),
                     MinProximity = 16,
                     MaxProximity = 80,
@@ -3283,12 +3062,10 @@ internal static class RouteExecutor
                     Facing = -3,
                 };
                 aside.RoutingSlots.Insert(0, moveSlot);
-                var asideDestination = SelectDestination(world, other, aside, moveSlot);
-                if (asideDestination is null || !TryPath(world, other, asideDestination.Value.Position, aside,
-                        out _, out _, directPositionRequest: false, directSlot: moveSlot))
+                if (SelectDestination(world, other, aside, moveSlot) is null)
                 {
-                    // Mac MoveOutOfWay retries its generated route with the direct direction added
-                    // and an 80-unit optimal distance when the perpendicular route has no path.
+                    // Retries the evasion route with the direct forward direction enabled when
+                    // perpendicular routes have no valid path.
                     moveSlot.Flags |= 1u << (direction & 7);
                     moveSlot.OptimalProximity = 80;
                 }
@@ -3304,7 +3081,7 @@ internal static class RouteExecutor
                     world.Remove(aside.Id);
                     continue;
                 }
-                added = false; // The queued action now owns this temporary destination object.
+                added = false; // Ownership of the temporary destination object transfers to the queued action.
             }
             catch (Exception error) when (error is InvalidOperationException or ArgumentException)
             {
@@ -3313,11 +3090,8 @@ internal static class RouteExecutor
         }
     }
 
-    // cXPerson::MoveOutOfWay(int) (Mac 0x10104710 int overload; Windows FUN_0045beca): a blocked Snapshot asks the
-    // Sim in the way to step aside. The Go Here object (GUID 0x7c4) takes the blocker's position and a routing slot
-    // that allows the four cardinal directions 0, 2, 4 and 6 at distances 16, 80 and 16, any facing, standing
-    // multiplier 1 and route flag 0x2000; interaction 3 is queued at the caller's priority. The request is dropped
-    // when a move-aside action is already current or queued, and the object is removed when the queue refuses it.
+    // Asks a blocking character to step aside by creating a destination at their position with cardinal
+    // evasion slots and queuing a move-aside interaction.
     internal static bool MoveOutOfWay(SimulationWorld world, XPerson blocker, int priority)
     {
         if (HasMoveAsideAction(blocker)) return false;
@@ -3368,7 +3142,7 @@ internal static class RouteExecutor
         return false;
     }
 
-    private static short? RouteCrossingDirection(XPerson person, IReadOnlyList<RouteWaypoint> path)
+    internal static short? RouteCrossingDirection(XPerson person, IReadOnlyList<RouteWaypoint> path)
     {
         var bounds = person.FootprintBounds;
         (int X, int Y)? entry = null;
@@ -3378,8 +3152,8 @@ internal static class RouteExecutor
             var end = path[segmentIndex + 1];
             var dx = end.X - start.X;
             var dy = end.Y - start.Y;
-            var steps = Math.Max(Math.Abs(dx), Math.Abs(dy)) + 1;
-            for (var sample = 0; sample < steps; sample++)
+            var steps = Math.Max(1, Math.Max(Math.Abs(dx), Math.Abs(dy)));
+            for (var sample = 0; sample <= steps; sample++)
             {
                 var x = start.X + dx * (sample / (float)steps);
                 var y = start.Y + dy * (sample / (float)steps);
@@ -3393,14 +3167,16 @@ internal static class RouteExecutor
                     return DirectionToWaypoint(first, (sampleX, sampleY));
             }
         }
-        // If the route remains inside the footprint at its end, Mac uses the start of
-        // the final path segment as the second direction point.
-        return entry is { } only && path.Count > 1
-            ? DirectionToWaypoint(only, (path[^2].X, path[^2].Y))
-            : null;
+        // Projects along the final path segment's forward vector when the route terminates inside the
+        // footprint.
+        if (entry is not { } only || path.Count <= 1)
+            return null;
+        var terminal = (path[^1].X, path[^1].Y);
+        return only != terminal
+            ? DirectionToWaypoint(only, terminal)
+            : DirectionToWaypoint((path[^2].X, path[^2].Y), terminal);
     }
 
-    // Mac MoveOutOfWay also considers route geometry while a Sim is already moving.
     private static bool SharesActiveRoute(SimulationWorld world, XPerson person, IReadOnlyList<RouteWaypoint> path)
     {
         if (person.NativeRoute is not { } otherRoute ||
@@ -3462,11 +3238,8 @@ internal static class RouteExecutor
     private static void ApplyRoutePlacement(SimulationWorld world, XPerson person, XObject anchor,
         ObjectPosition destination, RoutingSlotRequest slot, TreeStack? stack)
     {
-        // FUN_004550e0's +0x58 callback receives the reference object and runtime-slot index for
-        // a snapped destination, causing FUN_004327d9 to establish the container relationship.
         if (slot.SnapTargetSlot >= 0)
-            // FUN_00432771 converts the zero-based SLOT definition index to the one-based
-            // relationship index stored in cXObject +0x66 before FUN_004327d9 writes it.
+            // Converts the zero-based slot definition index to a one-based container relationship index.
             world.PlaceObject(person, destination, stack, anchor, checked((short)(slot.SnapTargetSlot + 1)));
         else
             world.PlaceObject(person, destination, stack);
@@ -3512,11 +3285,8 @@ internal static class RouteExecutor
         return true;
     }
 
-    // FUN_0045aecf/FUN_0045c4fa copy the selected candidate's +0xe word into PersonData.RouteEntryFlags (+0x5d6).
-    // FUN_00483572 writes 1 << localSector there, where localSector is the authored SLOT sector relative to the
-    // slot orientation (0 = in front, 2/4/6 = the object's other sides). Chair BHAV 4099 branches on 1, 4, 16 and 64.
-    // Exact-point goals (zero direction mask or snap target) leave the word at zero. Direct Go Here routes have no
-    // target SLOT entry flags.
+    // Stores the selected slot's local sector bitmask into the character's route entry flags for scripts
+    // that branch on approach direction. Exact goals and direct movement leave flags cleared.
     private static void SetRouteEntryFlags(SimulationWorld world, XPerson person, XObject anchor, RouteState route)
     {
         if (route.DirectPositionRequest) return;
@@ -3526,11 +3296,9 @@ internal static class RouteExecutor
     private static short LocalSectorEntryFlags(short worldSector, short orientation) =>
         unchecked((short)(1 << ((worldSector - orientation) & 7)));
 
-    /// <summary>FUN_00483432 (called first by FUN_004824b8): when the person is held by a seat with function 0x1a, each
-    /// seat-relative side c enabled in OBJD ChairEntryFlags (+0x84) is projected one tile from the person's position in
-    /// world direction (seat facing + c) & 7 (FUN_004222bd). Sides FUN_00481593 accepts (6, or 5 when only a person
-    /// blocks) compete by squared distance to the route target; the nearest one's 1 &lt;&lt; c is written to route
-    /// record +0x74, which FUN_0045aecf state 1 copies into +0x5d6 and passes to the seat's stand function.</summary>
+    /// <summary>When exiting a seating object, projects each relative side enabled in chair entry flags one
+    /// tile in world direction. Unblocked candidates compete by squared distance to the route target, and
+    /// the nearest side bitmask is returned for the stand script.</summary>
     private static short SeatExitEntryFlags(SimulationWorld world, XPerson person, XObject seat, XObject target)
     {
         if (!SimulationWorld.HasFunction(seat, 0x1a)) return 0;
@@ -3545,7 +3313,8 @@ internal static class RouteExecutor
             var candidate = person.Position with { X = person.Position.X + offset.X, Y = person.Position.Y + offset.Y };
             var accepted = Walkable(world, person, seat, candidate, writeCandidateResults: false);
             if (!accepted && world.LastPlacementBlockingObjectId != 0 &&
-                world.WalkOrder.FirstOrDefault(item => item.ClockManagerIndex == world.LastPlacementBlockingObjectId)
+                (world.ObjectTableEntry(world.LastPlacementBlockingObjectId)
+                    ?? world.WalkOrder.FirstOrDefault(item => item.ClockManagerIndex == world.LastPlacementBlockingObjectId))
                     is XPerson)
                 accepted = true;
             if (!accepted) continue;
@@ -3562,42 +3331,62 @@ internal static class RouteExecutor
     private readonly record struct PartitionCell(int MinX, int MinY, int MaxX, int MaxY,
         int CenterX, int CenterY, ushort Room, int Cost);
 
-    private static bool TryPath(SimulationWorld world, XPerson person, ObjectPosition destination, XObject anchor,
-        out List<RouteWaypoint> path, out double pathCost, bool directPositionRequest = false,
-        RoutingSlotRequest? directSlot = null, TreeStack? stack = null,
-        (int X, int Y)? startTileOverride = null, (int X, int Y)? startCellCenterOverride = null,
-        bool allowCrossRoom = true)
+    private sealed class FloorPartition(
+        SimulationWorld world,
+        XPerson person,
+        XObject anchor,
+        TreeStack? stack,
+        SimsEngine.World.RoomMap map,
+        (int X, int Y) startTile,
+        int startPointX,
+        int startPointY,
+        ushort startRoom,
+        int startId,
+        bool allowCrossRoom,
+        List<PartitionCell> cells,
+        List<(int Id, int X, int Y)>[] neighbors)
     {
-        path = [];
-        pathCost = double.PositiveInfinity;
-        if (!world.LotRoomMaps.TryGetValue(person.Position.Height, out var map) || destination.Height != person.Position.Height)
-            return false;
-        // ChooseStartingPoint overwrites the constructor's zeroed +0x6c/+0x70 with actor position
-        // before goal/path setup (Windows FUN_00483432 via FUN_004824b8; Mac XRouting.s 0x10163D64–0x10163D74).
-        // Holder-specific starting-point candidates are a separate branch of that source routine.
+        public SimulationWorld World { get; } = world;
+        public XPerson Person { get; } = person;
+        public XObject Anchor { get; } = anchor;
+        public TreeStack? Stack { get; } = stack;
+        public SimsEngine.World.RoomMap Map { get; } = map;
+        public (int X, int Y) StartTile { get; } = startTile;
+        public int StartPointX { get; } = startPointX;
+        public int StartPointY { get; } = startPointY;
+        public ushort StartRoom { get; } = startRoom;
+        public int StartId { get; } = startId;
+        public bool AllowCrossRoom { get; } = allowCrossRoom;
+        public List<PartitionCell> Cells { get; } = cells;
+        public List<(int Id, int X, int Y)>[] Neighbors { get; } = neighbors;
+        public Dictionary<int, bool> PlacementCache { get; } = [];
+    }
+
+    private static FloorPartition? TryBuildFloorPartition(SimulationWorld world, XPerson person, XObject anchor,
+        bool allowCrossRoom = true, TreeStack? stack = null,
+        (int X, int Y)? startTileOverride = null, (int X, int Y)? startCellCenterOverride = null)
+    {
+        if (!world.LotRoomMaps.TryGetValue(person.Position.Height, out var map))
+            return null;
         var startPointX = person.Position.X;
         var startPointY = person.Position.Y;
         var startTile = startTileOverride ?? (X: startPointX >> 4, Y: startPointY >> 4);
-        var endTile = (X: destination.X >> 4, Y: destination.Y >> 4);
-        if (startTile.X < 0 || startTile.Y < 0 || startTile.X >= map.Width || startTile.Y >= map.Height ||
-            endTile.X < 0 || endTile.Y < 0 || endTile.X >= map.Width || endTile.Y >= map.Height)
-            return false;
+        if (startTile.X < 0 || startTile.Y < 0 || startTile.X >= map.Width || startTile.Y >= map.Height)
+            return null;
 
         var startRoom = map.RoomAt(startTile.X, startTile.Y);
-        var endRoom = map.RoomAt(endTile.X, endTile.Y);
-        if (startRoom == SimsEngine.World.RoomMap.NoRoom || endRoom == SimsEngine.World.RoomMap.NoRoom) return false;
-        if (!allowCrossRoom && startRoom != endRoom) return false;
+        if (startRoom == SimsEngine.World.RoomMap.NoRoom) return null;
 
-        // Mac SpacePartition starts from room rectangles and splits them at every
-        // PenaltyRect boundary. Tile boundaries retain RoomMap and route-block
-        // information; penalty boundaries add the sub-tile nodes missing from the
-        // previous tile-center search.
+        // Splits room rectangles at penalty rectangle boundaries, allowing sub-tile pathing nodes while
+        // retaining tile-level room and blocker maps.
         var penaltyRects = new List<(int MinX, int MinY, int MaxX, int MaxY, int Cost, ushort Room)>();
         const int wallPenaltyInflate = 8;
         const int roomWallClearanceInflate = 7;
 
-        // FUN_00481a0d (00481a0d.c:181-275): emit blocking wall-segment lines and inflate by 7 FTile units so
-        // partition cells and Path::DoOneSmooth (0046a497.c) keep waypoints clear of walls and fence corners.
+        // Inflates blocking wall segments so partition cells and path smoothing keep waypoints clear of
+        // walls and fence corners. Ghosts bypass wall blocking.
+        var ghostIgnoresWalls = (person[PersonData.IsGhost] & 1) != 0;
+        if (!ghostIgnoresWalls)
         for (var tileY = 0; tileY < map.Height; tileY++)
         for (var tileX = 0; tileX < map.Width; tileX++)
         {
@@ -3627,13 +3416,23 @@ internal static class RouteExecutor
             }
         }
 
-        // The routing check tree below runs object BHAV code; it may change the lot object
-        // list while this pass is collecting penalty rectangles.
+        if (startTileOverride is { } retained && startCellCenterOverride is null)
+        {
+            if (startPointX == (retained.X + 1) * 16) startPointX--;
+            if (startPointY == (retained.Y + 1) * 16) startPointY--;
+        }
+        var startLookupX = startCellCenterOverride?.X ?? startPointX;
+        var startLookupY = startCellCenterOverride?.Y ?? startPointY;
+        var personIsGhost = (person.FootprintFlags614 & 1) != 0 || (person.FootprintFlags634 & 1) != 0;
+        var personHalfSpan = personIsGhost ? 0 : 3;
+        var actorBounds = person.FootprintBoundsAt(new ObjectPosition(startLookupX, startLookupY, person.Position.Height));
+
+        // Snapshots the object list because routing check scripts can mutate the lot object collection
+        // during evaluation.
+        if (!personIsGhost)
         foreach (var item in world.WalkOrder.ToArray())
         {
             if (item.Id == person.Id || item.Position.Height != person.Position.Height) continue;
-            // FUN_00481947 (00481947.c:14-15) calls FUN_0043270d -> FUN_00432664, walking past
-            // SlotHierNumber == 0 tile-overlap links and skipping only objects enclosed in an authored slot.
             if (world.ResolveParentContainer(item) is not null)
                 continue;
 
@@ -3659,9 +3458,27 @@ internal static class RouteExecutor
             }
 
             var routeCost = routePenalty == 0 ? int.MaxValue : 10;
-            var bounds = SimulationWorld.PlacementFootprintBounds(item, item.Position);
+            FootprintBounds bounds;
+            if (item is XPerson itemPerson)
+            {
+                itemPerson.RefreshFootprintBounds();
+                bounds = itemPerson.FootprintBounds;
+            }
+            else
+            {
+                bounds = SimulationWorld.PlacementFootprintBounds(item, item.Position);
+            }
             var itemRoom = unchecked((ushort)item.RoomWord84);
-            AddRouteCostRect(bounds.MinX, bounds.MinY, bounds.MaxX, bounds.MaxY, routeCost, itemRoom);
+            var intersectsActor = bounds.MinX < actorBounds.MaxX && actorBounds.MinX < bounds.MaxX &&
+                                  bounds.MinY < actorBounds.MaxY && actorBounds.MinY < bounds.MaxY;
+            if (!intersectsActor)
+            {
+                var obstacleInflate = item.TypeRecord?.ObjectType == 2 || routeCost == int.MaxValue || routeCost > 7
+                    ? personHalfSpan
+                    : 0;
+                AddRouteCostRect(bounds.MinX, bounds.MinY, bounds.MaxX, bounds.MaxY, routeCost, itemRoom,
+                    obstacleInflate, obstacleInflate);
+            }
             if (item.TypeRecord?.ObjectType != 8) continue;
             var storedWallFlags = unchecked((uint)(ushort)item[ObjectData.WallBlockFlags]);
             var rotatedWallFlags = storedWallFlags << (unchecked((byte)item[ObjectData.Direction]) & 0x1f);
@@ -3691,7 +3508,7 @@ internal static class RouteExecutor
                 penaltyRects.Add((minX, minY, maxX, maxY, cost, room));
         }
 
-        var cells = new List<PartitionCell>();
+        var cells = new List<PartitionCell>(map.Width * map.Height);
         for (var tileY = 0; tileY < map.Height; tileY++)
         for (var tileX = 0; tileX < map.Width; tileX++)
         {
@@ -3702,59 +3519,56 @@ internal static class RouteExecutor
             cells.Add(new PartitionCell(minX, minY, maxX, maxY, minX + 8, minY + 8, room, 0));
         }
 
-        // Expand only the nodes intersected by each penalty rectangle, matching
-        // SpacePartition::ExpandRect. This avoids projecting an object's boundaries
-        // across unrelated rooms and empty parts of the lot.
-        foreach (var rect in penaltyRects)
+        // Expands only the partition nodes intersected by each penalty rectangle to avoid projecting
+        // boundaries across unrelated rooms.
+        if (penaltyRects.Count > 0)
         {
-            for (var i = 0; i < cells.Count; i++)
+            var nextCells = new List<PartitionCell>(cells.Count + 64);
+            Span<int> xValues = stackalloc int[4];
+            Span<int> yValues = stackalloc int[4];
+            foreach (var rect in penaltyRects)
             {
-                var cell = cells[i];
-                if ((rect.Room != SimsEngine.World.RoomMap.NoRoom && cell.Room != rect.Room) ||
-                    rect.MinX >= cell.MaxX || rect.MaxX <= cell.MinX ||
-                    rect.MinY >= cell.MaxY || rect.MaxY <= cell.MinY)
-                    continue;
-
-                var xCuts = new SortedSet<int> { cell.MinX, cell.MaxX,
-                    Math.Clamp(rect.MinX, cell.MinX, cell.MaxX), Math.Clamp(rect.MaxX, cell.MinX, cell.MaxX) };
-                var yCuts = new SortedSet<int> { cell.MinY, cell.MaxY,
-                    Math.Clamp(rect.MinY, cell.MinY, cell.MaxY), Math.Clamp(rect.MaxY, cell.MinY, cell.MaxY) };
-                var newCells = new List<PartitionCell>();
-                var xValues = xCuts.ToArray();
-                var yValues = yCuts.ToArray();
-                for (var y = 0; y < yValues.Length - 1; y++)
-                for (var x = 0; x < xValues.Length - 1; x++)
+                nextCells.Clear();
+                for (var i = 0; i < cells.Count; i++)
                 {
-                    var minX = xValues[x]; var maxX = xValues[x + 1];
-                    var minY = yValues[y]; var maxY = yValues[y + 1];
-                    var centerX = minX + (maxX - minX) / 2;
-                    var centerY = minY + (maxY - minY) / 2;
-                    var inside = centerX >= rect.MinX && centerX < rect.MaxX &&
-                                 centerY >= rect.MinY && centerY < rect.MaxY;
-                    newCells.Add(new PartitionCell(minX, minY, maxX, maxY, centerX, centerY,
-                        cell.Room, inside ? Math.Max(cell.Cost, rect.Cost) : cell.Cost));
+                    var cell = cells[i];
+                    if ((rect.Room != SimsEngine.World.RoomMap.NoRoom && cell.Room != rect.Room) ||
+                        rect.MinX >= cell.MaxX || rect.MaxX <= cell.MinX ||
+                        rect.MinY >= cell.MaxY || rect.MaxY <= cell.MinY)
+                    {
+                        nextCells.Add(cell);
+                        continue;
+                    }
+
+                    var xCount = SortedUnique4(cell.MinX, cell.MaxX,
+                        Math.Clamp(rect.MinX, cell.MinX, cell.MaxX),
+                        Math.Clamp(rect.MaxX, cell.MinX, cell.MaxX), xValues);
+                    var yCount = SortedUnique4(cell.MinY, cell.MaxY,
+                        Math.Clamp(rect.MinY, cell.MinY, cell.MaxY),
+                        Math.Clamp(rect.MaxY, cell.MinY, cell.MaxY), yValues);
+                    for (var y = 0; y < yCount - 1; y++)
+                    for (var x = 0; x < xCount - 1; x++)
+                    {
+                        var minX = xValues[x]; var maxX = xValues[x + 1];
+                        var minY = yValues[y]; var maxY = yValues[y + 1];
+                        var centerX = minX + (maxX - minX) / 2;
+                        var centerY = minY + (maxY - minY) / 2;
+                        var inside = centerX >= rect.MinX && centerX < rect.MaxX &&
+                                     centerY >= rect.MinY && centerY < rect.MaxY;
+                        nextCells.Add(new PartitionCell(minX, minY, maxX, maxY, centerX, centerY,
+                            cell.Room, inside ? Math.Max(cell.Cost, rect.Cost) : cell.Cost));
+                    }
                 }
-                cells.RemoveAt(i);
-                cells.InsertRange(i, newCells);
-                i += newCells.Count - 1;
+                (cells, nextCells) = (nextCells, cells);
             }
         }
 
-        if (startTileOverride is { } retained && startCellCenterOverride is null)
-        {
-            if (startPointX == (retained.X + 1) * 16) startPointX--;
-            if (startPointY == (retained.Y + 1) * 16) startPointY--;
-        }
-        var startLookupX = startCellCenterOverride?.X ?? startPointX;
-        var startLookupY = startCellCenterOverride?.Y ?? startPointY;
         var startId = cells.FindIndex(cell => startLookupX >= cell.MinX && startLookupX < cell.MaxX &&
             startLookupY >= cell.MinY && startLookupY < cell.MaxY);
-        var endId = cells.FindIndex(cell => destination.X >= cell.MinX && destination.X < cell.MaxX &&
-            destination.Y >= cell.MinY && destination.Y < cell.MaxY);
-        if (startId < 0 || endId < 0) return false;
+        if (startId < 0) return null;
 
-        var neighbors = Enumerable.Range(0, cells.Count)
-            .Select(_ => new List<(int Id, int X, int Y)>()).ToArray();
+        var neighbors = new List<(int Id, int X, int Y)>[cells.Count];
+        for (var i = 0; i < cells.Count; i++) neighbors[i] = [];
         var minXEdges = new Dictionary<int, List<int>>();
         var maxXEdges = new Dictionary<int, List<int>>();
         var minYEdges = new Dictionary<int, List<int>>();
@@ -3800,126 +3614,260 @@ internal static class RouteExecutor
             line.Add(id);
         }
 
+        static int SortedUnique4(int a, int b, int c, int d, Span<int> dst)
+        {
+            Span<int> raw = stackalloc int[4] { a, b, c, d };
+            for (var i = 1; i < 4; i++)
+            {
+                var key = raw[i];
+                var j = i - 1;
+                while (j >= 0 && raw[j] > key)
+                {
+                    raw[j + 1] = raw[j];
+                    j--;
+                }
+                raw[j + 1] = key;
+            }
+            var count = 0;
+            for (var i = 0; i < 4; i++)
+                if (count == 0 || raw[i] != dst[count - 1])
+                    dst[count++] = raw[i];
+            return count;
+        }
+
+        return new FloorPartition(world, person, anchor, stack, map, startTile, startPointX, startPointY,
+            startRoom, startId, allowCrossRoom, cells, neighbors);
+    }
+
+    internal static bool TryPath(SimulationWorld world, XPerson person, ObjectPosition destination, XObject anchor,
+        out List<RouteWaypoint> path, out double pathCost, bool directPositionRequest = false,
+        RoutingSlotRequest? directSlot = null, TreeStack? stack = null,
+        (int X, int Y)? startTileOverride = null, (int X, int Y)? startCellCenterOverride = null,
+        bool allowCrossRoom = true)
+    {
+        path = [];
+        pathCost = double.PositiveInfinity;
+        if (destination.Height != person.Position.Height ||
+            !world.LotRoomMaps.TryGetValue(person.Position.Height, out var map))
+            return false;
+        var endTile = (X: destination.X >> 4, Y: destination.Y >> 4);
+        if (endTile.X < 0 || endTile.Y < 0 || endTile.X >= map.Width || endTile.Y >= map.Height)
+            return false;
+        var endRoom = map.RoomAt(endTile.X, endTile.Y);
+        if (endRoom == SimsEngine.World.RoomMap.NoRoom) return false;
+        var startTile = startTileOverride ?? (X: person.Position.X >> 4, Y: person.Position.Y >> 4);
+        if (startTile.X < 0 || startTile.Y < 0 || startTile.X >= map.Width || startTile.Y >= map.Height)
+            return false;
+        if (!allowCrossRoom && map.RoomAt(startTile.X, startTile.Y) != endRoom)
+            return false;
+        if (TryBuildFloorPartition(world, person, anchor, allowCrossRoom, stack, startTileOverride, startCellCenterOverride) is not { } partition)
+            return false;
+        return TryPathWithPartition(partition, destination, out path, out pathCost);
+    }
+
+    private static bool TryPathWithPartition(FloorPartition partition, ObjectPosition destination,
+        out List<RouteWaypoint> path, out double pathCost)
+    {
+        path = [];
+        pathCost = double.PositiveInfinity;
+        var world = partition.World;
+        var person = partition.Person;
+        if (destination.Height != person.Position.Height) return false;
+        var map = partition.Map;
+        var endTile = (X: destination.X >> 4, Y: destination.Y >> 4);
+        if (endTile.X < 0 || endTile.Y < 0 || endTile.X >= map.Width || endTile.Y >= map.Height)
+            return false;
+        var endRoom = map.RoomAt(endTile.X, endTile.Y);
+        if (endRoom == SimsEngine.World.RoomMap.NoRoom) return false;
+        if (!partition.AllowCrossRoom && partition.StartRoom != endRoom) return false;
+
+        var cells = partition.Cells;
+        var startId = partition.StartId;
+        var endId = cells.FindIndex(cell => destination.X >= cell.MinX && destination.X < cell.MaxX &&
+            destination.Y >= cell.MinY && destination.Y < cell.MaxY);
+        if (endId < 0) return false;
+
+        var neighbors = partition.Neighbors;
+        var anchor = partition.Anchor;
+        var stack = partition.Stack;
+        var startTile = partition.StartTile;
+        var startPointX = partition.StartPointX;
+        var startPointY = partition.StartPointY;
+        var startRoom = partition.StartRoom;
+
+        var nodeCount = cells.Count;
         var queue = new PriorityQueue<int, (double Estimate, double Cost, long Sequence)>();
-        var costs = new Dictionary<int, double> { [startId] = 0d };
-        var previous = new Dictionary<int, int>();
-        var visited = new HashSet<int>();
-        long sequence = 0;
-        var rejectedPlacements = 0;
-        var rejectedEdges = 0;
-        var placementCache = new Dictionary<int, bool> { [startId] = true, [endId] = true };
-        bool CanVisit(int id)
+        var costs = ArrayPool<double>.Shared.Rent(nodeCount);
+        var previous = ArrayPool<int>.Shared.Rent(nodeCount);
+        var visited = ArrayPool<byte>.Shared.Rent(nodeCount);
+        try
         {
-            if (placementCache.TryGetValue(id, out var allowed)) return allowed;
-            var cell = cells[id];
-            var candidate = new ObjectPosition(cell.CenterX, cell.CenterY, person.Position.Height);
-            allowed = Walkable(world, person, anchor, candidate, writeCandidateResults: false, stack: stack);
-            placementCache[id] = allowed;
-            if (!allowed) rejectedPlacements++;
-            return allowed;
-        }
-        queue.Enqueue(startId, (DistanceBetweenNodeCenters(cells[startId], cells[endId]), 0d, sequence++));
-        var directions = new (int X, int Y)[] { (1, 0), (0, 1), (-1, 0), (0, -1) };
-
-        while (queue.TryDequeue(out var currentId, out var queuedPriority))
-        {
-            if (!costs.TryGetValue(currentId, out var currentCost) || queuedPriority.Cost != currentCost ||
-                !visited.Add(currentId)) continue;
-            if (currentId == endId)
+            costs.AsSpan(0, nodeCount).Fill(double.PositiveInfinity);
+            visited.AsSpan(0, nodeCount).Clear();
+            costs[startId] = 0d;
+            var visitedCount = 0;
+            long sequence = 0;
+            var rejectedPlacements = 0;
+            var rejectedEdges = 0;
+            var placementCache = partition.PlacementCache;
+            var anchorRawBounds = anchor is XPerson anchorPerson
+                ? anchorPerson.FootprintBoundsAt(anchor.Position)
+                : SimulationWorld.PlacementFootprintBounds(anchor, anchor.Position);
+            var anchorInflate = (person.FootprintFlags614 & 1) != 0 || (person.FootprintFlags634 & 1) != 0 ? 0 : 3;
+            var ghostIgnoresWalls = (person[PersonData.IsGhost] & 1) != 0;
+            var anchorInfMinX = anchorRawBounds.MinX - anchorInflate;
+            var anchorInfMinY = anchorRawBounds.MinY - anchorInflate;
+            var anchorInfMaxX = anchorRawBounds.MaxX + anchorInflate;
+            var anchorInfMaxY = anchorRawBounds.MaxY + anchorInflate;
+            var destinationInAnchorCollar = destination.X >= anchorInfMinX && destination.X < anchorInfMaxX &&
+                                            destination.Y >= anchorInfMinY && destination.Y < anchorInfMaxY;
+            bool IsAnchorCollarForGoal(int id)
             {
-                pathCost = currentCost;
-                break;
+                if (!destinationInAnchorCollar) return false;
+                var c = cells[id];
+                return c.CenterX >= anchorInfMinX && c.CenterX < anchorInfMaxX &&
+                       c.CenterY >= anchorInfMinY && c.CenterY < anchorInfMaxY;
             }
-            var current = cells[currentId];
-            foreach (var (nextId, interfaceX, interfaceY) in neighbors[currentId])
+            bool CanVisit(int id)
             {
-                if (nextId < 0 || visited.Contains(nextId)) continue;
-                if (!CanVisit(nextId)) continue;
-                var next = cells[nextId];
-                var fromTile = (X: current.CenterX >> 4, Y: current.CenterY >> 4);
-                var toTile = (X: next.CenterX >> 4, Y: next.CenterY >> 4);
-                if (fromTile == toTile)
+                if (id == startId || id == endId) return true;
+                if (IsAnchorCollarForGoal(id))
                 {
-                    if (current.Room != next.Room) { rejectedEdges++; continue; }
+                    var collarCell = cells[id];
+                    var collarCandidate = new ObjectPosition(collarCell.CenterX, collarCell.CenterY, person.Position.Height);
+                    if (Walkable(world, person, anchor, collarCandidate, writeCandidateResults: false, stack: stack))
+                        return true;
+                    return world.LastPlacementFailureCode == 0x0b &&
+                           world.LastPlacementBlockingObjectId == anchor.ClockManagerIndex;
                 }
-                else if (!CanStep(world, map, fromTile, toTile))
-                {
-                    rejectedEdges++;
-                    continue;
-                }
-
-                var dx = interfaceX - current.CenterX;
-                var dy = interfaceY - current.CenterY;
-                var edgeDistance = Math.Sqrt(dx * dx + dy * dy);
-                var edgeCost = ((current.Cost + 2L + next.Cost) >> 1) * edgeDistance;
-                var nextCost = currentCost + edgeCost;
-                if (costs.TryGetValue(nextId, out var priorCost) && priorCost <= nextCost) continue;
-                costs[nextId] = nextCost;
-                previous[nextId] = currentId;
-                queue.Enqueue(nextId, (nextCost + DistanceBetweenNodeCenters(next, cells[endId]), nextCost, sequence++));
+                if (placementCache.TryGetValue(id, out var allowed)) return allowed;
+                var cell = cells[id];
+                var candidate = new ObjectPosition(cell.CenterX, cell.CenterY, person.Position.Height);
+                allowed = Walkable(world, person, anchor, candidate, writeCandidateResults: false, stack: stack);
+                placementCache[id] = allowed;
+                if (!allowed) rejectedPlacements++;
+                return allowed;
             }
-        }
+            queue.Enqueue(startId, (DistanceBetweenNodeCenters(cells[startId], cells[endId]), 0d, sequence++));
 
-        if (world.CaptureExecutionTrace)
-        {
-            var visitedRooms = string.Join(",", visited.Select(id => cells[id].Room)
-                .GroupBy(room => room).OrderBy(group => group.Key)
-                .Select(group => $"{group.Key}:{group.Count()}"));
-            world.RouteSearchTrace.Add(new SimulationRouteSearchTrace(person.Id, destination, startTile, endTile,
-                startRoom, endRoom, visited.Count, rejectedPlacements, rejectedEdges, visitedRooms));
-        }
-        if (!double.IsFinite(pathCost)) return false;
-
-        var reverse = new List<int> { endId };
-        while (reverse[^1] != startId) reverse.Add(previous[reverse[^1]]);
-        reverse.Reverse();
-        var smoothedPoints = reverse.Select(id => (cells[id].CenterX, cells[id].CenterY)).ToList();
-        SmoothPartitionPath(cells, reverse, smoothedPoints);
-        // FUN_0046a7c5 gives the seed record a valid +4 partition-cell index and the target record
-        // +4=-1; FUN_0046a16d writes the exact route seed coordinates to the seed record. Therefore
-        // FUN_0046a1f7 retains the exact seed point, omits the exact target sentinel, and emits the
-        // remaining partition-derived points in seed-to-target order before appending the midpoint
-        // of the target-side node at reverse-chain index 1. Keep the source route-task seed at index
-        // zero, emit search-cell representatives for all linked partition nodes, and append that
-        // target-cell midpoint as the route terminal.
-        path.Add(new RouteWaypoint(startTile.X, startTile.Y, startPointX, startPointY,
-            cells[startId].CenterX, cells[startId].CenterY, false));
-        // The Mac Path starts at the Sim's own point; the start cell's centre is only the search node, not a waypoint.
-        for (var i = 1; i < reverse.Count; i++)
-        {
-            var cell = cells[reverse[i]];
-            // Path::OpenANode first records each node's representative point;
-            // DoOneSmooth later adjusts it within its interface rectangle.
-            path.Add(ToWaypoint(smoothedPoints[i], cell));
-        }
-        if (path[^1].X == destination.X && path[^1].Y == destination.Y)
-        {
-            path[^1] = path[^1] with { IsDestination = true };
-        }
-        else
-        {
-            path.Add(new RouteWaypoint(endTile.X, endTile.Y, destination.X, destination.Y,
-                cells[endId].CenterX, cells[endId].CenterY, true));
-        }
-        if (world.CaptureExecutionTrace)
-        {
-            var crossings = new List<string>();
-            ushort previousRoom = SimsEngine.World.RoomMap.NoRoom;
-            foreach (var point in path)
+            while (queue.TryDequeue(out var currentId, out var queuedPriority))
             {
-                var room = map.RoomAt(point.TileX, point.TileY);
-                if (crossings.Count == 0 || room != previousRoom)
-                    crossings.Add($"{room}@{point.TileX},{point.TileY}");
-                previousRoom = room;
+                if (queuedPriority.Cost != costs[currentId] || visited[currentId] != 0) continue;
+                visited[currentId] = 1;
+                visitedCount++;
+                var currentCost = costs[currentId];
+                if (currentId == endId)
+                {
+                    pathCost = currentCost;
+                    break;
+                }
+                var current = cells[currentId];
+                foreach (var (nextId, interfaceX, interfaceY) in neighbors[currentId])
+                {
+                    if (nextId < 0 || visited[nextId] != 0) continue;
+                    var next = cells[nextId];
+                    if (nextId != endId && !IsAnchorCollarForGoal(nextId) && next.Cost == int.MaxValue) { rejectedEdges++; continue; }
+                    if (!CanVisit(nextId)) continue;
+                    var fromTile = (X: current.CenterX >> 4, Y: current.CenterY >> 4);
+                    var toTile = (X: next.CenterX >> 4, Y: next.CenterY >> 4);
+                    if (!ghostIgnoresWalls)
+                    {
+                        if (fromTile == toTile)
+                        {
+                            if (current.Room != next.Room) { rejectedEdges++; continue; }
+                        }
+                        else if (!CanStep(world, map, fromTile, toTile))
+                        {
+                            rejectedEdges++;
+                            continue;
+                        }
+                    }
+
+                    var dx1 = interfaceX - current.CenterX;
+                    var dy1 = interfaceY - current.CenterY;
+                    var dx2 = next.CenterX - interfaceX;
+                    var dy2 = next.CenterY - interfaceY;
+                    var edgeDistance = Math.Sqrt(dx1 * dx1 + dy1 * dy1) + Math.Sqrt(dx2 * dx2 + dy2 * dy2);
+                    var edgeCost = ((current.Cost + 2L + next.Cost) >> 1) * edgeDistance;
+                    var nextCost = currentCost + edgeCost;
+                    if (costs[nextId] <= nextCost) continue;
+                    costs[nextId] = nextCost;
+                    previous[nextId] = currentId;
+                    queue.Enqueue(nextId, (nextCost + DistanceBetweenNodeCenters(next, cells[endId]), nextCost, sequence++));
+                }
             }
-            world.NativeRouteTrace.Add(new SimulationNativeRouteTrace(person.Id, anchor.Id, destination,
-                "path-rooms", string.Join("->", crossings)));
+
+            if (world.CaptureExecutionTrace)
+            {
+                var roomCounts = new Dictionary<ushort, int>();
+                for (var id = 0; id < nodeCount; id++)
+                {
+                    if (visited[id] == 0) continue;
+                    var room = cells[id].Room;
+                    roomCounts[room] = roomCounts.TryGetValue(room, out var count) ? count + 1 : 1;
+                }
+                var visitedRooms = string.Join(",", roomCounts.OrderBy(group => group.Key).Select(group => $"{group.Key}:{group.Value}"));
+                world.RouteSearchTrace.Add(new SimulationRouteSearchTrace(person.Id, destination, startTile, endTile,
+                    startRoom, endRoom, visitedCount, rejectedPlacements, rejectedEdges, visitedRooms));
+            }
+            if (!double.IsFinite(pathCost)) return false;
+
+            var reverse = new List<int> { endId };
+            while (reverse[^1] != startId) reverse.Add(previous[reverse[^1]]);
+            reverse.Reverse();
+            var smoothedPoints = new List<(int CenterX, int CenterY)>(reverse.Count);
+            for (var i = 0; i < reverse.Count; i++)
+            {
+                var cell = cells[reverse[i]];
+                smoothedPoints.Add((cell.CenterX, cell.CenterY));
+            }
+            SmoothPartitionPath(cells, reverse, smoothedPoints);
+            // Retains the exact starting coordinates at index zero, emits representative points for linked
+            // partition cells, and appends the target cell midpoint as the route terminus.
+            path.Add(new RouteWaypoint(startTile.X, startTile.Y, startPointX, startPointY,
+                cells[startId].CenterX, cells[startId].CenterY, false));
+            for (var i = 1; i < reverse.Count; i++)
+            {
+                var cell = cells[reverse[i]];
+                path.Add(ToWaypoint(smoothedPoints[i], cell));
+            }
+            if (path[^1].X == destination.X && path[^1].Y == destination.Y)
+            {
+                path[^1] = path[^1] with { IsDestination = true };
+            }
+            else
+            {
+                path.Add(new RouteWaypoint(endTile.X, endTile.Y, destination.X, destination.Y,
+                    cells[endId].CenterX, cells[endId].CenterY, true));
+            }
+            if (world.CaptureExecutionTrace)
+            {
+                var crossings = new List<string>();
+                ushort previousRoom = SimsEngine.World.RoomMap.NoRoom;
+                foreach (var point in path)
+                {
+                    var room = map.RoomAt(point.TileX, point.TileY);
+                    if (crossings.Count == 0 || room != previousRoom)
+                        crossings.Add($"{room}@{point.TileX},{point.TileY}");
+                    previousRoom = room;
+                }
+                world.NativeRouteTrace.Add(new SimulationNativeRouteTrace(person.Id, anchor.Id, destination,
+                    "path-rooms", string.Join("->", crossings)));
+            }
+            return true;
         }
-        return true;
+        finally
+        {
+            ArrayPool<double>.Shared.Return(costs);
+            ArrayPool<int>.Shared.Return(previous);
+            ArrayPool<byte>.Shared.Return(visited);
+        }
 
         RouteWaypoint ToWaypoint((int CenterX, int CenterY) point, PartitionCell cell) =>
-            new(point.CenterX >> 4, point.CenterY >> 4, point.CenterX, point.CenterY,
-                cell.CenterX, cell.CenterY, false);
+            new(
+                Math.Clamp(point.CenterX >> 4, cell.MinX >> 4, Math.Max(cell.MinX >> 4, (cell.MaxX - 1) >> 4)),
+                Math.Clamp(point.CenterY >> 4, cell.MinY >> 4, Math.Max(cell.MinY >> 4, (cell.MaxY - 1) >> 4)),
+                point.CenterX, point.CenterY, cell.CenterX, cell.CenterY, false);
     }
 
     private static void SmoothPartitionPath(IReadOnlyList<PartitionCell> cells, IReadOnlyList<int> nodeIds,
@@ -3927,11 +3875,8 @@ internal static class RouteExecutor
     {
         if (nodeIds.Count < 2) return;
 
-        // Mac Path::DoOneSmooth starts with a 100-unit search radius and reduces it
-        // as 100/(pass+1)^2, with a floor of one. For each point after the first it
-        // tests the four axis-aligned offsets that remain inside FindInterfaceRect,
-        // minimizing the sum of distances to the adjacent path points. A pass that
-        // moves anything is repeated at the same radius until no candidate improves.
+        // Smooths paths by testing four axis-aligned offsets within interface rectangles to minimize
+        // distance to adjacent points. The search radius scales down each pass until positions converge.
         for (var pass = 0; ; pass++)
         {
             var divisor = (long)(pass + 1) * (pass + 1);
@@ -3979,8 +3924,6 @@ internal static class RouteExecutor
             return;
         }
 
-        // Mac Distance2 returns a single-precision square root (Routing.s 0x10126BD0–0x10126C48),
-        // and EvalPoint adds those float distances before its strict less-than comparison.
         static float Distance((int CenterX, int CenterY) first, (int CenterX, int CenterY) second)
         {
             var dx = (float)(first.CenterX - second.CenterX);
@@ -4101,9 +4044,8 @@ internal static class RouteExecutor
         var toRoom = map.RoomAt(to.X, to.Y);
         if (fromRoom != toRoom)
         {
-            // A room boundary is crossed by routing through a portal function. The saved wall segment
-            // remains present in the static blocker mask at closed/interactive doors, so the portal
-            // manager's source-room selection must authorize this transition before applying that mask.
+            // Room transitions require routing through a portal because static wall blocker masks remain
+            // active at door locations.
             return fromRoom != SimsEngine.World.RoomMap.NoRoom &&
                    toRoom != SimsEngine.World.RoomMap.NoRoom &&
                    HasPortalForStep(world, map.Level, fromRoom, toRoom, from, to);
@@ -4111,14 +4053,11 @@ internal static class RouteExecutor
         if (world.BlocksRouteDirectionAt(map, from.X, from.Y, direction) ||
             world.BlocksRouteDirectionAt(map, to.X, to.Y, (direction + 4) & 7)) return false;
 
-        // FUN_004550e0 checks the requested edge at both endpoints before placement validation.
-        // Do not add a current-endpoint-only cardinal corner gate here: it makes a legal diagonal
-        // entry one-way when the reverse side has a blocked orthogonal edge (House05 at 26,25).
+        // Avoids one-sided cardinal corner gating to prevent valid diagonal entries from becoming one-way
+        // when the reverse side has a blocked orthogonal edge.
         return fromRoom != SimsEngine.World.RoomMap.NoRoom;
     }
 
-    // FUN_0044350d only adds cXPortal instances with a nonzero function 0x0f to the live portal-manager vector;
-    // FUN_00463dd9 scans that vector. Runtime-created function portals participate alongside saved-lot portals.
     private static IEnumerable<XObject> Portals(SimulationWorld world) =>
         world.WalkOrder.Where(item => item.RuntimeClass == SimsEngine.Formats.ObjectClass.Portal &&
             SimulationWorld.FunctionTreeId(item, 0x0f) != 0);

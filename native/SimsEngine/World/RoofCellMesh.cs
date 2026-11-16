@@ -1,17 +1,15 @@
 namespace SimsEngine.World;
 
-/// <summary>One vertex of a roof resource mesh, in tile units. Height is vertical; X and Y are the horizontal axes.
-/// UVs belong to the original style bitmap and are independent of the pitch.</summary>
+/// <summary>A roof mesh vertex in tile units, where Height is vertical and UV coordinates map to the style
+/// texture independently of pitch.</summary>
 public readonly record struct RoofMeshVertex(float X, float Height, float Y, float U, float V);
 
-/// <summary>Sims.exe's roof resource provider (vtable 0x6714f0, dispatch 0x56f880). Resource numbers above 255
-/// select FUN_0056f8ab, the others FUN_00570888. Both construct triangles with FUN_005c5a00; these are meshes,
-/// not SPR/SPR2 resources. The source uses 3 world units per tile: side 1.5, midpoint .75, ordinary peak .75*pitch,
-/// second-kind peak 1.5*pitch. The branch constants and UV seams below port those construction calls.</summary>
+/// <summary>Generates procedural 3D triangle roof meshes scaled at 3 units per tile, with side 1.5,
+/// midpoint 0.75, standard peaks at 0.75 * pitch, and secondary peaks at 1.5 * pitch.</summary>
 public static class RoofCellMesh
 {
-    /// <summary>FUN_0056eb75's cell-local transform, in tile units before terrain/story and camera projection.
-    /// Rotation is about the .25-tile centre; FUN_00570d26 contributes .5*pitch for each ring of cell height.</summary>
+    /// <summary>Transforms roof cell vertices in tile units, rotating around the 0.25-tile center and
+    /// adding 0.5 * pitch for each ring of cell height.</summary>
     public static IReadOnlyList<RoofMeshVertex> Build(RoofGrid grid, int row, int column, float pitch)
     {
         if (!grid.Has(row, column)) return [];
@@ -25,12 +23,11 @@ public static class RoofCellMesh
                 3 => (0.5f - vertex.Y, vertex.X),
                 _ => (vertex.X, vertex.Y),
             };
-            // FUN_004ca6b6 maps the grid row to model X and column to model Z. Swap the model's
-            // horizontal axes when returning native lot X/Y coordinates.
+            // Maps roof grid row to lot Y and column to lot X at half-tile intervals.
             return vertex with { X = column * 0.5f + y, Y = row * 0.5f + x,
                 Height = vertex.Height + grid.Height(row, column) * pitch * 0.5f };
         }).ToArray();
-        // The axis swap changes handedness. Preserve upward-facing winding in the native coordinate system.
+        // Preserves upward-facing triangle winding order after the axis swap.
         for (var i = 0; i < vertices.Length; i += 3) (vertices[i + 1], vertices[i + 2]) = (vertices[i + 2], vertices[i + 1]);
         return vertices;
     }

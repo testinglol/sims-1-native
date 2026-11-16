@@ -110,8 +110,8 @@ public sealed class SavedLotObjectLoaderTests
     [Fact]
     public void EligibilityGridUsesSourceSentinelForOldOrMissingDataAndRejectsMalformedPresentData()
     {
-        // FUN_0047870b uses FUN_004776fd to fill 0xff before SIMI 0x35; current saves import Arry 10,
-        // while FUN_004790bc treats any non-0xff byte as eligible.
+        // In save versions prior to SIMI 0x35, the placement eligibility grid defaults to 0xFF, whereas
+        // later versions import chunk Arry 10 where non-0xFF bytes indicate eligible cells.
         var emptyLot = new IffFile(ChunkBuilder.File([]), "empty-placement-grid.iff");
         Assert.All(SavedLotObjectLoader.ReadPlacementEligibilityGrid(emptyLot, 0x34),
             value => Assert.Equal((byte)0xff, value));
@@ -145,10 +145,8 @@ public sealed class SavedLotObjectLoaderTests
         var world = SavedLotObjectLoader.Restore([new LotObject(1, 1, [], 0, saved)], [type],
             requested => requested == guid ? definition : null, _ => new EmptyTreeTable());
         var restored = world.ObjectById(1)!;
-        // FUN_00434353 restores the saved ObjM +0x86 word; FUN_00432a70 consumes that value in its ordinary branch.
         var loadedRoomPlacement = restored[ObjectData.RoomPlacement];
         Assert.Equal((short)1, loadedRoomPlacement);
-        // Exercise the restored cXObject itself: do not copy RoomPlacement to a fresh object after loading.
         var item = restored;
         item[ObjectData.PlacementFlags] = 0x20;
         world.BuildModeType6PlacementGrids[1] = new byte[64 * 64];
@@ -162,7 +160,8 @@ public sealed class SavedLotObjectLoaderTests
         eligibility[7 * 64 + 6] = 0;
         var eligibilityChunk = new ChunkBuilder().S16(0).S16(0).S32(64).S32(64).S32(1).U32(0).Raw(eligibility).ToArray();
         var lot = new IffFile(ChunkBuilder.File(("Arry", 10, eligibilityChunk)), "loaded-placement-eligibility.iff");
-        // FUN_0047870b imports Arry 10 for current SIMI versions; FUN_004790bc treats non-0xff cells as eligible.
+        // Chunk Arry 10 stores placement eligibility, where any cell with a value other than 0xFF is
+        // considered eligible.
         world.PlacementEligibilityGrids[1] = SavedLotObjectLoader.ReadPlacementEligibilityGrid(lot, 0x35);
 
         Assert.True(world.HasPlacementEligibilityAt(5, 6, 1));
@@ -271,7 +270,7 @@ public sealed class SavedLotObjectLoaderTests
         Assert.Equal(personGuid, (uint)person.TypeRecord!.Key);
         Assert.Equal((short)2, person.TypeRecord.ObjectType);
         Assert.Equal((short)0x1234, person.TypeRecord.ObjectVersion);
-        Assert.Equal((ushort)0x0050, person.TypeRecord.FootprintMask); // OBJD field 77, the extent mask FUN_00433dbb reads.
+        Assert.Equal((ushort)0x0050, person.TypeRecord.FootprintMask); // OBJD field 77 defines the object footprint extent mask.
         Assert.Equal((short)1, person.InteractionScopeKey5CA);
         Assert.Equal((short)1, world.PersonTypeRecordSlots[person.TypeRecord.Key]);
         Assert.Same(scope, person.TypeRecord.BehaviorScope);
@@ -294,17 +293,16 @@ public sealed class SavedLotObjectLoaderTests
         Assert.Equal(101, person.SavedPersonObjectReferences[0].Value);
         Assert.True(person.SavedPersonObjectReferences[0].Flag);
         Assert.Equal([22], person.InteractingObjects.Select(item => item.Id));
-        // The u32s at +0xf8 and +0xf4 are the x and y positions in sixteenths of a tile, in that order.
+        // Object X and Y coordinates are stored in sixteenths of a tile.
         Assert.Equal(new ObjectPosition(256, 512, 2), person.Position);
-        Assert.Equal((short)39, person.RoomWord84); // FUN_00434353 restores saved data field 29, which aliases +0x84.
+        Assert.Equal((short)39, person.RoomWord84);
         Assert.Equal(new FootprintBounds(104, 100, 22, 14), person.FootprintBounds);
-        Assert.Equal(new short[] { 1, 2, 0, 0, 0, 0, 0, 0 }, person.Attributes); // FUN_0043194c: at least 8 entries.
+        Assert.Equal(new short[] { 1, 2, 0, 0, 0, 0, 0, 0 }, person.Attributes); // Object attributes require a minimum capacity of 8 entries.
         Assert.Equal(Enumerable.Range(0, 8).Select(value => (short)(value + 3)), person.Temporaries);
         Assert.Equal(Enumerable.Range(0, XObject.DataCount).Select(value => (short)(value + 10)), person.Data);
         Assert.Equal(person.RoomWord84, person.Data[(int)ObjectData.Room]);
-        Assert.Equal((short)40, person[ObjectData.RoomPlacement]); // Saved ObjM word +0x86 is used by FUN_00432a70.
+        Assert.Equal((short)40, person[ObjectData.RoomPlacement]);
         Assert.Equal(new short[] { 6, 7 }, person.DynamicSpriteFlags);
-        // FUN_00434578 overwrites the leading records; FUN_00459797 keeps its five person records, so nothing is dropped.
         Assert.Equal(new short[] { 8, 9, 0, 0, 0, 0 }, person.Slots);
         Assert.Equal((uint)0x1234, person.Flags);
         Assert.Equal(1234u, (uint)world.ClockManager.FlagsAt(person.ClockManagerIndex));
@@ -348,23 +346,24 @@ public sealed class SavedLotObjectLoaderTests
             Assert.Equal(4u, world.NeighborWalkOrder[0]!.FriendEligibilityObjectFlagsB4);
             Assert.Equal(4u, world.NeighborWalkOrder[2]!.FriendEligibilityObjectFlagsB4);
             Assert.Equal(0u, world.NeighborWalkOrder[3]!.FriendEligibilityObjectFlagsB4);
-            Assert.Equal(10060, world.TreeStepLimit); // 10,000 + 15 * (2 eligible neighbors)^2.
+            Assert.Equal(10060, world.TreeStepLimit); // Base limit 10,000 plus 15 times the square of eligible neighbors.
             Assert.Same(world.NeighborWalkOrder[0], world.Neighbors[11]);
         }
         finally { Directory.Delete(game, true); }
     }
 
     [Theory]
-    // Versions up to 0x35 store no flag word; the manager keeps its registration value 0x0000ffff.
+    // In save versions up to 0x35 without stored flag words, manager flags default to 0x0000FFFF.
     [InlineData(0x35, 0x23456789u, 0x00012345, 0x0000ffffu)]
-    // 0x36–0x38 read the saved word, then keep its low half and enable every object.
+    // Save versions 0x36 through 0x38 retain only the low 16 bits of saved flags and mark all objects
+    // enabled.
     [InlineData(0x36, 0x23456789u, 0x00002345, 0x00012345u)]
     [InlineData(0x38, 0x23456789u, 0x00012345, 0x00012345u)]
-    // 0x39 and later keep the saved word, its eligibility bit included.
+    // Save versions 0x39 and later preserve the full 32-bit manager flag word, including eligibility bits.
     [InlineData(0x39, 0x23456789u, 0x00010005, 0x00010005u)]
     [InlineData(0x39, 0x23456789u, 0x00000005, 0x00000005u)]
     [InlineData(0x3e, 0x23456789u, 0x00014d96, 0x00014d96u)]
-    // A placeholder definition stores no word; the source sets the eligibility bit on it.
+    // Placeholder object definitions omit saved flag words and default to fully eligible manager flags.
     [InlineData(0x39, 0x3c08965fu, 0x00000000, 0x0001ffffu)]
     [InlineData(0x3e, 0x3c08965fu, 0x00000000, 0x0001ffffu)]
     public void RestoreAppliesOriginalVersionedManagerFlags(int version, uint guid, int savedFlags, uint expectedFlags)
@@ -407,7 +406,6 @@ public sealed class SavedLotObjectLoaderTests
         var otherEntry = Definition(otherGuid, 0);
         var saved = new[]
         {
-            // Eligible with a two-tick wait, then an ordinary object that the save leaves ineligible.
             new LotObject(1, 1, [], 0, State() with { ManagerFlags = 0x00010002 }),
             new LotObject(2, 2, [], 0, State() with { ManagerFlags = 0x00000000 }),
         };
@@ -450,7 +448,7 @@ public sealed class SavedLotObjectLoaderTests
         var withAttributes = DefinitionWithAttributeCount(objectGuid, type: 0, count: 4);
         var world = SavedLotObjectLoader.Restore(saved, types, guid => guid == objectGuid ? withAttributes : null, _ => null);
 
-        Assert.Equal([7, 8, 0, 0, 0, 0, 0, 0], world.ObjectById(5)!.Attributes); // FUN_0043194c: a count of 4 is raised to 8.
+        Assert.Equal([7, 8, 0, 0, 0, 0, 0, 0], world.ObjectById(5)!.Attributes); // Object attribute arrays are padded to a minimum length of 8.
     }
 
     [Fact]
@@ -460,7 +458,8 @@ public sealed class SavedLotObjectLoaderTests
         var types = new[] { new ObjectTypeEntry(objectGuid, 0, 0, 1, 0, "Object", 0) };
         var saved = new[] { new LotObject(4, 1, [], 0, State()) };
 
-        // HDHelpSystem-shaped definition: 32 attributes and no TATT entry in the lot.
+        // Objects lacking a TATT chunk allocate attributes matching the count specified in their
+        // definition.
         var withAttributes = DefinitionWithAttributeCount(objectGuid, type: 0, count: 32);
         var world = SavedLotObjectLoader.Restore(saved, types, guid => guid == objectGuid ? withAttributes : null, _ => null);
         Assert.Equal(new short[32], world.ObjectById(4)!.TypeAttributes);
@@ -637,20 +636,20 @@ public sealed class SavedLotObjectLoaderTests
             {
                 Assert.Equal((-4.5f, 6.25f, 2.0f), (footprint.X, footprint.Y, footprint.Height));
                 Assert.Equal((short)8, footprint.OccupantObjectId);
-                Assert.Equal(5, footprint.HeightCode); // Ground code 0 selects mode 5 for a nonzero source Z.
+                Assert.Equal(5, footprint.HeightCode); // Ground code 0 maps to height mode 5 when elevation is non-zero.
                 Assert.Equal((7, 8), (footprint.Standing, footprint.Sitting));
             },
             footprint =>
             {
-                Assert.Equal(2.5f, footprint.Height); // Ground code 2 sets Z to 2.5.
+                Assert.Equal(2.5f, footprint.Height); // Ground code 2 sets elevation height to 2.5.
                 Assert.Equal((short)9, footprint.OccupantObjectId);
             });
         var runtime = Assert.Single(loaded.RuntimeSlots);
         Assert.Equal(1.25f, BitConverter.Int32BitsToSingle(runtime.ReadWord(0x00)));
         Assert.Equal(-2.5f, BitConverter.Int32BitsToSingle(runtime.ReadWord(0x04)));
         Assert.Equal(3.75f, BitConverter.Int32BitsToSingle(runtime.ReadWord(0x08)));
-        // Mac SlotLoader::Load writes the one-based complete SLOT-table index, not the sprite-vector index
-        // or the SpriteSlot constructor sentinel (Slots.s 0x10131F04–0x10131F38).
+        // Slot definitions record 1-based indices into the master slot table rather than local
+        // sprite-relative offsets.
         Assert.Equal(3, runtime.ReadWord(0x0c));
         var route = Assert.Single(loaded.RoutingSlots);
         Assert.Equal((11.25f, -12.5f, 13.75f), (route.X, route.Y, route.Z));
@@ -924,7 +923,6 @@ public sealed class SavedLotObjectLoaderTests
         Assert.True(initialRoom >= 0);
         Assert.True(world.RoomIsOutside(initialRoom));
 
-        // Enclose tile (10, 10) in a 1x1 walled room on level 1 and reload room maps in-place.
         var boxedWalls = new byte[64 * 64 * 8];
         static void SetWall(byte[] records, int x, int y, byte segments, byte westStyle, byte northStyle)
         {
@@ -1003,19 +1001,19 @@ public sealed class SavedLotObjectLoaderTests
         {
             Position = new ObjectPosition(12 * 16 + 8, 12 * 16 + 8, 1),
         });
-        chair[ObjectData.Category] = 4; // Transit filter bit 0x1
+        chair[ObjectData.Category] = 4; // Category 4 maps to transit filter bit 0x1.
 
         var baby = world.Add(new XObject(2, new short[XObject.DefinitionCount])
         {
             Position = new ObjectPosition(14 * 16 + 8, 14 * 16 + 8, 1),
         });
-        baby[ObjectData.Category] = 1; // Baby bit 0x1
+        baby[ObjectData.Category] = 1; // Category 1 maps to baby bit 0x1.
 
         var phone = world.Add(new XObject(3, new short[XObject.DefinitionCount])
         {
             Position = new ObjectPosition(15 * 16 + 8, 15 * 16 + 8, 1),
         });
-        phone[ObjectData.Category] = 9; // Phone bit 0x2
+        phone[ObjectData.Category] = 9; // Category 9 maps to phone bit 0x2.
 
         var cashRegister = world.Add(new XObject(4, new short[XObject.DefinitionCount])
         {
@@ -1027,7 +1025,7 @@ public sealed class SavedLotObjectLoaderTests
         {
             Position = new ObjectPosition(17 * 16 + 8, 17 * 16 + 8, 1),
         });
-        shopRack[ObjectData.Category] = 0x11; // With cash register -> transit filter bit 0x8
+        shopRack[ObjectData.Category] = 0x11; // Category 0x11 maps to cash register transit filter bit 0x8.
 
         var mask = world.ComputeSaveHouseInfo(out var lotHasHouse, out var updatedSize, out var transitFilterFlags, out var familyFlagsMask);
         Assert.True(lotHasHouse);

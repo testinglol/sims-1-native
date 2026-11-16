@@ -79,7 +79,7 @@ public sealed class ObjectRegistryTests
     {
         var fields = Enumerable.Range(0, 81).Select(_ => (ushort)0).ToArray();
         fields[(int)ObjdField.Guid1] = 0x1234;
-        fields[31] = 0x4567; // FUN_00456209 entry 0x19 reads OBJD byte offset 0x3e.
+        fields[31] = 0x4567;
         var definition = new ChunkBuilder();
         foreach (var field in fields) definition.U16(field);
         var file = new IffFile(ChunkBuilder.File(("OBJD", 128, definition.ToArray())), "legacy-functions.iff");
@@ -135,7 +135,6 @@ public sealed class ObjectRegistryTests
         return body.ToArray();
     }
 
-    // FUN_00413d0e sets the House Party edition bit from these two files; the scan runs only when it is set.
     private static void MarkHousePartyInstalled(string game)
     {
         Directory.CreateDirectory(Path.Combine(game, "ExpansionShared", "Sound"));
@@ -228,7 +227,6 @@ public sealed class ObjectRegistryTests
         try
         {
             var objects = Directory.CreateDirectory(Path.Combine(game, "Objects"));
-            // FUN_0043aeef pairs entries only when their first field, the IFF file, is the same.
             File.WriteAllBytes(Path.Combine(objects.FullName, "A-Group.iff"), ChunkBuilder.File(
                 ("OBJD", 128, DefinitionBody(0x1001, type: 0, masterId: 7, subIndex: ushort.MaxValue, buildModeType: 4)),
                 ("OBJD", 129, DefinitionBody(0x1002, type: 0, masterId: 7, subIndex: ushort.MaxValue, buildModeType: 5)),

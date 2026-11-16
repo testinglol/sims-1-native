@@ -12,8 +12,6 @@ public sealed class HandPlacementManagerKeyTests
         var holder = world.Add(Object(-1, new ObjectPosition(168, 168, 1)));
         holder.Slots.AddRange([0, 0]);
         var created = Object(holder.ClockManagerIndex, new ObjectPosition(-16, -16, 1));
-        // Positive test IDs normally equal their manager slots; inject a distinct +0xf0 table key to exercise this
-        // relationship contract when the saved object ID collides with its holder's manager key.
         created.ClockManagerIndex = 2;
         world.Objects.Add(created.Id, created);
         world.WalkOrder.Add(created);

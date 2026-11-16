@@ -55,7 +55,6 @@ public class PedestrianPortalRoutingTests
         }
         else
         {
-            // Isolated clean-room fallback
             world = new SimulationWorld();
             world.LotRoomMaps[1] = CreateEmptyRoomMap(64, 64);
 
@@ -78,7 +77,7 @@ public class PedestrianPortalRoutingTests
 
         var arrivalFacing = RouteExecutor.RelativeArrivalFacing(
             world, paperGirl, portal, slot8, goal.Value.Position, goal.Value.SearchDirection);
-        Assert.Equal(1, arrivalFacing); // Preserves heading Facing == -3
+        Assert.Equal(1, arrivalFacing);
     }
 
     [Fact]
@@ -93,10 +92,9 @@ public class PedestrianPortalRoutingTests
         person[ObjectData.Direction] = 1;
         world.SetObjectPosition(person, new ObjectPosition(32 * 16 + 8, 32 * 16 + 8, 1));
 
-        // Slot without 0x0800 bypass flag, but with SnapTargetSlot = 0 to evaluate snap placement
         var slot = new RoutingSlotRequest
         {
-            Flags = 0x0100, // No 0x0800 flag, (Flags & 0xff) == 0 -> exact position evaluated
+            Flags = 0x0100,
             SnapTargetSlot = 0,
             Facing = -3
         };
@@ -113,7 +111,6 @@ public class PedestrianPortalRoutingTests
         {
             var pos = new ObjectPosition(tileX * 16 + 8, tileY * 16 + 8, 1);
 
-            // 1. Standard non-portal anchor: MUST be gated by inner edge check
             var nonPortal = world.Add(new XObject(100, PrimitiveTestWorld.Definition()));
             nonPortal.TypeRecord = new TypeRecord(0x12345678);
             nonPortal.RuntimeClass = ObjectClass.Object;
@@ -125,7 +122,6 @@ public class PedestrianPortalRoutingTests
             Assert.Equal("outside routable tile bounds", world.LastRouteCandidateFailureReason);
             world.Remove(nonPortal.Id);
 
-            // 2. Portal anchor identified by GUID 0x81E6BEF9: MUST bypass inner edge check
             var portalByKey = world.Add(new XObject(101, PrimitiveTestWorld.Definition()));
             portalByKey.TypeRecord = new TypeRecord(unchecked((int)0x81E6BEF9));
             portalByKey.RuntimeClass = ObjectClass.Object;
@@ -135,7 +131,6 @@ public class PedestrianPortalRoutingTests
             Assert.NotEqual("outside routable tile bounds", world.LastRouteCandidateFailureReason);
             world.Remove(portalByKey.Id);
 
-            // 3. Portal anchor identified by ObjectClass.Portal: MUST bypass inner edge check
             var portalByClass = world.Add(new XObject(102, PrimitiveTestWorld.Definition()));
             portalByClass.TypeRecord = new TypeRecord(unchecked((int)0x99999999));
             portalByClass.RuntimeClass = ObjectClass.Portal;

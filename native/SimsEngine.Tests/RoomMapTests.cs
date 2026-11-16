@@ -6,8 +6,6 @@ using Xunit;
 
 namespace SimsEngine.Tests;
 
-/// <summary>Room fill on hand-built walls layers (Sims.exe FUN_00479f0c, edge test FUN_004351e4): rooms are numbered
-/// from 0 in seed order.</summary>
 public class RoomMapTests
 {
     [Fact]
@@ -45,8 +43,8 @@ public class RoomMapTests
         Assert.Equal(7f, outdoor.RoomScore);
     }
 
-    /// <summary>A walls layer (chunk 2, 8-byte elements, indexed [x][y]) whose record for each tile comes from
-    /// <paramref name="wall"/> as (segments, style of side 1, style of side 2).</summary>
+    /// <summary>Creates a walls layer chunk (chunk ID 2, with 8-byte elements per tile indexed by [x][y])
+    /// populated with segments and side styles.</summary>
     private static IffFile Walls(int width, int height, Func<int, int, (byte segments, byte side1, byte side2)> wall,
         byte sideFlags = 0x0f)
     {
@@ -285,10 +283,8 @@ public class RoomMapTests
     public void ExpandedWallCategoryLookupsFollowSimsExecutableIndexing()
     {
         var bytes = new byte[44];
-        // FUN_00467ece reads offset 8 + 2 * trailingZeroCount(mask).
-        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(14, 2), 7); // mask 0x08
-        // FUN_00467e89 reads offset 20 + the same index, with FUN_00435221's side adjustment.
-        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(28, 2), 23); // index 4
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(14, 2), 7);
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(28, 2), 23);
         var walls = new RoomExpandedWallRecord(bytes);
 
         Assert.Equal(7, walls.WallCategory(0x08));
@@ -466,7 +462,6 @@ public class RoomMapTests
         Assert.Equal(0u, map.ExpandedWallAt(1, 1)!.Value.UInt32At(0) & 0x04);
         Assert.Equal(0u, map.ExpandedWallAt(2, 1)!.Value.UInt32At(0) & 0x01);
         Assert.Equal((ushort)0, map.RuntimeWallAt(2, 1)!.Value.Word6);
-        // FUN_00479954 clears the segment and reciprocal category words without changing packed side orientation.
         Assert.Equal(currentOrientation, map.RuntimeWallAt(1, 1)!.Value.Byte1);
         Assert.Equal(reciprocalOrientation, map.RuntimeWallAt(2, 1)!.Value.Byte1);
     }
@@ -481,8 +476,6 @@ public class RoomMapTests
 
         Assert.True(map.ApplyWallStyleOverlay(1, 1, 5, 0, new RoomExpandedWallRecord(diagonal)));
 
-        // FUN_00479954 assigns 0x10, then 0x20, before OR-ing cardinal sides; when both diagonal bits are present,
-        // the latter assignment leaves only 0x20. This preserves the source routine's byte-write order.
         Assert.Equal(0x21u, map.RuntimeWallAt(1, 1)!.Value.Segments);
         var empty = new RoomExpandedWallRecord(new byte[44]);
         Assert.True(map.ApplyWallStyleOverlay(1, 1, 5, 0, empty));
@@ -567,7 +560,6 @@ public class RoomMapTests
         BinaryPrimitives.WriteUInt32LittleEndian(bytes, (uint)diagonalBit);
         var baseWallIndex = diagonalBit == 0x10 ? 4 : 5;
         BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(8 + baseWallIndex * 2), 5);
-        // The fixed sVar3 read is at expanded-record offset 20 for 0x10 and 8 for 0x20.
         BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(diagonalBit == 0x10 ? selectedOffset20 : selectedOffset10), 9);
         BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(firstAdjacentOffset), 1);
         BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(secondAdjacentOffset), 1);
@@ -644,7 +636,6 @@ public class RoomMapTests
             roomBranchFlag: false, lightingGate: _ => true, lightGrid: context);
 
         Assert.Equal(10, contribution.OtherLightContribution24);
-        // Object position is (x=4,y=5); source vectors store Y first and X second.
         Assert.Equal(new RoomLightCoordinateCell(-1, -1, RoomLightCoordinateCell.EmptyCoordinate,
             RoomLightCoordinateCell.EmptyCoordinate), grid.At(4, 3, 1));
         Assert.Equal(RoomLightCoordinateCell.Empty, grid.At(4, 3, 2));
@@ -671,7 +662,7 @@ public class RoomMapTests
         Assert.Equal(3, stats.EligibleObjects20);
         Assert.Equal(1, stats.Category4Objects2C);
         Assert.Equal(3, stats.Category5To7Objects2E);
-        Assert.False(stats.Category8Flag3A); // FUN_00467ee7 overwrites this field as objects are visited.
+        Assert.False(stats.Category8Flag3A);
         Assert.Equal(1, stats.PersonObjects142);
         Assert.Equal(4, stats.RoomImpactSum26);
         Assert.Equal(4, stats.RoomImpactSum28);
@@ -699,7 +690,7 @@ public class RoomMapTests
 
         Assert.Equal(2, cell.Count);
         Assert.Equal(new RoomLightCoordinateCell(4, 0, 0, 4), cell);
-        Assert.Equal(cell, cell.AddCandidate(-4, 0)); // ties the second candidate; source keeps existing entries
+        Assert.Equal(cell, cell.AddCandidate(-4, 0));
         Assert.Equal(new RoomLightCoordinateCell(2, 0, 0, 4), cell.AddCandidate(2, 0));
         Assert.Equal(new RoomLightCoordinateCell(1, 0, 2, 0), RoomLightCoordinateCell.Empty
             .AddCandidate(5, 0).AddCandidate(2, 0).AddCandidate(1, 0));
@@ -730,7 +721,7 @@ public class RoomMapTests
         Assert.Equal(1, RoomLightCoordinateGrid.RadiusFromLightingScalar(5.99f));
         Assert.Equal(1, grid.AddSource(10, 20, 1, lightingScalar: 0f, (_, _, _) => 9));
         Assert.Equal(1, grid.At(10, 20, 1).Count);
-        Assert.Equal(0, grid.At(20, 10, 1).Count); // Source linear index is second * 64 + first.
+        Assert.Equal(0, grid.At(20, 10, 1).Count);
 
         Assert.Equal(9, grid.AddSource(3, 3, 1, lightingScalar: 3f, (_, _, _) => 7));
         Assert.Equal(new RoomLightCoordinateCell(-1, -1, RoomLightCoordinateCell.EmptyCoordinate,
@@ -876,8 +867,8 @@ public class RoomMapTests
     [Fact]
     public void ClosedSquareIsItsOwnRoomSeededAfterTheOutside()
     {
-        // A wall is recorded on the tiles at both of its sides. Sides 4 and 8 take their style from the side 1 or 2
-        // of the next tile.
+        // A wall is recorded on both adjacent tiles, with reciprocal sides 4 and 8 taking their style from
+        // side 1 or 2 of the neighboring tile.
         var map = RoomMap.Build(Walls(3, 3, (x, y) => (x, y) switch
         {
             (1, 1) => ((byte)(TowardsLowerX | TowardsLowerY | TowardsHigherX | TowardsHigherY), Wall, Wall),
@@ -891,7 +882,6 @@ public class RoomMapTests
         Assert.Equal(1, map.RoomAt(1, 1));
         Assert.Equal(0, map.RoomAt(0, 0));
         Assert.Equal(0, map.RoomAt(2, 2));
-        // The unresolved FUN_00468851 room-grid bit is approximated from lot-edge reachability.
         Assert.True(map.IsOutside(0));
         Assert.False(map.IsOutside(1));
     }
@@ -1002,8 +992,6 @@ public class RoomMapTests
     [Fact]
     public void OnlyTheTilesOwnSidesBlock()
     {
-        // A wall on side 1 of (2, 0) blocks the step from (2, 0) to (1, 0), but (1, 0) has no side 4, so the fill,
-        // seeded at (0, 0), still steps from (1, 0) into (2, 0).
         var map = RoomMap.Build(Walls(3, 1, (x, _) => x == 2 ? (TowardsLowerX, Wall, (byte)0) : Empty), 1, 3, 1);
         Assert.Equal(1, map.RoomCount);
     }
@@ -1011,7 +999,6 @@ public class RoomMapTests
     [Fact]
     public void TwoRoomsSplitByAWall()
     {
-        // Column 1 has side 4 and column 2 side 1, both walls: a 4 x 2 lot splits in two.
         var map = RoomMap.Build(Walls(4, 2, (x, _) => x switch
         {
             1 => (TowardsHigherX, 0, 0),
@@ -1040,7 +1027,6 @@ public class RoomMapTests
     [Fact]
     public void DoorIsAGapInTheWall()
     {
-        // Only row 0 is walled between columns 1 and 2: the two halves join through row 1.
         var map = RoomMap.Build(Walls(4, 2, (x, y) => (x, y) switch
         {
             (1, 0) => (TowardsHigherX, 0, 0),
@@ -1063,8 +1049,6 @@ public class RoomMapTests
     [Fact]
     public void DiagonalWallPositionResolvesTheCorrectHalfRoom()
     {
-        // Enclosed room at (2..3, 2..3) with a 0x10 diagonal corner at (2, 2):
-        // (-X, -Y) triangle joins outdoor (1, 2)/(2, 1)/(1, 1); (+X, +Y) triangle joins indoor (3, 2)/(2, 3)/(3, 3).
         var map = RoomMap.Build(Walls(5, 5, (x, y) =>
         {
             byte segments = 0;
@@ -1097,8 +1081,6 @@ public class RoomMapTests
     [Fact]
     public void OtherDiagonalOrientationResolvesItsTwoHalfRooms()
     {
-        // Enclosed room at (2..3, 1..2) with a 0x20 diagonal corner at (2, 2) (matching House 05 Floor 2 (23, 31)):
-        // fractionX < fractionY joins outdoor (1, 2)/(2, 3)/(1, 3); fractionX >= fractionY joins indoor (3, 2)/(2, 1)/(3, 1).
         var map = RoomMap.Build(Walls(5, 5, (x, y) =>
         {
             byte segments = 0;
@@ -1131,9 +1113,8 @@ public class RoomMapTests
     [Fact]
     public void DiagonalWallPositionProbesXOrthogonalBeforeYOrthogonalWithoutCornerLeak()
     {
-        // Sims.exe FUN_00433c6a (00433c6a.c:68-85) checks RoomAt(adjacentX, y) first and falls back to
-        // RoomAt(x, adjacentY) only when RoomAt(adjacentX, y) == NoRoom (-5); it never reads RoomAt(adjacentX, adjacentY).
-        // Case 1: (1, 2) is also a diagonal wall (NoRoom), so (2, 2)'s (-X, +Y) half falls back to RoomAt(2, 3).
+        // Diagonal wall room resolution checks the horizontal neighbor first and falls back to the vertical
+        // neighbor when unassigned, never reading the diagonal neighbor.
         var chained = RoomMap.Build(Walls(5, 5, (x, y) =>
         {
             if ((x == 1 && y == 2) || (x == 2 && y == 2)) return (0x20, Wall, (byte)0);
@@ -1143,17 +1124,13 @@ public class RoomMapTests
         Assert.NotEqual(RoomMap.NoRoom, chained.RoomAt(2, 3));
         Assert.Equal(chained.RoomAt(2, 3), chained.RoomAtPosition(2 * 16 + 4, 2 * 16 + 12));
 
-        // Case 2: (1, 1) is walled off into its own corner room while (1, 2) and (2, 1) are partitioned from each other;
-        // (2, 2)'s (-X, -Y) half on a 0x10 diagonal must pick RoomAt(1, 2) (not corner RoomAt(1, 1) and not RoomAt(2, 1)).
         var split = RoomMap.Build(Walls(5, 5, (x, y) =>
         {
             byte segments = 0;
-            // Enclose (1, 1) completely on its +X and +Y edges and lot borders.
             if (x == 1 && y is 0 or 1) segments |= TowardsHigherX;
             if (x == 2 && y is 0 or 1) segments |= TowardsLowerX;
             if (x is 0 or 1 && y == 1) segments |= TowardsHigherY;
             if (x is 0 or 1 && y == 2) segments |= TowardsLowerY;
-            // Also enclose (2, 1) separately from (1, 2).
             if (x == 2 && y is 0 or 1) segments |= TowardsHigherX;
             if (x == 3 && y is 0 or 1) segments |= TowardsLowerX;
             if (x == 2 && y == 2) segments |= Diagonal;
@@ -1249,7 +1226,7 @@ public class RoomMapTests
         Assert.All(world.PersonRoomMotiveEntries.Values, room =>
         {
             Assert.True(float.IsFinite(room.InteriorValue));
-            Assert.True(room.IsOutside); // inferred edge room; FUN_00468851's manager-grid bit is unresolved
+            Assert.True(room.IsOutside);
             Assert.False(room.NeedsRefresh);
         });
     }

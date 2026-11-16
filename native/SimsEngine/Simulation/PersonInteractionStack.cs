@@ -1,8 +1,7 @@
 namespace SimsEngine.Simulation;
 
-/// <summary>cXPerson::FUN_0045e707 is the person's vtable +0x34 push path. After FUN_00452bd8 successfully pushes
-/// a target tree, it appends (target, stack depth, flag) to the +0xb00 reference vector and increments the target's
-/// +0xc6 UseCount. FUN_0045e769 releases that entry as the interpreter unwinds the corresponding stack depth.</summary>
+/// <summary>Tracks target objects pushed onto a Sim's interaction stack, incrementing the target's use
+/// count and releasing it as the stack unwinds.</summary>
 internal static class PersonInteractionStack
 {
     public static bool Push(XPerson person, XObject target, TreeStack stack, ITreeTable table,
@@ -29,8 +28,8 @@ internal static class PersonInteractionStack
         if (flag) person.SetCurrentActionSecondaryReference(target);
     }
 
-    /// <summary>FUN_0045e769 tests the post-pop depth against the last +0xb00 entry. The stack is LIFO, so it can
-    /// release multiple stale entries when a caller abandons nested frames after an error or cancellation.</summary>
+    /// <summary>Releases target object references whose call stack depth is greater than or equal to the
+    /// current unwound depth.</summary>
     public static void Release(XPerson person, int currentDepth)
     {
         while (person.SavedPersonObjectReferences.Count > 0)

@@ -15,9 +15,6 @@ using SimsEngine.World;
 
 namespace SimsSimulation;
 
-/// <summary>The native-engine protocol session behind SIMS_ENGINE=native: loads a saved lot with SimsEngine, advances its
-/// clock manager, and serves the runtime protocol's hello, state, frame and basic control requests. Commands the native
-/// engine does not implement answer an error so the frontend keeps running.</summary>
 internal sealed class SimulationServer
 {
     private sealed record SavedDialogSnapshot(string Token, short OwnerId, short? IconId, byte Kind, string Title,
@@ -41,9 +38,6 @@ internal sealed class SimulationServer
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         NumberHandling = JsonNumberHandling.AllowNamedFloatingPointLiterals,
     };
-    // FUN_0046d0cf's legacy speed conversion selects 760 (normal), 924 (fast),
-    // and 994 (fastest); FUN_0046d7b3 maps each value to a wall-clock tick
-    // interval. Native protocol speed values 1/3/10 correspond to those modes.
     private static double TickIntervalSeconds(int speed) => speed switch
     {
         3 => (172.0 - 171.0 * 924.0 / 1000.0) / 1000.0,
@@ -82,10 +76,9 @@ internal sealed class SimulationServer
     private readonly SceneExporter.AnimationState animationState = new();
     private long animationSequence;
     private int speed;
-    // cSimulator::Pause changes +0x32 and leaves the serialized +0x30 speed intact.
-    // The protocol represents pause as speed 0, so retain the last running mode separately.
+    // Pausing sets speed to zero without modifying the configured simulation speed, requiring the last
+    // running mode to be retained separately.
     private int lastRunningSpeed = 1;
-    // cSimulator+0x38 (FUN_0046d8ac / FUN_0046d8f7 / FUN_0046d7b3): saved speed while auto ultra-speed is active.
     private int autoSpeedSaved = -1;
     private Dictionary<ushort, char>? floorSoundCodes;
     private string wallMode = "down";
@@ -98,13 +91,11 @@ internal sealed class SimulationServer
     private int cutawayZoom = 2;
     private int cameraOrientation;
     private readonly TutorialEvents tutorialEvents = new();
-    // HouseViewer::SetScale dispatches 0xf9 with the viewer scale (1 far, 2 medium, 3 near), and
-    // cSimulator::DoCommand(0xf9) stores it in global 2 (Zoom Level S/M/L).
+    // Viewer zoom scale values (1 far, 2 medium, 3 near) map to simulation global 2.
     private short viewerMode;
     private short viewerScale;
     private int? lastButtonImage;
     private short lastButtonPerson;
-    // cSimsApp +0xbf: DoSave only asks when a relevant in-lot command set this byte.
     private bool saveDirty;
     private int dialogResumeSpeed;
     private string? simulationError;
@@ -138,6 +129,7 @@ internal sealed class SimulationServer
     private (int FurnishingsObjects, int ArchitectureObjects) initialObjectValuation;
     private IffFile? initialValuationLot;
     private bool lotValuationEdited;
+    internal Action<SceneExporter.DirectAnimationFrame>? DirectAnimationSink { get; set; }
     private static bool IsExplicitNativeEnv =>
         string.Equals(Environment.GetEnvironmentVariable("SIMS_ENGINE")?.Trim(), "native", StringComparison.OrdinalIgnoreCase);
 
@@ -197,6 +189,7 @@ internal sealed class SimulationServer
         selectedSim = PanelPeople().FirstOrDefault(person => IsHouseholdPerson(person) && PersonAgeCategory.IsAdult(person[PersonData.PersonAge]))?.Id
             ?? PanelPeople().FirstOrDefault(IsHouseholdPerson)?.Id ?? PanelPeople().FirstOrDefault()?.Id ?? 0;
         if (world is not null) SyncSelectedSimFlags(world, selectedSim);
+        InitializeViewLevelFromSelectedSim();
         Directory.CreateDirectory(session);
         if (world is not null) AttachNoticeListener(world);
         ResetLotValuationBaseline();
@@ -204,9 +197,6 @@ internal sealed class SimulationServer
 
     private void AttachTutorialFlash(SimulationWorld targetWorld)
     {
-        // Mac Tut_FlashButtonByImageID passes a Res_CPanel image id. Tut_FlashPersonPanelButton finds the neighbor's
-        // picture and the button showing it, which here is the person panel portrait of the Sim with that neighbor id.
-        // Tut_FlashRelButton finds the relationship button of the neighbor.
         targetWorld.TutorialFlash = (kind, value, on) =>
         {
             switch (kind)
@@ -300,13 +290,9 @@ internal sealed class SimulationServer
         target.NeighborInventoryChanged += OnNeighborInventoryChanged;
         target.AddNoticeListener(new SimulationNoticeListener((message, value) =>
         {
-            // cSimsApp::DoCommand marks the lot dirty for 0x88 and 0xda/0xdb/0xe4/0xee.
-            // Cursor-object creation (0xe2) arrives through the frontend command below.
             if (message is 0x88 or 0xda or 0xdb or 0xe4 or 0xee) saveDirty = true;
             if (message == 0xe4)
             {
-                // FUN_00445489 publishes the selected person's +0xf0 key through notice 0xe4.
-                // The native frontend tracks object IDs, so translate that key back to the live person.
                 var selected = value == 0
                     ? null
                     : target.WalkOrder.OfType<XPerson>().FirstOrDefault(person => person.RequestKey == value || person.Id == value);
@@ -318,9 +304,6 @@ internal sealed class SimulationServer
             }
             if (message == 0xda)
             {
-                // Sims.exe FUN_0046da38/FUN_0046d9f8 send 0xda after changing the household balance.
-                // Publish the updated budget panel immediately; the balance and expense captions already
-                // come from the active save and the installed-language UIText strings.
                 Write(new { type = "state", state = State() });
                 return true;
             }
@@ -370,9 +353,8 @@ internal sealed class SimulationServer
         return count;
     }
 
-    /// <summary>Writes the native owner of Sims.exe FUN_00425316's neighborhood persistence subset. The immediate
-    /// call-0x11 path and ordinary save share the same neighbor and FAMI projection so transfer snapshots are visible
-    /// to subsequent lot loads.</summary>
+    /// <summary>Persists neighborhood state so that neighbor records and family projections are immediately
+    /// visible across subsequent lot loads.</summary>
     private void PersistNeighborhoodStateImmediately()
     {
         plugins?.CommitNeighborhood();
@@ -427,9 +409,8 @@ internal sealed class SimulationServer
         if (activeFamilyChunkId is { } familyChunkId &&
             world.FamilyBudget is FamilyBudget familyBudget && familyBudget.ActiveFamily is { } family)
         {
-            // Mac Neighborhood::Save stores the active family's +0x11c (FAMI value in architecture) as the saved
-            // lot's +0x9c + +0xa0 + (int)(+0xa4 * architecture_value_multiplier, 0.7 in Tuning), which
-            // GetFamilyNetWorth then adds to the family's funds.
+            // Family architecture value in FAMI combines lot and furnishings values with architecture value
+            // scaled by the tuning multiplier (0.7), contributing to overall family net worth.
             if (suspendedHomeLot is null && !IsAwayLot(Path.GetDirectoryName(neighborhoodPath) ?? "", house) &&
                 world.SavedSimulationState is { } valueState)
             {
@@ -444,7 +425,6 @@ internal sealed class SimulationServer
             foreach (var (chunkId, changedFamily) in families.Changed)
                 updated = updated.WithAddedOrReplacedChunk(famiType, chunkId, changedFamily.Write(chunkId));
 
-        // FUN_00425316 (lines 24-26) and FUN_00425540: persist NGBH #1 variables and SimInventory records.
         if (world[SimulationGlobal.IsTutorialHouseNoYes] != 0)
             world.NeighborhoodData[0] = house;
         var ngbhType = ResourceType.Parse("NGBH");
@@ -478,7 +458,6 @@ internal sealed class SimulationServer
         if (updated.Find(ngbhType, 1) is { } refreshedNgbhChunk)
             world.LoadNeighborhoodData(NeighborhoodData.Read(updated, refreshedNgbhChunk));
 
-        // FUN_00425316 (line 51) / FUN_0043e1a3: persist TATT #1 type attributes.
         var tattType = ResourceType.Parse("TATT");
         var existingTattChunk = updated.Find(tattType, 1);
         var existingTatt = existingTattChunk is not null ? TypeAttributes.Read(updated, existingTattChunk) : null;
@@ -524,8 +503,8 @@ internal sealed class SimulationServer
         neighborhood = updated;
     }
 
-    /// <summary>FUN_00552a75 (lines 27-32) / FUN_0056007a (lines 75-80): when entering a residential lot whose
-    /// resident family has a nonzero vacation lot (+0x13c) that exists on disk, redirect to that vacation lot.</summary>
+    /// <summary>Redirects lot entry to a family's vacation lot when their active vacation destination is
+    /// nonzero and exists on disk.</summary>
     private static (short House, ushort? ActiveFamilyChunkId) ResolveVacationRedirect(string userData, short requestedHouse)
     {
         var nghPath = Path.Combine(userData, "Neighborhood.iff");
@@ -551,7 +530,6 @@ internal sealed class SimulationServer
         }
         catch
         {
-            // Keep requestedHouse if Neighborhood.iff cannot be read.
         }
         return (requestedHouse, null);
     }
@@ -579,16 +557,11 @@ internal sealed class SimulationServer
             {
                 return new SimulationServer(output, session, profile, game, 0, null, null, null, null, loadError: null, language);
             }
-            // The legacy server loads the active neighborhood's lot from the profile's UserData folder
-            // (SimulationServer.LoadHouse). Native profiles contain the imported/copied neighborhood state too;
-            // reading game/UserData here silently discarded that state and always loaded neighborhood 1.
             var userData = Neighborhoods.UserData(profile);
             var (effectiveHouse, redirectedFamilyChunkId) = ResolveVacationRedirect(userData, house);
             house = effectiveHouse;
             var path = Path.Combine(userData, "Houses", $"House{house:D2}.iff");
             if (!File.Exists(path)) return new SimulationServer(output, session, profile, game, house, null, null, null, null, $"Lot {house} not found.", language);
-            // Mac cXPerson::ReconStream includes its SAnimator state and, in newer stream versions, route state.
-            // The native runtime extension is kept beside canonical House IFFs as well as slot saves.
             var runtime = ReadSavedRuntimeMetadata(CanonicalRuntimePath(path), File.ReadAllBytes(path));
             var setup = WorldBootstrap.Load(game, path, language, () => false, house,
                 userDataPath: userData, activeFamilyChunkId: redirectedFamilyChunkId);
@@ -620,6 +593,7 @@ internal sealed class SimulationServer
                 server.dialogResumeSpeed = runtime.Speed;
             server.InitializeFameCallbackTarget(setup.World);
             if (setup.Global is { } global) setup.World.AutonomyHost = new AutonomyHost(setup.World, global, house, () => server.speed == 0, server.ScoreAutonomyChoice);
+            server.InitializeViewLevelFromSelectedSim();
             return server;
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException or ResourceFormatException)
@@ -779,9 +753,17 @@ internal sealed class SimulationServer
                 var subTickAlpha = currentTickInterval > 0 && nextUpdate > now
                     ? (float)Math.Clamp(1.0 - (nextUpdate - now) / currentTickInterval, 0.0, 0.999)
                     : 0f;
-                if (SceneExporter.Animation(lot, world, registry, game, SceneDirectory, house, revision, animationState, ++animationSequence, updates,
+                if (DirectAnimationSink is { } directSink)
+                {
+                    if (SceneExporter.AnimationDirect(lot, world, registry, game, SceneDirectory, house, revision, animationState, ++animationSequence, updates,
+                            viewLevel, wallMode, cameraOrientation, cutawayTile, roofsVisible, cutawayRooms: cutawayRooms, cutawaySim: CutawaySimTile(), cutawayZoom: cutawayZoom, showLoweredPortals: doorWindowBuildToolActive, subTickAlpha: subTickAlpha) is { } directFrame)
+                        directSink(directFrame);
+                }
+                else if (SceneExporter.Animation(lot, world, registry, game, SceneDirectory, house, revision, animationState, ++animationSequence, updates,
                         viewLevel, wallMode, cameraOrientation, cutawayTile, roofsVisible, cutawayRooms: cutawayRooms, cutawaySim: CutawaySimTile(), cutawayZoom: cutawayZoom, showLoweredPortals: doorWindowBuildToolActive, subTickAlpha: subTickAlpha) is { } frame)
+                {
                     Write(new { type = "animation", frame });
+                }
                 if (plugins is not null)
                 {
                     var currentEnv = plugins.Environment(house);
@@ -850,7 +832,6 @@ internal sealed class SimulationServer
         audio?.Dispose();
     }
 
-    /// <summary>Performs headless batch execution for the requested number of simulation ticks without UI or IPC.</summary>
     public int BatchRun(int requestedTicks)
     {
         if (world is null || requestedTicks <= 0) return 0;
@@ -865,33 +846,36 @@ internal sealed class SimulationServer
     internal bool Handle(string line)
     {
         var id = "";
+        var op = "";
         try
         {
             using var document = JsonDocument.Parse(line);
-            if (document.RootElement.TryGetProperty("id", out var value) && value.ValueKind == JsonValueKind.String)
+            var root = document.RootElement;
+            if (root.TryGetProperty("id", out var value) && value.ValueKind == JsonValueKind.String)
                 id = value.GetString() ?? "";
+            if (root.TryGetProperty("op", out var opValue) && opValue.ValueKind == JsonValueKind.String)
+                op = opValue.GetString() ?? "";
+            try { return HandleCore(root, id, op); }
+            catch (SaveCompatibility.MissingPacksException error)
+            {
+                Write(new { type = "response", id, operation = op, ok = false, error = error.Message, missingPacks = error.Packs });
+                return true;
+            }
+            catch (Exception error)
+            {
+                Write(new { type = "response", id, operation = op, ok = false, error = error.Message });
+                return true;
+            }
         }
-        catch (JsonException) { }
-        try { return HandleCore(line); }
-        catch (SaveCompatibility.MissingPacksException error)
+        catch (JsonException)
         {
-            Write(new { type = "response", id, ok = false, error = error.Message, missingPacks = error.Packs });
-            return true;
-        }
-        catch (Exception error)
-        {
-            Write(new { type = "response", id, ok = false, error = error.Message });
+            Write(new { type = "response", id = "", operation = "", ok = false, error = "invalid json" });
             return true;
         }
     }
 
-    private bool HandleCore(string line)
+    private bool HandleCore(JsonElement request, string id, string op)
     {
-        JsonElement request;
-        try { request = JsonDocument.Parse(line).RootElement; }
-        catch (JsonException) { Write(new { type = "response", id = "", ok = false, error = "invalid json" }); return true; }
-        var id = request.TryGetProperty("id", out var idValue) ? idValue.GetString() ?? "" : "";
-        var op = request.TryGetProperty("op", out var opValue) ? opValue.GetString() ?? "" : "";
         object? result = null;
         string? error = null;
         switch (op)
@@ -899,8 +883,6 @@ internal sealed class SimulationServer
             case "state": result = State(); break;
             case "cursorObjectCreated":
             {
-                // ObjectModule::MakeNewOutOfWorldObject and cXCursorObject::MakeMouseObject
-                // dispatch 0xe2 after a cursor object is successfully created.
                 var markDirty = !request.TryGetProperty("dirty", out var dirtyValue) || dirtyValue.ValueKind != JsonValueKind.False;
                 if (markDirty) saveDirty = true;
                 if (world is { } cursorWorld &&
@@ -938,7 +920,6 @@ internal sealed class SimulationServer
                 break;
             }
             case "uiButton":
-                // cTSWinBtn::TSOnMouseDownL/UpL record the button that sent its command (lbl_10650BDC, DAT_006fe954).
                 lastButtonImage = request.TryGetProperty("image", out var imageValue) && imageValue.TryGetInt32(out var image) ? image : null;
                 lastButtonPerson = request.TryGetProperty("objectID", out var buttonSimValue) && buttonSimValue.TryGetInt16(out var buttonSim) ? buttonSim : (short)0;
                 if (world is not null) world[SimulationGlobal.LastGZButtonID] = (short)(lastButtonImage ?? 0);
@@ -963,7 +944,8 @@ internal sealed class SimulationServer
                 break;
             }
             case "mode":
-                // CPState::SetMode stores 0 live, 1 build, 2 buy, 3 options and 4 neighborhood in simulator global 19.
+                // Simulator global 19 stores the viewer mode: 0 for Live, 1 for Build, 2 for Buy, 3 for
+                // Options, and 4 for Neighborhood.
                 viewerMode = request.GetProperty("mode").GetString() switch
                 {
                     "live" => 0, "build" => 1, "buy" => 2, "options" or "camera" => 3,
@@ -986,7 +968,6 @@ internal sealed class SimulationServer
                     scrollingValue.ValueKind is JsonValueKind.True or JsonValueKind.False
                     ? scrollingValue.GetBoolean()
                     : throw new ArgumentException("view scrolling state (value) must be a boolean");
-                // Keep full Sim skeletal animation running during camera scrolling (do not enable 1999 root-only freeze).
                 result = new { scrolling = viewScrolling };
                 break;
             case "tutorialPanelCheck":
@@ -1011,8 +992,8 @@ internal sealed class SimulationServer
                 var requestedSpeed = request.TryGetProperty("value", out var speedValue) && speedValue.ValueKind == JsonValueKind.Number && speedValue.TryGetInt32(out var requested) ? requested : 0;
                 if (!testFixtureEnabled && (world is null || world[SimulationGlobal.SimlessBuildMode] != 0) && requestedSpeed > 0)
                     requestedSpeed = 0;
-                // FUN_0046d7b3 (0046d7b3.c:41-43): when the user manually sets speed while auto-speed is active,
-                // update the saved speed (or clear auto-speed when pausing).
+                // Manually changing speed while auto-speed is active updates the restored speed setting,
+                // while pausing cancels auto-speed.
                 if (autoSpeedSaved > -1)
                     autoSpeedSaved = requestedSpeed > 0 ? requestedSpeed : -1;
                 if (HasBlockingDialog(world))
@@ -1027,7 +1008,6 @@ internal sealed class SimulationServer
                     dialogResumeSpeed = 0;
                     if (speed > 0) lastRunningSpeed = speed;
                 }
-                // The frontend decodes any result that carries a speed as the full panel state.
                 result = State();
                 break;
             case "step":
@@ -1096,8 +1076,6 @@ internal sealed class SimulationServer
             {
                 var acknowledged = request.GetProperty("revision").GetInt64();
                 if (acknowledged < 1 || acknowledged > revision) throw new ArgumentException("Invalid scene acknowledgement");
-                // The client acknowledges after loading its scene. Retain that revision, its predecessor and any
-                // newer frames still in flight; keeping every one-second snapshot grows by gigabytes per session.
                 SimsSimulation.InMemorySessionAssets.PruneOldScenes(SceneDirectory, acknowledged - 1);
                 if (Directory.Exists(SceneDirectory))
                 {
@@ -1158,12 +1136,22 @@ internal sealed class SimulationServer
                 else if (request.TryGetProperty("up", out var wallsUpValue) && wallsUpValue.ValueKind is JsonValueKind.True or JsonValueKind.False)
                     wallMode = wallsUpValue.GetBoolean() ? "up" : "down";
                 else throw new ArgumentException("Wall mode is required.");
-                // CPState::SetWallState states 1 (up), 2 (down), and 4 (cutaway) all call SetDrawRoof(0, 0).
+                // Switching wall display modes to walls-up, walls-down, or cutaway automatically hides
+                // roofs.
                 roofsVisible = false;
-                if (wallMode != "cutaway") ClearCutaway();
+                if (wallMode != "cutaway")
+                {
+                    ClearCutaway();
+                }
+                else if (request.TryGetProperty("x", out _) && request.TryGetProperty("y", out _))
+                {
+                    ApplyCutawayTarget(request);
+                }
                 if (request.TryGetProperty("doorWindowTool", out var wallsDwValue) && wallsDwValue.ValueKind is JsonValueKind.True or JsonValueKind.False)
                     doorWindowBuildToolActive = editingView && wallsDwValue.GetBoolean();
-                if (!streaming || revision == 0 || wallMode != previousWallMode || roofsVisible != previousWallsRoofs || doorWindowBuildToolActive != previousWallsDw)
+                if (!streaming || revision == 0 || wallMode != previousWallMode || roofsVisible != previousWallsRoofs || doorWindowBuildToolActive != previousWallsDw ||
+                    (wallMode == "cutaway" && world is not null && lot is not null && !SceneExporter.CutawayMaskMatches(world, animationState, revision, viewLevel, wallMode, cameraOrientation,
+                        cutawayTile, cutawayRooms, CutawaySimTile(), cutawayZoom)))
                     Export();
                 result = State();
                 break;
@@ -1193,36 +1181,7 @@ internal sealed class SimulationServer
                 break;
             case "cutaway":
                 if (wallMode != "cutaway") { result = new { ignored = true }; break; }
-                // The viewer's zoom (1 far, 2 medium, 3 near) sets the screen scale of the Mac cut mask.
-                if (request.TryGetProperty("zoom", out var zoomValue) && zoomValue.ValueKind == JsonValueKind.Number && zoomValue.TryGetInt32(out var requestedZoom))
-                {
-                    cutawayZoom = Math.Clamp(requestedZoom, 1, 3);
-                }
-                var cutawayX = TileCoordinate(request, "x");
-                var cutawayY = TileCoordinate(request, "y");
-                if (cutawayX < 0 || cutawayY < 0) ClearCutaway();
-                else if (cutawayX >= LotWidth || cutawayY >= LotHeight) throw new ArgumentException("Cutaway tile is outside the lot.");
-                else
-                {
-                    cutawayTile = (cutawayX, cutawayY);
-                    if (world is not null && world.LotRoomMaps.TryGetValue(viewLevel, out var roomMap) &&
-                        cutawayX < roomMap.Width && cutawayY < roomMap.Height)
-                    {
-                        var cutawayCamera = new LotCamera(cameraOrientation, LotWidth, LotHeight);
-                        var hoveredRoom = roomMap.RoomAt(cutawayX, cutawayY);
-                        if (hoveredRoom != RoomMap.NoRoom && !cutawayRooms.Contains(hoveredRoom))
-                        {
-                            cutawayRooms.Add(hoveredRoom);
-                            if (cutawayRooms.Count > 3) cutawayRooms.RemoveAt(0);
-                        }
-                        var probeRoom = SceneExporter.CutawayProbeRoom(roomMap, cutawayCamera, LotWidth, cutawayX, cutawayY, cutawayZoom);
-                        if (probeRoom != RoomMap.NoRoom && !cutawayRooms.Contains(probeRoom))
-                        {
-                            cutawayRooms.Add(probeRoom);
-                            if (cutawayRooms.Count > 3) cutawayRooms.RemoveAt(0);
-                        }
-                    }
-                }
+                ApplyCutawayTarget(request);
                 if (world is null || lot is null || !SceneExporter.CutawayMaskMatches(world, animationState, revision, viewLevel, wallMode, cameraOrientation,
                         cutawayTile, cutawayRooms, CutawaySimTile(), cutawayZoom))
                     Export();
@@ -1232,7 +1191,6 @@ internal sealed class SimulationServer
                 var previousCameraOrientation = cameraOrientation;
                 var requestedOrientation = request.TryGetProperty("value", out var orientationValue) && orientationValue.TryGetInt32(out var orientation)
                     ? orientation : throw new ArgumentException("Camera orientation must be an integer.");
-                // Sims.exe FUN_00479318 stores orientation modulo four in the lot manager.
                 cameraOrientation = ((requestedOrientation % 4) + 4) % 4;
                 if (!streaming || revision == 0 || cameraOrientation != previousCameraOrientation)
                     Export();
@@ -1245,8 +1203,8 @@ internal sealed class SimulationServer
                     throw new ArgumentException("Select a Sim in the active household");
                 var selectionChanged = selectedSim != requestedSim;
                 selectedSim = requestedSim;
-                // FUN_0046d3de stores notice 0xe4's person id in global 3 ("Selected Person ID"); Tutorial.iff 4108 compares it.
-                // cNeighborhood::SelectPerson (0044668c.c:25-33) also sets bit 2 on the selected Sim's Flags and clears it on others.
+                // Selecting a Sim sets simulation global 3 to their person identifier and sets bit 2 of
+                // their person Flags while clearing it on all other Sims.
                 if (world is not null) SyncSelectedSimFlags(world, selectedSim);
                 if (selectionChanged)
                 {
@@ -1321,8 +1279,6 @@ internal sealed class SimulationServer
                 if (tileX < 0 || tileX >= LotWidth || tileY < 0 || tileY >= LotHeight || level < 1 || level > Stories)
                     throw new ArgumentException("Tile coordinates or level are outside the active lot");
                 var current = world ?? throw new InvalidOperationException("There is no loaded native lot");
-                // Materialize the traversal so cycles surface in the protocol response instead of being hidden by a
-                // partial enumeration or the live scene exporter.
                 result = new { tileX, tileY, level, objectIDs = current.ObjectsAtTile(tileX, tileY, level).Select(item => item.Id).ToArray() };
                 break;
             }
@@ -1393,9 +1349,9 @@ internal sealed class SimulationServer
                     var choice = InteractionMenus.Read(world!, actor, target).FirstOrDefault(choice =>
                         MenuIndex(choice) == interactionId && choice.Parameters[0] == param0);
                     if (choice is null) throw new ArgumentException("Ground interaction is not currently available.");
-                    // Destination.iff (GUID 0x7c4) owns the original Go Here BHAV and its cleanup.
-                    // Keep that object alive and enqueue its action on the person's normal stack;
-                    // an independent route would compete with the BHAV that is already running.
+                    // The Go Here interaction from <c>Destination.iff</c> (GUID 0x7C4) executes on the
+                    // person's normal action stack to prevent standalone routing from conflicting with its
+                    // cleanup BHAV.
                     if (world!.IsImmediateMenuInteraction(choice))
                     {
                         world.RunImmediateMenuInteraction(actor, choice);
@@ -1605,9 +1561,8 @@ internal sealed class SimulationServer
                 world.RespondMessageDialog(token, code, responseText);
                 if (HasBlockingDialog(world))
                 {
-                    // A queued blocking record may become visible as soon as the
-                    // previous one is answered. Keep the simulator paused and
-                    // retain the original resume speed for the end of the queue.
+                    // Keeps the simulation paused across queued blocking dialogs, preserving the original
+                    // resume speed until the queue empties.
                     SetSimulationSpeed(0, blockingDialog: true);
                 }
                 else
@@ -1802,7 +1757,6 @@ internal sealed class SimulationServer
                 break;
             }
 
-
             case "outfitChoices":
             {
                 if (world is null) throw new InvalidOperationException("No lot is loaded.");
@@ -1834,8 +1788,6 @@ internal sealed class SimulationServer
                 {
                     world.AutonomyForced = enabledValue.GetBoolean();
                 }
-                // A prior unforced-family autonomy miss is resolved by the native gate below, so expose a clean
-                // paused state when the user disables Free Will and can resume the lot.
                 if (world?.AutonomyForced == false && simulationError?.Contains("opcode 0x3", StringComparison.Ordinal) == true)
                     simulationError = null;
                 result = State();
@@ -1881,7 +1833,11 @@ internal sealed class SimulationServer
                 break;
             case "audioEvent":
             {
-                if (!audio!.Enabled) throw new InvalidOperationException("Audio is disabled");
+                if (!audio!.Enabled)
+                {
+                    result = new { played = false };
+                    break;
+                }
                 var name = request.GetProperty("name").GetString()!;
                 int? owner = request.TryGetProperty("ownerID", out var ov) ? ov.GetInt32() : null;
                 result = new { played = audio.Play(name, owner) };
@@ -1894,8 +1850,8 @@ internal sealed class SimulationServer
             case "modeMusic":
             {
                 var mode = request.GetProperty("mode").GetString()!;
-                // cSound::SetMusicMode (0057376b.c:422-453): stop active mode music without killing lot ambience on owner -1;
-                // pause lot ambience while in Buy/Build/Camera/Options mode and allow it in Live mode.
+                // Mode music changes stop active background tracks without killing global ambient audio,
+                // pausing lot ambience in Buy, Build, and Options modes while playing it in Live mode.
                 audio!.StopGroup("MUSIC");
                 var isLive = mode.Equals("live", StringComparison.OrdinalIgnoreCase);
                 audio.SetMusicModeActive(!isLive);
@@ -2011,7 +1967,8 @@ internal sealed class SimulationServer
                 RestorePersonAnimationRuntime(world, animationsToRestore);
                 RestoreDialogRecords(world, runtime.Dialogs);
                 if (viewerScale != 0) world[SimulationGlobal.ZoomLevelSML] = viewerScale;
-                // CPState::EnteringHouse calls SetMode(live), overwriting the Mode word the saved lot state carried.
+                // Entering a house resets the viewer mode to Live, overriding any mode saved in the lot
+                // file.
                 viewerMode = 0;
                 tileCursor = null;
                 world[SimulationGlobal.Mode] = viewerMode;
@@ -2063,7 +2020,6 @@ internal sealed class SimulationServer
                 break;
             }
             case "travelFilter":
-                // cWinNeighborhoodUL::Shutdown saves the picker's filter mode (+0xf0) through SaveCurrentFilter.
                 TravelFilter.Save(Neighborhoods.UserData(profile), TravelFilter.Unleashed,
                     request.GetProperty("filter").GetInt32(), language);
                 result = new { saved = true };
@@ -2077,8 +2033,8 @@ internal sealed class SimulationServer
             case "quit": running = false; result = new { quit = true }; break;
             default: error = $"native engine does not implement '{op}'"; break;
         }
-        if (error is not null) Write(new { type = "response", id, ok = false, error });
-        else Write(new { type = "response", id, ok = true, result });
+        if (error is not null) Write(new { type = "response", id, operation = op, ok = false, error });
+        else Write(new { type = "response", id, operation = op, ok = true, result });
         return running;
     }
 
@@ -2094,11 +2050,6 @@ internal sealed class SimulationServer
         var (withObjects, _) = world.WriteSavedLotObjectsTo(lot);
         var saved = world.WriteSavedSimulationStateTo(withObjects);
         Directory.CreateDirectory(Saves);
-        // Mac cSimulator::DoStream (Simulator.s) serializes cSimulator+0x30,
-        // which FUN_0046d0cf restores through SetSpeed. Native speed lives in
-        // the protocol server rather than SimulationWorld, so keep it beside
-        // the native IFF save. A paused lot saves its last running mode because
-        // Mac Pause changes +0x32 but leaves the serialized +0x30 unchanged.
         var saveSpeed = speed > 0 ? speed : lastRunningSpeed;
         var runtimeMetadata = CaptureRuntimeMetadata(world, saved.Bytes.Span, saveSpeed);
         var runtimeJson = JsonSerializer.SerializeToUtf8Bytes(runtimeMetadata, Json);
@@ -2111,12 +2062,9 @@ internal sealed class SimulationServer
             var neighborhoodUserData = Neighborhoods.UserData(profile);
             var userData = neighborhoodUserData;
             var housePath = Path.Combine(userData, "Houses", $"House{house:D2}.iff");
-            // Sims.exe SaveGame's direct-neighborhood branches require Simless Build Mode (+0x50) == 0.
-            // Before the zoning check, those branches cover house IDs 20–30, 81–89 and 93–98; the
-            // following branch also covers Mac community zoning (2; native table value 1). In these
-            // cases it does not call Neighborhood::SaveHouse, so keep the canonical House IFF unchanged.
-            // The intervening 40–49 branch writes House4X.iff when an active family (+0x10c != 0) is loaded
-            // and only skips saving when no family is loaded (004f277c.c:22-25).
+            // Direct neighborhood saving requires Simless Build Mode to be disabled. Community lots (houses
+            // 20–30, 81–89, 93–98) avoid overwriting the canonical house file, while vacation lots (houses
+            // 40–49) only save when an active family is present.
             var ordinarySimulationMode = world[SimulationGlobal.SimlessBuildMode] == 0;
             var directNeighborhoodSave = ordinarySimulationMode &&
                 (house is >= 20 and <= 30 or >= 81 and <= 89 or >= 93 and <= 98 ||
@@ -2127,8 +2075,6 @@ internal sealed class SimulationServer
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(housePath)!);
                 WriteReplace(housePath, saved.Bytes);
-                // Bind runtime state to these exact House bytes. A later external House replacement must not
-                // restore routes or animation state captured for the previous lot revision.
                 WriteReplace(CanonicalRuntimePath(housePath), runtimeJson);
                 DeleteUnhousedCharacters(userData);
                 lotWritten = true;
@@ -2295,6 +2241,7 @@ internal sealed class SimulationServer
         }
         else
         {
+            InitializeViewLevelFromSelectedSim();
             Export();
         }
         if (audio?.Enabled == true)
@@ -2318,8 +2265,8 @@ internal sealed class SimulationServer
 
     private void SetSimulationSpeed(int value, bool blockingDialog = false)
     {
-        // cSimulator::SetSpeed clamps to 0..1000 and stores +0x30 (SIMI global 16).
-        // Pause/Resume changes +0x32 (global 17) without changing the stored running speed.
+        // Simulation speed is clamped to 0..1000 and mapped to SIMI global 16, while pause and resume
+        // toggle SIMI global 17 without altering the configured running speed.
         speed = Math.Clamp(value, 0, 1000);
         audio?.SetSimulationSpeed(speed);
         audio?.SetSimulationPaused(speed == 0, blockingDialog);
@@ -2328,7 +2275,6 @@ internal sealed class SimulationServer
         current[SimulationGlobal.Paused] = (short)(speed == 0 ? 1 : 0);
     }
 
-    /// <summary>Updates the Mac cSimsApp +0xbf reset-save gate after an operation actually changes the lot.</summary>
     private void MarkSaveDirtyIfChanged(object? result)
     {
         if (result is null) return;
@@ -2359,12 +2305,9 @@ internal sealed class SimulationServer
         }
     }
 
-    // Scheduled updates run outside Handle's request error boundary. Keep unsupported native runtime dependencies visible
-    // to the frontend and preserve the loaded lot for inspection instead of terminating the entire simulation process.
-    /// <summary>FUN_0046d66f still walks the object manager while the simulator is paused: the global time hold
-    /// (+0x32 zero) skips every entry except those with the simulate-on-pause flag (entry bit 17, OBJD
-    /// SimulateOnPause), and the clock does not advance. The tutorial controller is one of them, so its dialogs
-    /// keep arriving in Buy and Build mode ("Time has now stopped for Bob").</summary>
+    /// <summary>When the simulation is paused, the object manager only updates objects with the OBJD
+    /// SimulateOnPause flag enabled (bit 17), allowing controllers such as the tutorial to advance dialogs
+    /// without advancing game time.</summary>
     private static int CountVisibleDialogs(SimulationWorld targetWorld)
     {
         var count = 0;
@@ -2409,14 +2352,7 @@ internal sealed class SimulationServer
                     }
                 }
             }
-            // The server only enters this tick while speed > 0. CurrentHouse, Paused, and Mode
-            // are unrelated globals, not the simulator's raw +0x24/+0x32/+0x36 clock-control
-            // fields. Supplying the ordinary running values keeps the source clock manager's
-            // global-hold gate from suppressing route and autonomy callbacks. Paused sessions
-            // are stopped by the server loop before reaching this tick.
             var control = new SimulationClockControl(1, 1, 1);
-            // TickAllObjects calls TreeSim::GetError on each object; the last UI button ID is unrelated.
-            // Object script errors are handled by TickClockObject, so do not use that global as an error flag.
             world.AdvanceSimulationTick(control, 0, world.Clock.Ticks);
             if (world.PendingLotSwitch is { } pendingLotSwitch)
             {
@@ -2434,9 +2370,6 @@ internal sealed class SimulationServer
                 DispatchRouteAnimationSounds(world, routeAnimBefore);
             if (world.Clock.Hour != previousHour) world.DispatchNotice(0xdb, world.Clock.Hour);
             if (allowAutoSpeed) UpdateAutoSpeed(world);
-            // Action acceptance/failure can happen in only a handful of scheduler passes. A 120-update
-            // cadence misses the complete start transition for short interactions, so opt-in traces
-            // capture the selected Sim on each native tick while preserving the default quiet log.
             if (traceActions) LogActionState();
             LogNewThreadErrors();
             LogNewInteractionGuardErrors();
@@ -2444,7 +2377,6 @@ internal sealed class SimulationServer
             {
                 dialogResumeSpeed = speed;
                 SetSimulationSpeed(0, blockingDialog: true);
-                // Publish the blocking dialog immediately; normal scene streaming pauses with the simulation.
                 Export();
             }
             return true;
@@ -2464,7 +2396,6 @@ internal sealed class SimulationServer
         }
     }
 
-    // Opt-in standalone diagnosis for the source-backed UI-to-person queue handoff; this has no simulation effects.
     private void LogActionState()
     {
         var person = world?.ObjectById(selectedSim) as XPerson;
@@ -2573,8 +2504,6 @@ internal sealed class SimulationServer
             $"priority={person[PersonData.Priority]} nonInterruptible={person[PersonData.NonInterruptible]} stateClass={world.StateClass(person.StateValue)} inputFlags={person.InputFlags:X2} bladder={person[Motive.Bladder]:F2} active={active} queue=[{queue}] pending={person.PendingActionRequests.Count} toiletUseCount={(target is null ? "missing" : target[ObjectData.UseCount].ToString())} stack={frames}");
     }
 
-    // World contains source-defined per-thread errors so the clock manager can continue to other objects. Preserve those
-    // diagnostics in the standalone session log; otherwise a removed restored stack looks like a Sim that simply idles.
     private void LogNewThreadErrors()
     {
         if (world is null) return;
@@ -2607,8 +2536,6 @@ internal sealed class SimulationServer
         }
     }
 
-    /// <summary>Native protocol purchase for residential catalog objects. Sims.exe FUN_00440b6d constructs every
-    /// linked member before FUN_00432a70 validates the group; FUN_00421ea5 then applies its translated placement.</summary>
     private XObject BuyObject(JsonElement request)
     {
         var current = world ?? throw new InvalidOperationException("There is no loaded native lot.");
@@ -2660,7 +2587,8 @@ internal sealed class SimulationServer
                     throw new ArgumentException("Multi-tile object group creation is unavailable");
                 item = current.ObjectFactory?.Invoke(unchecked((int)guid))
                     ?? throw new ArgumentException("Object definition could not be loaded");
-                // FUN_00440b6d constructs the cursor object at -16,-16 before FUN_00432a70 validates it.
+                // Initializes newly created candidate objects at off-lot coordinates (-16, -16) prior to
+                // placement validation.
                 item.Position = new ObjectPosition(-16, -16, level);
                 current.Add(item);
                 current.InitializeCreatedObject(item);
@@ -2728,8 +2656,8 @@ internal sealed class SimulationServer
         }
     }
 
-    /// <summary>Sells a placed object the way the Hand tool does (FUN_00487f4b): the household needs a paused lot, the
-    /// object must pass the pick-up and sale tests, and the family receives its current value.</summary>
+    /// <summary>Sells a placed object with the Hand tool, crediting its depreciated value to the household
+    /// after verifying pick-up and sale eligibility on a paused lot.</summary>
     private object SellObject(JsonElement request)
     {
         var current = world ?? throw new InvalidOperationException("There is no loaded native lot.");
@@ -2802,8 +2730,9 @@ internal sealed class SimulationServer
         return members;
     }
 
-    /// <summary>FUN_004632af / FUN_00463648: captures each portal member's cardinal wall edge and target wall style
-    /// (the portal's OBJD WallStyle when placed, or 1 when removed) so the lot's Arry 2/102 wall layer stays in sync.</summary>
+    /// <summary>Captures cardinal wall edges and target styles for portal objects (using the OBJD WallStyle
+    /// when placed, or default style 1 when removed) to keep the Arry 2 and 102 wall layers synchronized.
+    /// </summary>
     private static List<(int Level, int OwnerX, int OwnerY, byte Bit, byte Style)> CapturePortalWallEdits(
         SimulationWorld current, XObject item, bool resetToDefault)
     {
@@ -2873,9 +2802,9 @@ internal sealed class SimulationServer
         public void AlterFamilyBudget(int expenseType, int amount) { }
     }
 
-    /// <summary>FUN_00487563: when a fireplace (BuildModeType 5) fails its initial placement check, erases upper-level
-    /// floor tiles blocking chimney members without PlacementFlags bit 0 (0x0001) and adds floor pattern 1 under
-    /// upper-level hearth members without PlacementFlags bit 9 (0x0200).</summary>
+    /// <summary>Prepares floors for multi-story fireplaces by removing blocking upper-level floor tiles for
+    /// chimney pieces lacking PlacementFlags bit 0 (0x0001) and inserting floor pattern 1 under upper-level
+    /// hearth pieces lacking bit 9 (0x0200).</summary>
     private bool TryPrepareFireplaceFloors(SimulationWorld current, IffFile currentLot, XObject lead,
         IReadOnlyList<XObject> members, ObjectPosition destination, out IffFile updatedLot, out int netFloorCost)
     {
@@ -3033,6 +2962,9 @@ internal sealed class SimulationServer
 
     private void RefreshWorldRoomMaps(SimulationWorld current, IffFile currentLot)
     {
+        current.LotTerrain = currentLot.Find(ResourceType.Parse("Arry"), 0) is not null
+            ? LotTerrain.Read(currentLot)
+            : null;
         current.LoadRoomMaps(ReadRoomMaps(currentLot));
         current.RefreshSavedPortalWallStyles();
     }
@@ -3041,14 +2973,13 @@ internal sealed class SimulationServer
     private WallCatalog? wallCatalogCache;
     private WallpaperCatalog? wallpaperCatalogCache;
 
-    /// <summary>The build-mode architecture tools: <c>FLOOR_RECT</c> paints or, with pattern 0, erases the inclusive
-    /// rectangle between (x, y) and (x + x2, y + y2) on the level; signed deltas let reverse-direction drags select the same
-    /// rectangle as the original DoRectangle, then the tool commits its pending charge (mouse-up, FUN_00492bc4).</summary>
+    /// <summary>Executes floor rectangle painting or erasing between opposite corners on a level,
+    /// normalizing signed deltas to support reverse-direction dragging.</summary>
     private object Architecture(JsonElement request) => ArchitectureCommand(request);
 
-    /// <summary>One committed build-tool stroke (cWallUndoable / FloorUndoable / Build-mode objects): the change and
-    /// signed charge on expense category 7. Undo reverses it; redo applies it again. A reversal that would cost more
-    /// than the household holds is refused. Loading a lot or committing a Buy-mode edit clears both stacks.</summary>
+    /// <summary>Tracks committed build tool operations and financial charges against expense category 7.
+    /// Undoing an action is refused if the refund reversal exceeds available household funds, and loading a
+    /// lot or committing Buy-mode edits clears history.</summary>
     private interface IBuildHistoryEntry
     {
         int Charge { get; }
@@ -3111,8 +3042,9 @@ internal sealed class SimulationServer
             }
             var members = group ?? [item];
             current.FaceCreatedObject(item, members, (short)direction);
-            // Validate against current lot first so portal walls still hold category 1 before the cutout is reapplied;
-            // only swap to lotWithFloors beforehand if current floors lack support (e.g. a fireplace redo).
+            // Validates placement against the existing lot first so portal wall categories remain intact
+            // before cutouts are reapplied, only swapping in pre-modified floors when structural support is
+            // required.
             if (!current.CanPlaceObjectFromEditor(item, destination, out var referenceObject, out var referenceSlot))
             {
                 if (lotWithFloors is not null && !ReferenceEquals(lot, lotWithFloors))
@@ -3145,8 +3077,7 @@ internal sealed class SimulationServer
         }
     }
 
-    /// <summary>The roof panel: <c>style</c> (a GameData/Roofs file stem, or its index in name order) and <c>pitch</c> (clamped
-    /// to 0..2), either optional. A change is one undo entry that costs nothing (cRoofUndoable swaps the pair back).</summary>
+    /// <summary>Updates roof pattern style and pitch (clamped to 0..2) as a free undoable operation.</summary>
     private object RoofSettings(JsonElement request)
     {
         var current = world ?? throw new InvalidOperationException("There is no loaded native lot.");
@@ -3286,9 +3217,8 @@ internal sealed class SimulationServer
         return new { applied = true, command = undo ? "UNDO" : "REDO", charge, canUndo = undoStack.Count > 0, canRedo = redoStack.Count > 0, budget = budget.ReadFamilyBudget() };
     }
 
-    /// <summary>A terrain stroke: TERRAIN_RAISE (x, y, target height in style), TERRAIN_FLATTEN (tile rectangle, reference
-    /// height in style) and GRASS_DOT (x, y, signed change of the grass state in pattern), all committed as one charge and
-    /// one undo entry. A refused or unaffordable edit leaves the lot as it was.</summary>
+    /// <summary>Applies atomic terrain height and grass state modifications as a single charged and
+    /// undoable batch, rolling back all changes if unaffordable or invalid.</summary>
     private object ArchitectureBatch(JsonElement request)
     {
         var current = world ?? throw new InvalidOperationException("There is no loaded native lot.");
@@ -3485,7 +3415,6 @@ internal sealed class SimulationServer
         }
         if (command is "FLOOR_FILL" or "FLOOR_FILL_ERASE")
         {
-            // Shift fill: apply the selected floor pattern to every tile in the room containing (x, y).
             var fillLevel = Number("level");
             if (fillLevel is < 1 or > 2) throw new ArgumentException("level must be 1 or 2");
             var fillErase = command == "FLOOR_FILL_ERASE";
@@ -3516,7 +3445,6 @@ internal sealed class SimulationServer
         }
         if (command is "PATTERN_FILL" or "PATTERN_FILL_ERASE")
         {
-            // Shift fill: every wall face of the room that holds tile (x, y).
             var fillLevel = Number("level");
             if (fillLevel is < 1 or > 2) throw new ArgumentException("level must be 1 or 2");
             var fillErase = command == "PATTERN_FILL_ERASE";
@@ -3542,7 +3470,8 @@ internal sealed class SimulationServer
         }
         if (command is "PATTERN_DOT" or "PATTERN_ERASE")
         {
-            // One wall edge of tile (x, y): edge is its bit (1, 2, 4, 8, 16 or 32), side picks a diagonal's side.
+            // Identifies a tile wall edge by bit flag (1, 2, 4, 8, 16, or 32), with side indicating the
+            // facing of diagonal walls.
             var dotLevel = Number("level");
             if (dotLevel is < 1 or > 2) throw new ArgumentException("level must be 1 or 2");
             var erase = command == "PATTERN_ERASE";
@@ -3568,7 +3497,6 @@ internal sealed class SimulationServer
         }
         if (command != "FLOOR_RECT")
         {
-            // x,y and x2,y2 are the lattice corners the drag starts and ends on.
             var wallLevel = Number("level");
             if (wallLevel is < 1 or > 2) throw new ArgumentException("level must be 1 or 2");
             var wallStyle = request.TryGetProperty("style", out _) ? Number("style") : 1;
@@ -3678,8 +3606,8 @@ internal sealed class SimulationServer
         var oldDirectionFlag = (byte)(1 << (lead[ObjectData.Direction] & 6));
         var lotBeforeMove = lot;
         var oldPortalEdits = CapturePortalWallEdits(current, item, resetToDefault: true);
-        // Existing objects can have placement-check and user-placement BHAVs. Supply the same transient
-        // interpreter as the editor path so validation and the whole multi-tile group callback can run.
+        // Executes placement-check and user-placement BHAV routines within a transient stack to validate
+        // multi-tile object groups when moved.
         if (!current.MoveObjectFromEditor(item, new ObjectPosition(x, y, level), directionFlag,
                 TreeRunner.CreateTransientStack(current, item)))
             throw new InvalidOperationException("Object cannot be placed at that position");
@@ -3705,11 +3633,8 @@ internal sealed class SimulationServer
         return new { moved = true, objectID = (int)id, x = item.Position.X / 16f, y = item.Position.Y / 16f, level = item.Position.Height, canUndo = undoStack.Count > 0, canRedo = redoStack.Count > 0 };
     }
 
-    /// <summary>Read-only preview for the ordinary residential catalog slice. Sims.exe FUN_00432a70 validates the
-    /// proposed location and FUN_004333ef refreshes the placement state; the native preview returns its tile footprint
-    /// without adding the candidate to the world or saved object-type table.</summary>
-    /// <summary>With <paramref name="cursor"/> the request is a build-tool cursor: the wall (0x439) or terrain (0x2F39B7A6)
-    /// cursor object at a tile vertex given in whole tiles, shown at the requested graphic frame. It needs no catalog entry and costs nothing.</summary>
+    /// <summary>Generates a placement footprint preview without committing objects to the world, or renders
+    /// zero-cost build cursors such as walls (GUID 0x439) or terrain (GUID 0x2F39B7A6).</summary>
     private object PreviewObject(JsonElement request, bool cursor = false)
     {
         var current = world ?? throw new InvalidOperationException("There is no loaded native lot.");
@@ -3813,6 +3738,12 @@ internal sealed class SimulationServer
                         member.DynamicSpriteFlags[flagIndex] = source.DynamicSpriteFlags[flagIndex];
                 }
             }
+            int? hoveredWallDir = request.TryGetProperty("wallDirection", out var hoveredWallDirEl) &&
+                hoveredWallDirEl.ValueKind == JsonValueKind.Number &&
+                hoveredWallDirEl.TryGetInt32(out var parsedHoveredWallDir) &&
+                parsedHoveredWallDir is >= 0 and <= 3
+                ? parsedHoveredWallDir
+                : null;
             current.FaceCreatedObject(item, members, (short)direction);
             XObject? previewReferenceObject = null;
             int previewReferenceSlot = -1;
@@ -3820,6 +3751,24 @@ internal sealed class SimulationServer
             {
                 var move = current.PreviewEditorMove(existing, destination, directionFlag,
                     TreeRunner.CreateTransientStack(current, existing));
+                if (!move.Valid && !cursor && hoveredWallDir is not null)
+                {
+                    var altDir = (direction + 4) & 7;
+                    var altDirFlag = (byte)(1 << altDir);
+                    current.FaceCreatedObject(item, members, (short)altDir);
+                    var altMove = current.PreviewEditorMove(existing, destination, altDirFlag,
+                        TreeRunner.CreateTransientStack(current, existing));
+                    if (altMove.Valid)
+                    {
+                        direction = altDir;
+                        directionFlag = altDirFlag;
+                        move = altMove;
+                    }
+                    else
+                    {
+                        current.FaceCreatedObject(item, members, (short)direction);
+                    }
+                }
                 valid = move.Valid;
                 tiles = move.Tiles.Select(tile => (object)new { x = tile.X, y = tile.Y, level = tile.Level }).ToArray();
                 previewReferenceObject = move.ReferenceObject;
@@ -3830,6 +3779,24 @@ internal sealed class SimulationServer
                 valid = cursor
                     ? current.CanPlaceObject(item, destination)
                     : current.CanPlaceObjectFromEditor(item, destination, out previewReferenceObject, out previewReferenceSlot);
+                if (!valid && !cursor && hoveredWallDir is not null)
+                {
+                    var altDir = (direction + 4) & 7;
+                    var altDirFlag = (byte)(1 << altDir);
+                    current.FaceCreatedObject(item, members, (short)altDir);
+                    if (current.CanPlaceObjectFromEditor(item, destination, out var altRefObj, out var altRefSlot))
+                    {
+                        direction = altDir;
+                        directionFlag = altDirFlag;
+                        valid = true;
+                        previewReferenceObject = altRefObj;
+                        previewReferenceSlot = altRefSlot;
+                    }
+                    else
+                    {
+                        current.FaceCreatedObject(item, members, (short)direction);
+                    }
+                }
                 if (!valid && !cursor && ObjectBuildModeType(item) == 5 && lot is { } currentPreviewLot &&
                     TryPrepareFireplaceFloors(current, currentPreviewLot, item, members, destination, out var previewUpdatedLot, out var previewFloorCost))
                 {
@@ -3956,7 +3923,9 @@ internal sealed class SimulationServer
                     try
                     {
                         scenePath = SceneExporter.Export(exportLot, current, registry, game, sceneDir, house,
-                            1_000_000 + ++previewRevision, level, wallMode, cameraOrientation, cutawayTile, roofsVisible, cutawayRooms: cutawayRooms);
+                            1_000_000 + ++previewRevision, level, wallMode, cameraOrientation, cutawayTile, roofsVisible,
+                            cutawayRooms: cutawayRooms, cutawaySim: CutawaySimTile(), cutawayZoom: cutawayZoom,
+                            showLoweredPortals: true);
                         var referenceScenePath = Path.Combine(sceneDir, $"scene-{revision}.json");
                         ghost = SceneExporter.PlacementGhost(scenePath, ghostIds, referenceScenePath);
                         if (changedWalls is { Count: > 0 })
@@ -3994,6 +3963,7 @@ internal sealed class SimulationServer
             schemaVersion = 1,
             valid = status == "Success",
             status,
+            direction = (int)directionFlag,
             tiles,
             ghost,
             wallPreview,
@@ -4003,8 +3973,8 @@ internal sealed class SimulationServer
     private const int TileCursorGuid = 0x437;
     private XObject? tileCursor;
 
-    /// <summary>Cursors.iff Tile Cursor (GUID 0x437, OBJD type 9) stands on the lot while Buy mode holds an item at the
-    /// pointer; Tutorial.iff BHAV 4101 "detect object cursor" waits for Set to Next to find it.</summary>
+    /// <summary>Ensures the tile cursor object (<c>Cursors.iff</c>, GUID 0x437, OBJD type 9) is
+    /// instantiated on the lot while an item is held in Buy mode.</summary>
     private void EnsureTileCursor(SimulationWorld current)
     {
         if (tileCursor is not null && current.ObjectById(tileCursor.Id) is not null) return;
@@ -4082,13 +4052,13 @@ internal sealed class SimulationServer
         lastRunningSpeed = 1;
         dialogResumeSpeed = HasBlockingDialog(world) ? 1 : 0;
         AttachNoticeListener(setup.World);
+        InitializeViewLevelFromSelectedSim();
         Export();
         return memberInstantiation;
     }
 
-    // Mac LoadGame selects household index zero after Neighborhood::LoadHouse. CPState::SetSelectedPerson
-    // calls PersonFinder::CreateInstance when that member has no live object; CreateInstance makes the
-    // person's selector object, searches from (0,0) with FindGoodLocationParams, then places it.
+    // When loading a lot, household member 0 is selected by default; if uninstantiated, a selector object
+    // searches outward from (0, 0) for a valid placement location.
     private string EnsureSelectedHouseholdMember(Family? family, int centerX, int centerY)
     {
         if (world is null || family is null) return "no-active-family";
@@ -4219,7 +4189,8 @@ internal sealed class SimulationServer
         return world.ObjectById(id) ?? throw new ArgumentException($"Object {id} is not in the active lot.");
     }
 
-    /// <summary>Vacation Island's winter lots (houses 40, 41, 42) have snow-covered outdoor ground.</summary>
+    /// <summary>Determines whether outdoor terrain is snow-covered on Vacation Island winter lots (houses
+    /// 40, 41, and 42).</summary>
     private bool GroundSnow() => house is 40 or 41 or 42;
 
     private (ObjectPosition Position, XObject Target) GroundPreview(JsonElement request, bool persistent = false)
@@ -4263,12 +4234,12 @@ internal sealed class SimulationServer
 
     private static string CanonicalRuntimePath(string housePath) => housePath + ".runtime.json";
 
-    /// <summary>FUN_0041607b, FUN_00444cf9, FUN_0047b178, and FUN_004286d1: updates LotSize (global 23),
-    /// LotHasHouse (global 22), FilterFlagsForTransitScreen (global 37), and the active family's FAMI.Flags
-    /// (bit 0 = baby on lot, bit 1 = phone on lot, clear bit 3) before serializing the lot.</summary>
+    /// <summary>Updates LotSize (global 23), LotHasHouse (global 22), FilterFlagsForTransitScreen (global
+    /// 37), and active family FAMI flags (bit 0 for baby present, bit 1 for phone present, clearing bit 3)
+    /// before saving.</summary>
     private void UpdatePreSaveState(SimulationWorld current, IffFile currentLot)
     {
-        // FUN_00415ef5 / FUN_00415e16 / FUN_0041607b: cXLot +0x18 -> +0x10 is the lot dimension (52 on House 05, 64 default).
+        // Sets simulation global LotSize to the lot dimension (52 for House 5, 64 by default).
         if (current[SimulationGlobal.LotSize] <= 3)
             current[SimulationGlobal.LotSize] = LotGeometry.LotDimension;
         current[SimulationGlobal.Hour] = checked((short)current.Clock.Hour);
@@ -4398,9 +4369,8 @@ internal sealed class SimulationServer
         }
     }
 
-    /// <summary>Mac Neighborhood::SaveHouse's sweep after House::SaveFile (see
-    /// <see cref="SimulationWorld.DeleteUnhousedCharacters"/>). DeleteCharacter's ObjectFolder::RemoveSelector then
-    /// deletes each removed character's file from the Characters folder.</summary>
+    /// <summary>Deletes removed unhoused character files from the Characters directory following a lot
+    /// save.</summary>
     private void DeleteUnhousedCharacters(string userData)
     {
         if (world is null) return;
@@ -4660,7 +4630,7 @@ internal sealed class SimulationServer
             usedNeighborIds.Add(nextNeighborId);
             memberNeighborIds.Add(nextNeighborId);
 
-            // FUN_00547754 (00547754.c:174-188) and FUN_004ea674: 88 shorts (0x58) for NBRS record version 0x49.
+            // NBRS record version 0x49 stores 88 16-bit integers of serialized person data.
             var personData = new short[88];
             if (member.Personality.Length >= 5)
             {
@@ -4850,7 +4820,6 @@ internal sealed class SimulationServer
         writer.Flush();
         return stream.ToArray();
     }
-
 
     private bool IsAwayLot(string userData, short targetHouse) =>
         suspendedHomeLot is not null && suspendedHomeLot.HomeHouse != targetHouse ||
@@ -5151,7 +5120,6 @@ internal sealed class SimulationServer
             }
         }
 
-        // Also preserve non-person singleton scopes (e.g. me.TypeRecord?.Key not registered in PersonTypeRecordSlots).
         foreach (var (slot, scope) in clonedScopes)
         {
             if (!sourceSlots.ContainsValue(slot) && !destWorld.InteractionScopes.ContainsKey(slot))
@@ -5202,7 +5170,6 @@ internal sealed class SimulationServer
             jobType
         });
 
-        // FUN_004FC63A / FUN_004F1B96: persist neighbor records and neighborhood state before switching lots.
         foreach (var person in sourceWorld.WalkOrder.OfType<XPerson>())
         {
             if (person[PersonData.NeighborId] > 0) sourceWorld.SavePersonRecord(person);
@@ -5287,8 +5254,8 @@ internal sealed class SimulationServer
             awayBudget.RestrictActivePersonKeys(restrictedKeys);
         }
 
-        // FUN_004f1b96 (004f1b96.c:46-47, 108-115, 160-161, 200-201) instantiates active away-lot
-        // household member(s) immediately before TransferScopes & initial Sim selection.
+        // Instantiates active household members on an away lot prior to transferring scopes and selecting
+        // the active Sim.
         if (!isReturnHome)
         {
             if (world.ActivePersonManagerPresent)
@@ -5377,7 +5344,6 @@ internal sealed class SimulationServer
         return true;
     }
 
-
     private static SaveRuntimeMetadata ReadSavedRuntimeMetadata(string path, ReadOnlyMemory<byte> lotBytes)
     {
         if (!File.Exists(path)) return new SaveRuntimeMetadata(1, 1);
@@ -5449,8 +5415,8 @@ internal sealed class SimulationServer
         }
     }
 
-    /// <summary>Lot-mode music from CPState::Update (004ce5de.c:159-215). House-number bands and zoning select the
-    /// shipped residential, Downtown, Vacation, Unleashed, Superstar, and Magic Town event families.</summary>
+    /// <summary>Selects mode music based on house number ranges and zoning categories, distinguishing
+    /// residential, Downtown, Vacation, Unleashed, Superstar, and Magic Town lots.</summary>
     internal static string ModeMusic(string mode, short house, bool isCommunityLot = false)
     {
         switch (mode.ToLowerInvariant())
@@ -5486,9 +5452,8 @@ internal sealed class SimulationServer
 
     private void UpdateAutoSpeed(SimulationWorld current)
     {
-        // FUN_0046daf2 (0046daf2.c:10-19), FUN_00442fdb (00442fdb.c:1-19), FUN_0046d8ac, and FUN_0046d8f7:
-        // On residential lots, when all selectable human household Sims are asleep or away at work/school,
-        // save the current running speed and switch to ultra-speed (10); restore when any human Sim wakes/returns.
+        // On residential lots, switches to ultra-speed (10) when all selectable household Sims are asleep
+        // or at work/school, restoring the previous speed when any Sim wakes or returns.
         if (testFixtureEnabled || house is 7 or >= 20 and <= 89 or >= 93 and <= 99 ||
             current[SimulationGlobal.SimlessBuildMode] != 0 ||
             current[SimulationGlobal.IsTutorialHouseNoYes] != 0 ||
@@ -5617,7 +5582,6 @@ internal sealed class SimulationServer
         var current = world;
         if (current?.ObjectById(ownerId) is not XPerson person || string.IsNullOrWhiteSpace(cue.Cue)) return;
 
-        // SAnimator::HandleTimeProps (00591301.c:97-240)
         switch (cue.Resource)
         {
             case "sound":
@@ -5665,7 +5629,7 @@ internal sealed class SimulationServer
 
     private string ResolveFootstepCue(XPerson person)
     {
-        // SAnimator::HandleTimeProps (00591301.c:135-209) & FUN_005890dc (005890dc.c:1-100)
+        // Outfit values 1, 2, 5, and 14 represent barefoot attire for footsteps.
         var barefoot = person[PersonData.CurrentOutfit] is 1 or 2 or 5 or 14;
         var tx = person.Position.X >> 4;
         var ty = person.Position.Y >> 4;
@@ -5769,7 +5733,8 @@ internal sealed class SimulationServer
             {
                 var familyId = (int)chunk.Id;
                 var family = Family.Read(neighborhood, chunk);
-                // Sims.exe FUN_00522fd0: exclude caller's family, require chunkId > 1999 or (chunkId != 0 && HouseNumber > 0)
+                // Excludes the caller's family and requires a family chunk ID above 1999 or an unhoused
+                // family with a positive house number.
                 if (familyId == callerFamilyId || familyId == activeFamilyChunkId ||
                     !(familyId > 1999 || (familyId != 0 && family.HouseNumber > 0)))
                     continue;
@@ -5777,7 +5742,8 @@ internal sealed class SimulationServer
                 var familyContacts = new List<object>();
                 foreach (var guid in family.Members)
                 {
-                    // Sims.exe FUN_00523046 / FUN_005230a9: resolve member by GUID, require Gender < 2 and caller relationship count > 0
+                    // Requires phone contacts to be human (gender values below 2) with at least one
+                    // existing relationship entry to the caller.
                     if (!neighborsByGuid.TryGetValue(guid, out var contact) ||
                         contact.Id == caller.Id ||
                         contact.PersonData[(int)PersonData.Gender] >= 2 ||
@@ -5845,7 +5811,8 @@ internal sealed class SimulationServer
 
     private bool IsHouseholdPerson(XPerson person) => ActiveFamily()?.Members.Contains(PersonGuid(person)) == true;
 
-    /// <summary>Use FAMI member order for portraits; other people remain after residents.</summary>
+    /// <summary>Orders Sim portraits by FAMI chunk member sequence, appending non-resident visitors
+    /// afterward.</summary>
     private XPerson[] PanelPeople()
     {
         if (world is null) return [];
@@ -5878,8 +5845,8 @@ internal sealed class SimulationServer
         var current = world;
         var family = ActiveFamily();
         if (current is null || family is null) return 0;
-        // cFamily::RecountFriends (00427c21.c:15-47) and FUN_0042720f: exclude pets (Gender < 2)
-        // and require mutual friendship >= FriendshipThreshold with a non-family human neighbor.
+        // Calculates family friends by counting non-family human neighbors (gender below 2) who maintain
+        // mutual relationships meeting or exceeding the friendship threshold.
         var members = family.Members.Select(guid => current.Neighbors.Values.FirstOrDefault(neighbor =>
             unchecked((uint)neighbor.TypeRecordKey) == guid)).Where(neighbor => neighbor is not null &&
                 neighbor.PersonData[(int)PersonData.PersonType] <= 1 &&
@@ -5977,10 +5944,7 @@ internal sealed class SimulationServer
             atWorkSchool = (int)person[PersonData.JobData],
             school,
             track = career?.TrackName(type),
-            // Mac cWinSubpanelJob passes the selected Sim's gender to cJob::GetName(bool).
             title = career?.JobText(type, level, JobTextKind.Title, female, language),
-            // Mac cJob construction loads the level description from the career STR table into cJob+0x3b4;
-            // WinSubpanelJob::SetupSummaryClient appends it below the localized hours/carpool template.
             jobDescription = career?.JobText(type, level, JobTextKind.Description, female, language),
             salary = career?.JobData(type, level, 1),
             startHour = career?.JobData(type, level, 12),
@@ -5988,9 +5952,7 @@ internal sealed class SimulationServer
             currentLevelRequirements = Requirements(level),
             nextLevelRequirements = Requirements(level + 1),
             performanceLabel = career?.GradeString(ratingIndex, language),
-            // Mac WinSubpanelReportCard::TSPaint calls cJob::GetGrade(JobPerformance), and
-            // cJob::GetGrade indexes work.iff STR# 0x1001 at performance + 1. CareerCatalog
-            // exposes the parsed STR# as a zero-based list, so preserve that one-based source index.
+            // School report card grades index STR# 0x1001 in <c>work.iff</c> at performance plus one.
             reportCardGrade = school ? career?.GradeString(performance + 1, language) : null,
             familyFriends = cachedFamilyFriends ?? FamilyFriends(),
         };
@@ -6000,7 +5962,7 @@ internal sealed class SimulationServer
     {
         if (!IsFamePanelEligible(person)) return null;
         var (tuning, titles) = FameResources();
-        // GetFameLevelFromPerson reads person data at byte offset 0xA2: zero-based field 81, Star Power.
+        // PersonData field 81 stores the Sim's Star Power level (0 to 10).
         var level = Math.Clamp((int)person[PersonData.FameStarPower09], 0, 10);
         var title = level < titles.Count ? titles[level] : "?";
         var skillData = new[]
@@ -6031,7 +5993,7 @@ internal sealed class SimulationServer
         if (person[PersonData.PersonType] is < 0 or > 1 || person[PersonData.FameScore] <= 0 || !HasSuperstarPack()) return false;
         var career = world?.CareerHost as CareerCatalog;
         var jobType = person[PersonData.JobType];
-        // CPState::GetShowFameUIPanel selects Fame in place of Career only when GetCareer returns null.
+        // Displays the Fame panel in place of the Career panel only when the Sim has no active career.
         return jobType == 0 || career?.JobData(jobType, person[PersonData.JobPromotionLevel], 0) is null;
     }
 
@@ -6047,8 +6009,8 @@ internal sealed class SimulationServer
         return (fameTuning, fameTitles);
     }
 
-    /// <summary>FUN_0043AF66 initializes the shared manager target before tuning import. When the Superstar
-    /// resource exists, populate its modeled threshold data from fame.iff; otherwise retain the empty manager shape.</summary>
+    /// <summary>Initializes fame scoring thresholds from <c>fame.iff</c> when Superstar expansion resources
+    /// are present.</summary>
     private void InitializeFameCallbackTarget(SimulationWorld targetWorld)
     {
         targetWorld.GenericSimsCallRecordCallbackTarget = HasSuperstarPack()
@@ -6062,7 +6024,6 @@ internal sealed class SimulationServer
         return Directory.Exists(folder) || File.Exists(folder + ".far");
     }
 
-    /// <summary>The Live PIP option the client last sent (Sims.exe GetLivePIP); every world this server runs shares it.</summary>
     private readonly PictureInPictureOptions pictureInPicture = new();
 
     private object[] PictureInPictureEvents(SimulationWorld lotWorld)
@@ -6228,16 +6189,12 @@ internal sealed class SimulationServer
                 x = item.Position.X / 16f,
                 y = item.Position.Y / 16f,
                 level = item.Position.Height,
-                // Native object data stores an eighth-turn index; the editor protocol uses the direction bit flags
-                // accepted by buyObject and moveObject (and returned by the legacy host).
+                // Converts an eighth-turn direction index (0..7) to bit flags for editor placement.
                 direction = (byte)(1 << (item[ObjectData.Direction] & 7)),
-                // FUN_00452237 updates this shared +0x7c use/lockout word when an object thread stops.
-                // Keep it in the native state snapshot so interaction ownership can be verified in replays.
                 useCount = (short)item[ObjectData.UseCount],
                 interactionLeaseCount = world.InteractionLifecycle.LeaseCount(item),
                 interactionWaiterCount = world.InteractionLifecycle.WaiterCount(item),
                 avatar = isPerson,
-                // FUN_0043538d / FUN_004354e5: the Hand tool's pick-up and sale tests.
                 movable = !isPerson && world.CanPickUpObject(item),
                 sellable = canSell,
                 buildModeType = buildType,
@@ -6251,8 +6208,8 @@ internal sealed class SimulationServer
             id = (int)person.Id,
             guid = (uint)(person.TypeRecord?.Key ?? 0),
             hideHover = (person.Definition[91] & 4) != 0,
-            // PersonFinder::GetName starts with any runtime-assigned Name (e.g. Dialog kind 3 rename),
-            // then non-internal neighbor label, then selector catalog name (Mac PersonFinder.s 0x1023A404–0x1023A464).
+            // Resolves a Sim's display name using runtime-assigned names first, falling back to neighbor
+            // record labels, and finally the catalog selector name.
             name = !string.IsNullOrWhiteSpace(person.Name)
                 ? person.Name
                 : world!.Neighbors.TryGetValue(person[PersonData.NeighborId], out var neighbor) && !IsInternalUserLabel(neighbor.Name)
@@ -6279,8 +6236,6 @@ internal sealed class SimulationServer
             zodiac = (int)person[PersonData.Zodiac],
             fameScore = (int)person[PersonData.FameScore],
             jobType = (int)person[PersonData.JobType],
-            // The original Personality panel reads these five live person-data words
-            // (Sims.exe FUN_004d7062 exports the same trait names from FAMI members).
             personality = new Dictionary<string, short>
             {
                 ["Neat"] = (short)person[PersonData.NeatQuietPersonality],
@@ -6289,9 +6244,8 @@ internal sealed class SimulationServer
                 ["Playful"] = (short)person[PersonData.PlayfulSmartPersonality],
                 ["Nice"] = (short)person[PersonData.NiceLoyalPersonality],
             },
-            // FUN_004d7062 and cWinInterest::SetInterest read the saved interest
-            // words from PersonData. The repeated first four words feed the child
-            // Toys/Aliens/Pets/School rows in the original age-specific panel.
+            // Reads interest values from PersonData fields, where fields 46 through 49 map to age-specific
+            // categories for child Sims.
             interests = new[] { 46, 47, 48, 49, 50, 51, 52, 53, 46, 47, 48, 49, 13, 14, 16, 20, 26, 54, 55 }
                 .Select(field => (short)person.PersonData[field]).ToArray(),
             x = person.Position.X / 16f,
@@ -6312,7 +6266,6 @@ internal sealed class SimulationServer
             fame = FamePanel(person),
             relationships = Relationships(person),
             portrait = world is null ? null : images?.Portrait(world, person),
-            // The grid of FUN_0051e3b5 lists the Sim's neighborhood inventory tokens (type, GUID, count).
             inventory = (world is null ? Array.Empty<AvatarInventory.Entry>() : world.NeighborInventory((short)person[PersonData.NeighborId]).Entries)
                 .Select(item => new { type = item.Key1, guid = unchecked((uint)item.Key2), count = (int)item.Count,
                     name = images?.ItemName(unchecked((uint)item.Key2), language) ?? $"Unknown Item ({item.Key2})",
@@ -6328,7 +6281,8 @@ internal sealed class SimulationServer
         if (world?.SavedSimulationState is not { Version: >= 0x26, BudgetDays.Count: 6 } saved) return null;
         var days = saved.BudgetDays;
         var today = days[0].Values.Take(8).Concat(Enumerable.Repeat(0, 8)).Take(8).ToArray();
-        // GetExpensesHistory adds the current values (+0x184) and the two newest historical rows (+0xe4, +0x104).
+        // Calculates three-day expenses by summing today's expenses with the previous two days of recorded
+        // history.
         var threeDay = Enumerable.Range(0, 8).Select(index =>
             today[index] + (days[1].Values.Count > index ? days[1].Values[index] : 0)
                        + (days[2].Values.Count > index ? days[2].Values[index] : 0)).ToArray();
@@ -6359,9 +6313,8 @@ internal sealed class SimulationServer
         lotValuationEdited = false;
     }
 
-    /// <summary>FUN_0041607b / FUN_00444cf9 / FUN_0043557a: live lot furnishings (+0xa0) and architecture (+0xa4)
-    /// valuation, preserving exact saved SIMI values on unedited lots while reflecting Buy/Build object,
-    /// architecture, and live simulation depreciation/breakage changes.</summary>
+    /// <summary>Calculates live lot furnishings and architecture valuations, preserving saved SIMI values
+    /// until modified by build, buy, depreciation, or breakage changes.</summary>
     private (int FurnishingsValue, int ArchitectureValue) CurrentLotValuation(SimulationState saved)
     {
         var currentObjects = SumPlacedObjectValues(world);
@@ -6402,8 +6355,9 @@ internal sealed class SimulationServer
 
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<IffFile, System.Runtime.CompilerServices.StrongBox<int>> architectureLayerValueCache = new();
 
-    /// <summary>FUN_0047b178: sums wall style half-prices, wallpaper prices on styles 1/7/8/9, floor tile prices,
-    /// split diagonal floor half-prices (0xff), and ground-level pool tile prices inside the buildable lot area.</summary>
+    /// <summary>Computes architectural valuation by summing wall structure half-prices, wallpaper coverings
+    /// on styles 1, 7, 8, and 9, floor tile prices, diagonal split floor half-prices, and ground pool
+    /// tiles.</summary>
     private int SumArchitectureLayerValue(IffFile targetLot) =>
         architectureLayerValueCache.GetValue(targetLot, ComputeArchitectureLayerValue).Value;
 
@@ -6579,9 +6533,8 @@ internal sealed class SimulationServer
         };
     }
 
-    // FUN_00416847 reads the saved SIMI value words (+0xa0/+0xa4), applies HouseScore curve 1 from
-    // Global.iff STR# 505 through FUN_004167d4, and converts the result with __ftol. The native engine
-    // currently preserves these values from the saved lot; native build/buy edits do not recalculate them yet.
+    // Evaluates house furnishings score by applying HouseScore curve 1 from <c>Global.iff</c> STR# 505 to
+    // furnishings and architecture values.
     private int? HouseFurnishingsScore((int FurnishingsValue, int ArchitectureValue)? precomputedValuation = null)
     {
         if (world?.SavedSimulationState is not { Version: >= 0x25 } saved || FurnishingsCurvePoints() is not { } points)
@@ -6610,11 +6563,12 @@ internal sealed class SimulationServer
         }
     }
 
-    // FUN_00416618 assigns class 0 through house 39, class 1 for houses 40–49, and class 2 above 49.
+    // Maps house numbers to lot size classes: 0 for houses up to 39, 1 for houses 40 through 49, and 2 for
+    // houses 50 and above.
     private int HouseLotSizeIndex() => house > 0x31 ? 2 : house > 0x27 ? 1 : 0;
 
-    // FUN_00416618 counts indoor cXRoom records with positive +0x58/+0x5c values.
-    // FUN_00467ee7 builds those counters from eligible category-4 and category-5..7 objects.
+    // Counts indoor bedrooms and bathrooms based on rooms containing bedroom (category 4) or bathroom
+    // (categories 5 through 7) fixtures.
     private (int Bedrooms, int Bathrooms)? HouseRoomCounts()
     {
         if (world is null || !world.RoomManagerRecordsLoaded || world.LotRoomMaps.Count == 0 ||
@@ -6627,9 +6581,8 @@ internal sealed class SimulationServer
             indoorRooms.Count(room => room.HouseCategory5To7ObjectCount5c > 0));
     }
 
-    // FUN_00416618 sums the indoor room tile count returned by FUN_004681ec and multiplies it by nine.
-    // Only use the native room classification when the lot contains the original outside-room flag grid;
-    // RoomMap's edge-based fallback is explicitly inferred and is not a safe value to show as house data.
+    // Calculates house square footage by multiplying the total number of enclosed indoor room tiles by
+    // nine.
     private int? HouseSquareFeet()
     {
         if (world is null || world.LotRoomMaps.Count == 0 || world.LotRoomMaps.Values.Any(map => !map.HasAuthoritativeOutsideRooms)) return null;
@@ -6640,8 +6593,7 @@ internal sealed class SimulationServer
         return checked(tiles * 9);
     }
 
-    // FUN_00416618 builds the five rating slots and FUN_00416890 scales the accumulated outside-room scores.
-    // Read only refreshed source room records with the saved Arry 8/108 classification and the installed FCNS multiplier.
+    // Calculates the yard score by accumulating outdoor room scores scaled by tuning multipliers.
     private int? HouseYardScore()
     {
         if (world is null || !world.RoomManagerRecordsLoaded || !float.IsFinite(world.HouseYardScoreMultiplier) || world.LotRoomMaps.Count == 0 ||
@@ -6651,9 +6603,8 @@ internal sealed class SimulationServer
         return float.IsFinite(score) ? (int)Math.Round(Math.Clamp(score, 0f, 100f), MidpointRounding.ToEven) : null;
     }
 
-    // FUN_0044532b counts objects whose OBJD RoomSort, FunctionSort or BuildModeType is nonzero. It adds
-    // the broken-object penalty when cXObject +0x68 (RepairState) is nonzero, otherwise the dirty-object
-    // penalty when +0x98 (DirtyLevel) is positive. FUN_004168ca returns 100 * clamp((count - penalty) / count).
+    // Calculates house upkeep score as 100 * (count - penalties) / count across catalog objects, applying
+    // penalties for broken items or dirty states.
     private int? HouseUpkeepScore()
     {
         if (world is null) return null;
@@ -6676,15 +6627,15 @@ internal sealed class SimulationServer
         return (int)Math.Round(ratio * 100f, MidpointRounding.ToEven);
     }
 
-    // FUN_0041655e persists the six layout-history pairs in HOUS #1; FUN_00416618 derives the displayed score.
+    // HOUS chunk 1 stores six historical layout value pairs used to derive the layout score.
     private int? HouseLayoutScore()
     {
         if (world is null || lot is null) return null;
         return HouseLayoutHistory.Read(lot, world.HouseLayoutHistoryFillValue)?.Score;
     }
 
-    // FUN_004167a5 feeds square feet per household member through the first curve in Global.far.
-    // Its source points are (0,0), (150,25), (300,50), (600,75), and (1200,100).
+    // Maps square footage per household member to a size score using curve points (0, 0), (150, 25), (300,
+    // 50), (600, 75), and (1200, 100).
     private static int HouseSizeScore(int squareFeet, int householdSize)
     {
         if (householdSize == 0) return 0;
@@ -6714,7 +6665,8 @@ internal sealed class SimulationServer
     private IffFile? buildableLot;
     private bool[]? buildableMask;
 
-    // FUN_00488924 refuses tiles flagged outside the lot and FUN_004893e4 the tiles without the buildable bit.
+    // Filters buildable tiles by verifying coordinates are inside lot bounds and carry the buildable flag
+    // bit.
     private bool[] Buildable()
     {
         if (lot is not { } currentLot) return Enumerable.Repeat(true, LotWidth * LotHeight).ToArray();
@@ -6829,17 +6781,27 @@ internal sealed class SimulationServer
                 cutawayTile, cutawayRooms, CutawaySimTile(), cutawayZoom))
         {
             exportedCutawaySimKey = CutawaySimKey();
-            if (SceneExporter.Animation(lot, world, registry, game, SceneDirectory, house, revision, animationState,
+            if (DirectAnimationSink is { } directSink)
+            {
+                if (SceneExporter.AnimationDirect(lot, world, registry, game, SceneDirectory, house, revision, animationState,
+                        ++animationSequence, updates, viewLevel, wallMode, cameraOrientation, cutawayTile, roofsVisible,
+                        cutawayRooms: cutawayRooms, cutawaySim: CutawaySimTile(), cutawayZoom: cutawayZoom,
+                        showLoweredPortals: doorWindowBuildToolActive) is { } directFrame)
+                    directSink(directFrame);
+            }
+            else if (SceneExporter.Animation(lot, world, registry, game, SceneDirectory, house, revision, animationState,
                     ++animationSequence, updates, viewLevel, wallMode, cameraOrientation, cutawayTile, roofsVisible,
                     cutawayRooms: cutawayRooms, cutawaySim: CutawaySimTile(), cutawayZoom: cutawayZoom,
                     showLoweredPortals: doorWindowBuildToolActive) is { } frame)
+            {
                 Write(new { type = "animation", frame });
+            }
             return;
         }
         Export();
     }
 
-    // Mac DoDynamicCutaway adds the selected Sim's room only in live mode and only for the viewed story.
+    // Applies dynamic room cutaways around the active Sim only in Live mode on the currently viewed story.
     private (int X, int Y)? CutawaySimTile()
     {
         if (wallMode != "cutaway" || editingView || world?.ObjectById(selectedSim) is not XPerson person) return null;
@@ -6847,14 +6809,58 @@ internal sealed class SimulationServer
         return (person.Position.X >> 4, person.Position.Y >> 4);
     }
 
-    // Walls cut by the selected Sim change when it enters another room, or moves while outdoors. Mac UpdateWorld
-    // recomputes the dynamic cutaway for the same reason.
+    // Recomputes dynamic wall cutaways whenever the selected Sim changes rooms or moves while outdoors.
     private long CutawaySimKey()
     {
         if (CutawaySimTile() is not { } tile || world is null || !world.LotRoomMaps.TryGetValue(viewLevel, out var map) ||
             tile.X >= map.Width || tile.Y >= map.Height) return -1;
         var room = map.RoomAt(tile.X, tile.Y);
         return map.IsOutside(room) ? ((long)tile.X << 40) | ((long)tile.Y << 20) | room : room;
+    }
+
+    private void InitializeViewLevelFromSelectedSim()
+    {
+        if (world is null)
+        {
+            viewLevel = 1;
+            return;
+        }
+
+        var level = (world.ObjectById(selectedSim) as XPerson)?.Position.Height ?? 1;
+        viewLevel = Math.Clamp(level, 1, Math.Max(1, Stories));
+    }
+
+    private void ApplyCutawayTarget(JsonElement request)
+    {
+        if (request.TryGetProperty("zoom", out var zoomValue) && zoomValue.ValueKind == JsonValueKind.Number && zoomValue.TryGetInt32(out var requestedZoom))
+        {
+            cutawayZoom = Math.Clamp(requestedZoom, 1, 3);
+        }
+        var cutawayX = TileCoordinate(request, "x");
+        var cutawayY = TileCoordinate(request, "y");
+        if (cutawayX < 0 || cutawayY < 0) ClearCutaway();
+        else if (cutawayX >= LotWidth || cutawayY >= LotHeight) throw new ArgumentException("Cutaway tile is outside the lot.");
+        else
+        {
+            cutawayTile = (cutawayX, cutawayY);
+            if (world is not null && world.LotRoomMaps.TryGetValue(viewLevel, out var roomMap) &&
+                cutawayX < roomMap.Width && cutawayY < roomMap.Height)
+            {
+                var cutawayCamera = new LotCamera(cameraOrientation, LotWidth, LotHeight);
+                var hoveredRoom = roomMap.RoomAt(cutawayX, cutawayY);
+                if (hoveredRoom != RoomMap.NoRoom && !cutawayRooms.Contains(hoveredRoom))
+                {
+                    cutawayRooms.Add(hoveredRoom);
+                    if (cutawayRooms.Count > 3) cutawayRooms.RemoveAt(0);
+                }
+                var probeRoom = SceneExporter.CutawayProbeRoom(roomMap, cutawayCamera, LotWidth, cutawayX, cutawayY, cutawayZoom);
+                if (probeRoom != RoomMap.NoRoom && !cutawayRooms.Contains(probeRoom))
+                {
+                    cutawayRooms.Add(probeRoom);
+                    if (cutawayRooms.Count > 3) cutawayRooms.RemoveAt(0);
+                }
+            }
+        }
     }
 
     private void ClearCutaway()

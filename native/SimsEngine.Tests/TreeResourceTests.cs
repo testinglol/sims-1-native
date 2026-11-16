@@ -2,8 +2,6 @@ using SimsEngine.Formats;
 
 namespace SimsEngine.Tests;
 
-/// <summary>SLOT, TPRP and TRCN on hand-built chunks, following the layouts of Sims.exe FUN_0046e1fa, FUN_004742c6
-/// and FUN_00473b0f.</summary>
 public class TreeResourceTests
 {
     private static ChunkBuilder SlotHeader(int version, int count) =>
@@ -54,7 +52,6 @@ public class TreeResourceTests
     [Fact]
     public void TprpVersion4SkipsEvenPadding()
     {
-        // Header is 20 bytes, so "Random" (7 bytes with the terminator) is followed by one padding byte.
         var chunk = new ChunkBuilder().U32(0).S32(4).Tag("PRPT").S32(2).S32(1)
             .EvenString("Random").EvenString("param 1", 0).EvenString("Temp")
             .U32(1).U8(1).U8(0).U32(5).U32(6);

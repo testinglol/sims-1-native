@@ -43,60 +43,63 @@ fragment main0_out main0(main0_in in [[stage_in]])
     main0_out out = {};
     int detail = int(in.inDetail.x + 0.5);
     int zoom = clamp(int(in.inDetail.y + 0.5), 1, 3);
-    int2 pixel = int2(floor((in.inCoordinate * float(1 << zoom)) * 0.25));
+    float2 artCoord = (in.inCoordinate * float(1 << zoom)) * 0.25;
+    int2 pixel = int2(floor(artCoord));
+    float2 fw = fwidth(artCoord);
+    float ditherWeight = 1.0 - smoothstep(0.949999988079071044921875, 1.85000002384185791015625, fast::max(fw.x, fw.y));
     int column = pixel.x & 3;
-    float _127;
+    float _144;
     if ((pixel.y & 1) == 0)
     {
-        float _132;
+        float _149;
         if (column == 1)
         {
-            _132 = -8.0;
+            _149 = -8.0;
         }
         else
         {
-            _132 = (column == 3) ? (-6.0) : 0.0;
+            _149 = (column == 3) ? (-6.0) : 0.0;
         }
-        _127 = _132;
+        _144 = _149;
     }
     else
     {
-        float _146;
+        float _163;
         if (column == 0)
         {
-            _146 = -6.0;
+            _163 = -6.0;
         }
         else
         {
-            _146 = (column == 2) ? (-8.0) : 0.0;
+            _163 = (column == 2) ? (-8.0) : 0.0;
         }
-        _127 = _146;
+        _144 = _163;
     }
-    float shade = _127;
+    float shade = _144 * ditherWeight;
     if (detail > 0)
     {
         float value = floor((in.inGrass * 255.0) + 0.5) - 128.0;
         float low = (detail == 1) ? 300.0 : 500.0;
         float high = (detail == 1) ? 800.0 : 1200.0;
-        float _185;
+        float _204;
         if (value >= 85.0)
         {
-            _185 = high;
+            _204 = high;
         }
         else
         {
-            float _193;
+            float _212;
             if (value <= (-73.0))
             {
-                _193 = low;
+                _212 = low;
             }
             else
             {
-                _193 = floor(low + (((high - low) * (value + 73.0)) / 158.0));
+                _212 = floor(low + (((high - low) * (value + 73.0)) / 158.0));
             }
-            _185 = _193;
+            _204 = _212;
         }
-        float count = _185;
+        float count = _204;
         if (zoom == 1)
         {
             count = floor(count / 4.0);
@@ -104,8 +107,8 @@ fragment main0_out main0(main0_in in [[stage_in]])
         float tile = float(16 << zoom);
         float coverage = 1.0 - exp((-count) / ((tile * tile) * 0.25));
         int tallest = (zoom == 3) ? 4 : 1;
-        int _277;
-        float _314;
+        int _295;
+        float _332;
         for (int below = 0; below < tallest; below++)
         {
             int2 start = pixel + int2(0, below);
@@ -120,13 +123,13 @@ fragment main0_out main0(main0_in in [[stage_in]])
             uint random = hash(param_2, param_3);
             if (tallest > 1)
             {
-                _277 = tallest - int(random % uint(tallest / 2));
+                _295 = tallest - int(random % uint(tallest / 2));
             }
             else
             {
-                _277 = tallest;
+                _295 = tallest;
             }
-            int height = _277;
+            int height = _295;
             if (value <= (-73.0))
             {
                 height = max(1, (height - 1));
@@ -138,13 +141,13 @@ fragment main0_out main0(main0_in in [[stage_in]])
             uint spread = (random >> uint(8)) % 31u;
             if (((random >> uint(16)) & 1u) == 1u)
             {
-                _314 = 30.0 - float(spread);
+                _332 = 30.0 - float(spread);
             }
             else
             {
-                _314 = 30.0 + float(spread);
+                _332 = 30.0 + float(spread);
             }
-            shade = _314;
+            shade = _332;
             break;
         }
     }

@@ -1,20 +1,14 @@
 namespace SimsEngine.Simulation;
 
-/// <summary>The data owners of a variable reference (Behavior.iff STR# 132, "data owners"). Each member's comment is
-/// the label as the file spells it.</summary>
 public enum DataOwner : short
 {
     /// <summary>"My Attribute"</summary>
     MyAttribute = 0,
     /// <summary>"Stack Obj's Attribute"</summary>
     StackObjectAttribute = 1,
-    /// <summary>"targ obj attr ( DO NOT USE )": Sims.exe rejects it.</summary>
     TargetObjectAttribute = 2,
-    /// <summary>"My": my object data.</summary>
     My = 3,
-    /// <summary>"Stack Object's": the stack object's object data.</summary>
     StackObject = 4,
-    /// <summary>"targ obj's ( DO NOT USE )": Sims.exe rejects it.</summary>
     TargetObject = 5,
     /// <summary>"Global ( from Simulation )"</summary>
     Global = 6,
@@ -84,7 +78,6 @@ public enum DataOwner : short
     NeighborObjectDefinition = 38,
 }
 
-/// <summary>The Expression primitive's operators (Behavior.iff STR# 136, "operators").</summary>
 public enum ExpressionOperator : byte
 {
     /// <summary>"&gt;"</summary>
@@ -131,9 +124,6 @@ public enum ExpressionOperator : byte
     AssignSquareRoot = 20,
 }
 
-/// <summary>The errors the simulator raises, numbered as Sims.exe throws them. Each member's comment is the message
-/// Sims.exe FUN_0043a0ca shows for it; the members without a message there (55, 63, 64) are named from where they are
-/// thrown.</summary>
 public enum SimulationError : short
 {
     /// <summary>"No Error"</summary>
@@ -156,8 +146,6 @@ public enum SimulationError : short
     StackNumberOutOfRange = 8,
     /// <summary>"Illegal owner field in data reference."</summary>
     IllegalOwnerFieldInDataReference = 9,
-    /// <summary>"Reference to tree tree parameter when no parameter exists." Sims.exe also throws it when a stack
-    /// object is required and missing.</summary>
     ReferenceToTreeParameterWhenNoParameterExists = 10,
     /// <summary>"Reference to target object when none exists."</summary>
     ReferenceToTargetObjectWhenNoneExists = 12,
@@ -245,7 +233,6 @@ public enum SimulationError : short
     InvalidActionInTutorialPrimitive = 53,
     /// <summary>"More than one passing value specified."</summary>
     MoreThanOnePassingValueSpecified = 54,
-    /// <summary>No message; thrown when "neighbor's person data" or "Neighbor's Object Definition" names no neighbor.</summary>
     NeighborNotFound = 55,
     /// <summary>"Bad expense type specified."</summary>
     BadExpenseTypeSpecified = 56,
@@ -261,13 +248,10 @@ public enum SimulationError : short
     StartObjectRequired = 61,
     /// <summary>"Tree break encountered."</summary>
     TreeBreakEncountered = 62,
-    /// <summary>No message; thrown for a global number above 63.</summary>
     GlobalNumberOutOfRange = 63,
-    /// <summary>No message; thrown for a type attribute number out of range.</summary>
     TypeAttributeNumberOutOfRange = 64,
 }
 
-/// <summary>A simulator error, as Sims.exe throws it (an int code caught by the tree runner).</summary>
 public sealed class SimulationException(SimulationError error, string? detail = null)
     : Exception($"Simulation error {(short)error}: {error}{(detail is null ? string.Empty : $" ({detail})")}")
 {

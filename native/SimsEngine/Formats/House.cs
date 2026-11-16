@@ -1,13 +1,8 @@
 namespace SimsEngine.Formats;
 
-/// <summary>The house record (HOUS) of a lot file, as Sims.exe FUN_004a8935 reads it from the resource stream
-/// (vtable 0x668794, loaded by FUN_004b4472).
-/// <para>Fields in stream order: a u32 holding two flags (Sims.exe sets the one at +0x48 when any bit above the low
-/// byte is set, otherwise the one at +0x49 when the low byte is nonzero); three u32 lot globals (DAT_006f0088,
-/// DAT_006f0080 and DAT_006f0084, not traced further); from version 9 the camera rotation as an s16 (FUN_00479318 uses
-/// it modulo 4); from version 29 an s16 kept at +0x18 (1 before); from version 42 an s16 flag kept at +0x51; from
-/// version 49 the roof pitch as a float and the roof style name (FUN_0056f23d and FUN_0056f32e; the pitch is clamped
-/// when it is applied and defaults to 0.5).</para></summary>
+/// <summary>Represents the house record (HOUS) resource in a lot file. Stream fields include lot flags,
+/// global lot identifiers, camera rotation index (modulo 4, version 9+), and roof pitch and style name
+/// (version 49+, where pitch defaults to 0.5).</summary>
 public sealed class House
 {
     public int Version { get; }
@@ -23,7 +18,6 @@ public sealed class House
     public float? RoofPitch { get; }
     public string? RoofName { get; }
 
-    /// <summary>The chunk offset where the roof pitch starts (the end of the chunk before version 49).</summary>
     public int RoofOffset { get; private init; }
 
     private House(int version, uint flags, int global88, int global80, int global84, short? rotation, short field18,

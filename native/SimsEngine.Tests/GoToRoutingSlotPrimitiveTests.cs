@@ -17,7 +17,8 @@ public sealed class GoToRoutingSlotPrimitiveTests
         protected override void Popped(StackFrame frame) => OnPopped?.Invoke();
     }
 
-    // Bytes 0 and 1 are the index, bytes 2 and 3 the mode, byte 4 the flags. The other bytes are not read.
+    // GoToRoutingSlot operand encodes the slot index at bytes 0–1, routing mode at bytes 2–3, and flags at
+    // byte 4.
     private static byte[] Operand(short index, short mode, byte flags = 0) =>
         [(byte)index, (byte)(index >> 8), (byte)mode, (byte)(mode >> 8), flags, 0xEE, 0xEE, 0xEE];
 
@@ -43,8 +44,8 @@ public sealed class GoToRoutingSlotPrimitiveTests
             return RouteExecutor.AuthoredRouteCandidateCapacity(world, person);
         }
 
-        Assert.Equal(48, Capacity(15, 16)); // +0x38 / 2 = 240.
-        Assert.Equal(8, Capacity(16, 16)); // +0x38 / 2 = 256, over the source threshold 250.
+        Assert.Equal(48, Capacity(15, 16));
+        Assert.Equal(8, Capacity(16, 16));
     }
 
     [Fact]
@@ -71,7 +72,8 @@ public sealed class GoToRoutingSlotPrimitiveTests
         Assert.True(RouteExecutor.CanStep(world, map, (2, 1), (3, 1)));
         Assert.False(RouteExecutor.CanStep(world, map, (2, 1), (3, 2)));
 
-        // A door elsewhere in the same source room cannot authorize this wall edge.
+        // A portal only authorizes crossing the specific wall edge it occupies, not other wall edges within
+        // the same room.
         world.SetObjectPosition(portal, new ObjectPosition(1 * 16 + 8, 1 * 16 + 8, 1));
         Assert.False(RouteExecutor.CanStep(world, map, (2, 1), (3, 1)));
     }
@@ -163,7 +165,6 @@ public sealed class GoToRoutingSlotPrimitiveTests
         Assert.Null(RouteExecutor.SelectPreRankedPortal([portal], 0));
     }
 
-    // Me is person 100 and the frame's stack object is object 2, with three routing slots; the lot's table has two.
     private static (TreeContext Context, PrimitiveTestHost Host) World(short[]? parameters = null, short stackObject = 2)
     {
         var (context, _, host) = PrimitiveTestWorld.Create(parameters, stackObject);
@@ -177,7 +178,8 @@ public sealed class GoToRoutingSlotPrimitiveTests
         return (context, host);
     }
 
-    // The route executor moves a Sim by the root motion of Global.iff STR# 150's walk clips.
+    // Route execution drives Sim locomotion using root motion defined in Global.iff string table 150 walk
+    // clips.
     internal static void AddWalkClips(SimulationWorld world)
     {
         var samples = Enumerable.Range(0, 31).Select(i => new System.Numerics.Vector3(i * 0.5f, 0f, 0f)).ToArray();
@@ -186,8 +188,6 @@ public sealed class GoToRoutingSlotPrimitiveTests
                 null, 15f, new System.Numerics.Vector3(15f, 0f, 0f), samples, 1000f,
                 LocomotionMarkerOne: index == 20 ? new AvatarAnimationMarker(0.25f, "lfoot") : null,
                 LocomotionMarkerTwo: index == 20 ? new AvatarAnimationMarker(0.75f, "rfoot") : null);
-        // Synthetic authored stride inputs for the source marker/fade completion path. These are fixture data,
-        // not evidence for any installed animation's marker times or skeleton geometry.
         world.LocomotionStrideResolver = (_, _) => (40f, 40f);
     }
 
@@ -228,15 +228,15 @@ public sealed class GoToRoutingSlotPrimitiveTests
         if (reference.Slots.Count == 0) reference.Slots.Add(0);
     }
 
-    // FUN_004338a5's person-candidate scan skips an object neighbor when its +0x5a Flags has 0x10 set.
-    // Keep route-anchor fixture overlap behavior explicit; solid blockers in these tests remain unchanged.
+    // Route candidate collision scanning ignores neighboring objects that have flag 0x10 set, allowing Sims
+    // to overlap the anchor.
     private static void AllowPersonOverlapWithRouteAnchor(XObject anchor) => anchor[ObjectData.Flags] |= 0x10;
 
     [Fact]
     public void NonSolidRouteTargetDoesNotBecomeTheIntermediatePlacementReference()
     {
-        // Destination.iff's initializer sets Flags bit 2. Route movement still validates
-        // ordinary placement (FUN_00589d4b passes null reference/slot arguments).
+        // Route movement validates standard object placement rules against destination objects even when
+        // flag bit 2 is set.
         var (context, _) = World();
         var world = context.World;
         var person = (XPerson)context.Me;
@@ -259,8 +259,8 @@ public sealed class GoToRoutingSlotPrimitiveTests
     [Fact]
     public void RouteWaypointsRemoveOldTileRootsAndKeepCurrentOccupancy()
     {
-        // FUN_00589d4b -> cXPerson +0x88 (0045e655) -> FUN_004333ef applies
-        // every movement step through placement, not just the final destination.
+        // Route execution validates placement rules at every intermediate movement step, not merely at the
+        // final destination.
         var (context, _) = World();
         var world = context.World;
         var person = (XPerson)context.Me;
@@ -290,8 +290,8 @@ public sealed class GoToRoutingSlotPrimitiveTests
     [Fact]
     public void DirectPositionRouteUsesOrdinaryPlacementAndWritesNoSlotRelationship()
     {
-        // The explicit-position helper must arrive without binding a slot. User Go Here
-        // commands use Destination.iff's queued BHAV rather than this helper.
+        // Routing directly to an explicit position completes without binding a routing slot, whereas user
+        // Go Here commands route through Destination.iff interactions.
         var (context, _) = World();
         var person = (XPerson)context.Me;
         context.World.LotRoomMaps[1] = OpenRoom();
@@ -457,8 +457,8 @@ public sealed class GoToRoutingSlotPrimitiveTests
                 OptimalProximity = 16, Resolution = 16 });
 
         Assert.NotNull(destination);
-        // This authored region contains exactly one point at radius 16. With flag 0x2000,
-        // FUN_0046f556 advances state 1 once to 0x41c67ea6 for its score perturbation.
+        // When route flag 0x2000 is set, candidate slot evaluation perturbs scores by advancing the random
+        // number generator.
         Assert.Equal(expectedRandomState, context.World.RandomState);
     }
 
@@ -481,7 +481,7 @@ public sealed class GoToRoutingSlotPrimitiveTests
                 OptimalProximity = 16, Resolution = 16 });
 
         Assert.Null(destination);
-        // FUN_00483572 adjusts score before FUN_00481593 classifies the blocked endpoint.
+        // Candidate slot scores are adjusted before evaluating whether the route endpoint is blocked.
         Assert.Equal(0x41c67ea6u, context.World.RandomState);
     }
 
@@ -598,7 +598,7 @@ public sealed class GoToRoutingSlotPrimitiveTests
     {
         var (context, host) = World();
         host.RoutingEnabledAnswer = false;
-        // Mode 9 is not valid, but the routing check comes first.
+        // Routing availability is checked before validating the routing mode argument.
         Assert.Equal(PrimitiveResult.False, GoToRoutingSlotPrimitive.Execute(context, Operand(0, 9)));
         Assert.Equal(new[] { "RoutingEnabled" }, host.Calls);
     }
@@ -672,7 +672,8 @@ public sealed class GoToRoutingSlotPrimitiveTests
         Assert.Null(((XPerson)context.Me).NativeRoute);
         var dx = context.Me.Position.X - anchorPosition.X;
         var dy = context.Me.Position.Y - anchorPosition.Y;
-        // The goal rounds to lot integers, so a diagonal approach lands just inside the authored radius.
+        // Route goals round to integer lot coordinates, causing diagonal approaches to land within one unit
+        // of the authored radius.
         Assert.InRange(Math.Sqrt(dx * dx + dy * dy), 15.0, 17.0);
         Assert.Equal((short)0, context.Me[ObjectData.PrimitiveResult]);
     }
@@ -744,7 +745,8 @@ public sealed class GoToRoutingSlotPrimitiveTests
         var destination = RouteExecutor.SelectDestination(context.World, (XPerson)context.Me,
             context.StackObject!, slot);
 
-        // With the request's wall-check flag (operand byte 6 bit 2) set, the wall-crossing anchor point is rejected.
+        // Setting operand byte 6 bit 2 enforces wall checks, rejecting routing anchor positions that cross
+        // walls.
         Assert.Equal(expected ? anchorPosition : null, destination?.Position);
     }
 
@@ -906,7 +908,8 @@ public sealed class GoToRoutingSlotPrimitiveTests
         context.World.SetObjectPosition(person, new ObjectPosition(8 * 16 + 8, 8 * 16 + 8, 1));
         context.World.SetObjectPosition(anchor, candidate);
 
-        // FUN_00432a70 bounds the request index against cXObject +0x130, not its occupied-slot relation.
+        // Routing slot requests are validated against the object's total defined footprint slots rather
+        // than its occupied slot collection.
         anchor.FootprintSlots.Add(new ObjectFootprintSlot { HeightCode = 1 });
         Assert.True(context.World.CanPlaceRouteCandidate(person, candidate, anchor, referenceSlotIndex: 0));
 
@@ -981,8 +984,8 @@ public sealed class GoToRoutingSlotPrimitiveTests
             anchor.FootprintSlots.Select(slot => slot.OccupantObjectId).ToArray());
     }
 
-    // FUN_00432a70 allows the selected +0x130 record's empty +0x10 occupant key or the mover's
-    // own +0xf0 manager key, and rejects a different key before apply-mode displacement.
+    // Route slot validation permits slots that are empty or already occupied by the routing Sim, rejecting
+    // slots held by other objects.
     [Theory]
     [InlineData(0, true)]
     [InlineData(3, false)]
@@ -1067,8 +1070,8 @@ public sealed class GoToRoutingSlotPrimitiveTests
         Assert.Equal(PrimitiveResult.Stop, result);
         Assert.True(person.Position.X > 5 * 16 + 8);
 
-        // The slot was empty when FUN_00432a70 validated the route. A competing object arrives
-        // before apply mode, where the source detaches it and links it to person slot 0.
+        // When a competing object claims a validated slot before route completion, the arriving Sim
+        // detaches the occupant and links it to container slot 0.
         anchor.Slots.AddRange([0, displaced.ClockManagerIndex]);
         anchor.FootprintSlots[0].OccupantObjectId = displaced.ClockManagerIndex;
         displaced[ObjectData.ParentId] = anchor.ClockManagerIndex;
@@ -1158,7 +1161,7 @@ public sealed class GoToRoutingSlotPrimitiveTests
             result = ExecuteAndTick(context, Operand(0, 2));
 
         Assert.Equal(PrimitiveResult.True, result);
-        // The authored facing 3 is relative to anchor direction 4 and wraps to direction 7.
+        // Authored slot facings are relative to the anchor object's direction and wrap modulo 8.
         Assert.Equal((short)7, context.Me[ObjectData.Direction]);
     }
 
@@ -1171,8 +1174,8 @@ public sealed class GoToRoutingSlotPrimitiveTests
         var sameTile = new ObjectPosition(8 * 16 + 8, 8 * 16 + 8, 1);
         context.World.SetObjectPosition(context.Me, sameTile);
         context.World.SetObjectPosition(context.StackObject!, sameTile);
-        // FUN_00589d4b state 2 rejects the completed root through placement (+0x54); the shared tile needs the
-        // anchor's person-overlap flag.
+        // Final route placement rejects positions sharing a tile with the anchor object unless the anchor
+        // has the person-overlap flag set.
         AllowPersonOverlapWithRouteAnchor(context.StackObject!);
         AddDefinitionBackedReferenceSlot(context.StackObject!);
         context.Me.TypeRecord = new TypeRecord(context.Me.Id) { FootprintMask = 0x4444 };
@@ -1185,9 +1188,8 @@ public sealed class GoToRoutingSlotPrimitiveTests
 
         Assert.Equal(PrimitiveResult.True, result);
         Assert.Equal((short)0, context.Me[ObjectData.Direction]);
-        // Every segment of this same-tile route is degenerate, so the route-distance block reaches the terminal
-        // facing entry in the first Tick (SAnimator.s 0x10351748, 0x10350BE4) and the root turns to the arrival
-        // facing before state 2 places it. The final placement therefore records that heading.
+        // When a route consists entirely of degenerate zero-length segments, the animation system
+        // immediately turns the Sim to the arrival facing before final placement.
         Assert.Equal((short)0, ((XPerson)context.Me).FootprintBoundsDirection);
     }
 
@@ -1209,7 +1211,8 @@ public sealed class GoToRoutingSlotPrimitiveTests
             result = ExecuteAndTick(context, Operand(0, 2));
 
         Assert.Equal(PrimitiveResult.True, result);
-        // With no authored approach bit, FUN_0045c4fa Facing -2 faces back toward the anchor origin from the slot offset.
+        // A slot facing value of -2 directs the Sim to face back toward the anchor object's origin from the
+        // slot offset when no approach bit is authored.
         Assert.Equal((short)2, context.Me[ObjectData.Direction]);
     }
 
@@ -1223,7 +1226,8 @@ public sealed class GoToRoutingSlotPrimitiveTests
         context.World.SetObjectPosition(context.Me, new ObjectPosition(5 * 16 + 8, 5 * 16 + 8, 1));
         context.World.SetObjectPosition(context.StackObject!, new ObjectPosition(10 * 16 + 8, 10 * 16 + 8, 1));
         context.StackObject!.FootprintSlots.Add(new ObjectFootprintSlot { HeightCode = 2 });
-        // Walking uses the floor bit as well as the destination's slot-height bit.
+        // Walking path validation checks both the floor height bit and the destination slot height bit in
+        // the allowed height flags.
         context.Me[ObjectData.AllowedHeightFlags] = 3;
         context.World.LotRoutingSlots.Add(new RoutingSlotRequest { SnapTargetSlot = 0, X = 16 });
 
@@ -1274,7 +1278,6 @@ public sealed class GoToRoutingSlotPrimitiveTests
         var person = (XPerson)context.Me;
         var start = new ObjectPosition(88, 88, 1);
         context.World.SetObjectPosition(person, start);
-        // A solid object at the root would reject ordinary placement if the pending callback invoked it.
         var blocker = context.World.Add(new XObject(500, PrimitiveTestWorld.Definition())
         {
             TypeRecord = new TypeRecord(500) { FootprintMask = 0x4444 },
@@ -1339,7 +1342,6 @@ public sealed class GoToRoutingSlotPrimitiveTests
         person.AnimationPlayback = null;
         context.World.StandardWalkFallbackAnimationTable.Clear();
 
-        // FUN_00589d4b state 2 only projects/checks/places the root, then callback state 9 ends follow.
         Assert.Equal(PrimitiveResult.True, RouteExecutor.Continue(context.World, person, context.Frame, null));
         Assert.Equal(new ObjectPosition(168, 88, 1), person.Position);
         Assert.Null(person.NativeRoute);
@@ -1361,9 +1363,6 @@ public sealed class GoToRoutingSlotPrimitiveTests
 
         var result = ExecuteAndTick(context, Operand(0, 2));
         Assert.Equal(PrimitiveResult.Stop, result);
-        // The first state-3 Tick redispatches into state 9, and the route-distance block skips the seed's
-        // zero-length segment within that Tick (SAnimator.s 0x1034F4EC, 0x10351748, 0x10350BE4), so the
-        // root leaves the start point before the next route callback.
         Assert.True(((XPerson)context.Me).AnimatorRootX > 5 * 16 + 8);
         Assert.Equal(5 * 16 + 8, context.Me.Position.Y);
         Assert.Equal(1, ((XPerson)context.Me).NativeRoute!.AnimatorFollowState);
@@ -1396,7 +1395,6 @@ public sealed class GoToRoutingSlotPrimitiveTests
 
         var start = context.Me.Position;
         var result = ExecuteAndTick(context, Operand(0, 2));
-        // The first callback enters follow state 1 at the start tile; tick until root motion leaves it.
         for (var callback = 0; callback < 64 && result == PrimitiveResult.Stop && context.Me.Position == start; callback++)
             result = ExecuteAndTick(context, Operand(0, 2));
 
@@ -1405,9 +1403,8 @@ public sealed class GoToRoutingSlotPrimitiveTests
         Assert.Equal(dx < 0, context.Me.Position.X < 5 * 16 + 8);
         Assert.Equal(dy > 0, context.Me.Position.Y > 5 * 16 + 8);
         Assert.Equal(dy < 0, context.Me.Position.Y < 5 * 16 + 8);
-        // Without standing-turn clips the Sim enters gait unturned; the Mac follow/gait block (SAnimator.s
-        // 0x10350BF8-0x10350E28) wraps and clamps each heading step toward the waypoint, so every gait tick
-        // shortens the heading error until arrival applies the slot's facing.
+        // When standing turn animations are absent, the Sim enters locomotion directly and clamps
+        // incremental heading steps toward the waypoint each tick until reaching the arrival facing.
         var person = (XPerson)context.Me;
         static float Error(float direction, short target)
         {
@@ -1436,7 +1433,8 @@ public sealed class GoToRoutingSlotPrimitiveTests
     [InlineData(-3, 1, 6)]
     public void WaypointFacingMatchesSimsOctantThresholds(int dx, int dy, short expectedDirection)
     {
-        // FUN_00452129 uses strict absX * 2 < absY and inclusive absX <= absY * 2 comparisons.
+        // Waypoint direction quantization uses a strict two-to-one coordinate delta ratio for cardinal axes
+        // and an inclusive ratio for diagonals.
         Assert.Equal(expectedDirection, RouteExecutor.DirectionToWaypoint((0, 0), (dx, dy)));
     }
 
@@ -1486,8 +1484,8 @@ public sealed class GoToRoutingSlotPrimitiveTests
             RouteExecutor.Start(world, person, context.Frame, anchor, new RoutingSlotRequest(), null));
 
         var route = person.NativeRoute!;
-        // The route vector repeats the seed when the Sim stands on its cell's representative point; Tick skips
-        // that zero-length segment (SAnimator.s 0x10351748), so the walk heads for the first distinct point.
+        // When a route begins with a zero-length segment at the starting position, the motion controller
+        // skips it and heads directly toward the first distinct waypoint.
         var firstStep = route.MotionPath!.First(point => point.X != person.Position.X || point.Y != person.Position.Y);
         var direction = RouteExecutor.DirectionToWaypoint((person.Position.X, person.Position.Y),
             (firstStep.X, firstStep.Y));
@@ -1503,9 +1501,9 @@ public sealed class GoToRoutingSlotPrimitiveTests
 
         RouteExecutor.Continue(world, person, context.Frame, null);
 
-        Assert.Equal(controlState, person.AnimatorControlState); // Mac states 6/11 start WalkingStart/RunningStart.
-        Assert.Equal(0, person.AnimatorGaitEntryState); // +0x194
-        Assert.Equal(0, person.AnimatorPoolTransitionState); // +0x288
+        Assert.Equal(controlState, person.AnimatorControlState);
+        Assert.Equal(0, person.AnimatorGaitEntryState);
+        Assert.Equal(0, person.AnimatorPoolTransitionState);
         Assert.Equal(startSkill, person.NativeRoute!.MotionAnimationIndex);
         var startRoute = person.NativeRoute;
         Assert.Equal(startRoute.MotionX, startRoute.StartRootOriginX!.Value);
@@ -1604,8 +1602,8 @@ public sealed class GoToRoutingSlotPrimitiveTests
         world.StandardWalkFallbackAnimationTable[(150, 15)] = new AvatarAnimationClip("turn-east", samples.Length, [],
             StandardOffset: new System.Numerics.Vector3(2f, 0f, 0f), StandardRootMotionSamples: samples);
         person.AnimatorControlState = 3;
-        // 0.25 FTile short of the point: inside the 0.5 snap distance, but not the exact pose match that
-        // redispatches follow completion instead (SAnimator.s 0x1034F438–0x1034F4F4).
+        // Waypoints trigger arrival snapping within 0.5 tiles, whereas an exact pose match immediately
+        // dispatches follow completion.
         person.AnimatorRootX = 9.75f;
         person.AnimatorRootY = 10f;
         person.AnimatorRootDirection = 2f;
@@ -1802,7 +1800,8 @@ public sealed class GoToRoutingSlotPrimitiveTests
 
         world.SetObjectPosition(item, new ObjectPosition(132, 184, 1));
 
-        // FUN_00433ef5 recomputes the saved object's bounds from its type extents after moving it by (32, -16).
+        // Translating an object recalculates its footprint bounds by applying the displacement to its type
+        // extents.
         Assert.Equal(new FootprintBounds(139, 190, 127, 176), item.FootprintBounds);
     }
 
@@ -1821,7 +1820,8 @@ public sealed class GoToRoutingSlotPrimitiveTests
 
         world.SetObjectPosition(item, new ObjectPosition(100, 200, 1));
 
-        // FUN_00433dbb rotates the four type-record extent nibbles for the current direction.
+        // Object footprint bounds are calculated by rotating the four nibbles of the definition's extent
+        // field to match the object's direction.
         Assert.Equal(new FootprintBounds(108, 207, 94, 195), item.FootprintBounds);
         Assert.Equal((short)2, item.FootprintBoundsDirection);
     }
@@ -1863,13 +1863,13 @@ public sealed class GoToRoutingSlotPrimitiveTests
         person.ActivePriority = 50;
 
         Assert.Equal(PrimitiveResult.Stop, GoToRoutingSlotPrimitive.Execute(context, Operand(0, 2)));
-        person.AnimatorRouteTransitionState = 1; // Isolate deferred EndFollow after the route-entry dispatch has advanced.
+        person.AnimatorRouteTransitionState = 1;
         Assert.True(context.World.CancelInteractionAction(person, 77));
         var positionAtCancellation = person.Position;
 
         Assert.Equal(PrimitiveResult.Stop, GoToRoutingSlotPrimitive.Execute(context, Operand(0, 2)));
-        // The next Tick enters gait; StartSkill would replace a standing-turn practice with a fresh, interruptible
-        // one (Skill::NewPractice +0x68 = -1). Make the non-interruptible practice the gait skill it keeps.
+        // Entering gait preserves an active non-interruptible practice rather than replacing it with a new
+        // interruptible skill animation.
         var gaitClip = RouteExecutor.ResolveWalkAnimation(context.World, person, 20)!;
         person.AnimatorCurrentSkill = 20;
         person.NativeRoute = person.NativeRoute! with { MotionAnimationIndex = 20 };
@@ -1918,7 +1918,7 @@ public sealed class GoToRoutingSlotPrimitiveTests
         context.World.TickAvatarAnimations(person);
         Assert.Equal(3, person.NativeRoute?.AnimatorFollowState);
         Assert.True(person.NativeRoute?.EndFollowPending);
-        Assert.Equal(7, person.AnimatorControlState); // Non-pool Tick branch changes +0x180 only.
+        Assert.Equal(7, person.AnimatorControlState);
         Assert.Equal(PrimitiveResult.False, GoToRoutingSlotPrimitive.Execute(context, Operand(0, 2)));
 
         Assert.False(context.Frame.Waiting);
@@ -1933,7 +1933,7 @@ public sealed class GoToRoutingSlotPrimitiveTests
         var (context, _) = World();
         var person = (XPerson)context.Me;
         context.World.LotRoomMaps[1] = TwoRoomsSplitAtX();
-        context.World.SetObjectPosition(person, new ObjectPosition(24, 24, 1)); // Arry 9 byte 0x00: source pool flag.
+        context.World.SetObjectPosition(person, new ObjectPosition(24, 24, 1)); // Arry 9 byte 0x00 stores the pool flag.
         person.AnimatorPoolTile = true;
         person.NativeRoute = new RouteState(2, person.Position, new RoutingSlotRequest(),
             AnimatorFollowState: 1, EndFollowPending: true);
@@ -1958,7 +1958,7 @@ public sealed class GoToRoutingSlotPrimitiveTests
         var (context, _) = World();
         var person = (XPerson)context.Me;
         context.World.LotRoomMaps[1] = OpenRoom();
-        person.Position = new ObjectPosition(8, 5 * 16 + 8, 1); // tile x = 0: SAnimator::OutOfBounds.
+        person.Position = new ObjectPosition(8, 5 * 16 + 8, 1);
         var clip = new AvatarAnimationClip("oob-practice", 4, []);
         person.AnimationPlayback = new AvatarAnimationPlayback(clip, backwards: false, loop: true)
         {
@@ -1985,7 +1985,7 @@ public sealed class GoToRoutingSlotPrimitiveTests
 
     [Theory]
     [InlineData((short)0, (short)19, 81f, 6)]
-    [InlineData((short)1, (short)22, 81f, 11)] // +0x1fc = StdAnimDist(0x16) * 16/3, without the stride half.
+    [InlineData((short)1, (short)22, 81f, 11)]
     public void AnimatorRouteEntryUsesCachedWalkAndRunStepThresholds(short walkStyle, short currentSkill,
         float projectedStep, int expectedControlState)
     {
@@ -2001,8 +2001,6 @@ public sealed class GoToRoutingSlotPrimitiveTests
             MotionX: position.X, MotionY: position.Y,
             MotionTargetX: position.X + (int)projectedStep, MotionTargetY: position.Y,
             MotionAnimationIndex: currentSkill);
-        // Without a TileList the lookahead sample is the motion target, so its offset is the gate's f25
-        // (SAnimator.s 0x10350B98, 0x10350E78).
         context.World.StandardWalkFallbackAnimationTable[(150, currentSkill)] =
             new AvatarAnimationClip("route-entry-threshold", 2, [], StandardDistance: 15f);
         context.World.StandardWalkFallbackAnimationTable[(150, walkStyle == 1 ? 21 : 20)] =
@@ -2027,11 +2025,11 @@ public sealed class GoToRoutingSlotPrimitiveTests
         person.AnimatorRouteTransitionState = 1;
         person.AnimatorRootX = position.X;
         person.AnimatorRootY = position.Y;
-        person.AnimatorRootDirection = 2f; // Already facing the +X target, so the heading is not clamped.
+        person.AnimatorRootDirection = 2f;
         person.AnimatorCurrentSkill = animatorCurrentSkill;
         person.NativeRoute = new RouteState(2, position, new RoutingSlotRequest(),
             MotionX: position.X, MotionY: position.Y,
-            MotionTargetX: position.X + 100, MotionTargetY: position.Y, // Lookahead offset above the walk threshold.
+            MotionTargetX: position.X + 100, MotionTargetY: position.Y,
             MotionAnimationIndex: 20);
         context.World.StandardWalkFallbackAnimationTable[(150, 19)] =
             new AvatarAnimationClip("route-entry-threshold", 2, [], StandardDistance: 15f);
@@ -2057,7 +2055,6 @@ public sealed class GoToRoutingSlotPrimitiveTests
             MotionX: position.X, MotionY: position.Y,
             MotionTargetX: position.X, MotionTargetY: position.Y + 100,
             MotionAnimationIndex: 19);
-        // The 100-FTile lookahead offset is above the walk threshold; the clamped turn selects gait entry.
         context.World.StandardWalkFallbackAnimationTable[(150, 19)] =
             new AvatarAnimationClip("route-entry-threshold", 2, [], StandardDistance: 15f);
         context.World.StandardWalkFallbackAnimationTable[(150, 20)] =
@@ -2067,7 +2064,7 @@ public sealed class GoToRoutingSlotPrimitiveTests
         context.World.TickAvatarAnimations(person);
 
         Assert.Equal(1, person.AnimatorGaitEntryState);
-        Assert.Equal(9, person.AnimatorControlState); // The 100-Ftile remaining route selects state 9 before the gait gate.
+        Assert.Equal(9, person.AnimatorControlState);
         Assert.Equal((short)20, person.NativeRoute?.MotionAnimationIndex);
     }
 
@@ -2082,9 +2079,6 @@ public sealed class GoToRoutingSlotPrimitiveTests
         person.AnimatorRootX = position.X;
         person.AnimatorRootY = position.Y;
         person.AnimatorRootDirection = SimsEngine.Character.AvatarDirection.Toward(1f, 0f);
-        // The active point is 4 FTile away: past the 3.1 standing-adjust distance but below the 4.5 running
-        // threshold. It is not the last positional point, so Tick stores +0x188=10 without a distance test
-        // (SAnimator.s 0x10350A00–0x10350A30).
         person.NativeRoute = new RouteState(2, position, new RoutingSlotRequest(),
             MotionX: position.X, MotionY: position.Y,
             MotionTargetX: position.X + 4, MotionTargetY: position.Y,
@@ -2119,7 +2113,7 @@ public sealed class GoToRoutingSlotPrimitiveTests
         person.AnimatorRootDirection = 2f;
         person.NativeRoute = new RouteState(2, position, new RoutingSlotRequest(),
             MotionX: position.X, MotionY: position.Y,
-            MotionTargetX: position.X + 80, MotionTargetY: position.Y, // Offset = StdAnimDist(0x13) × 16/3 for distance 15.
+            MotionTargetX: position.X + 80, MotionTargetY: position.Y,
             MotionAnimationIndex: 19);
         context.World.StandardWalkFallbackAnimationTable[(150, 19)] =
             new AvatarAnimationClip("route-entry-threshold", 2, [], StandardDistance: 15f);
@@ -2130,7 +2124,7 @@ public sealed class GoToRoutingSlotPrimitiveTests
         context.World.TickAvatarAnimations(person);
 
         Assert.Equal(1, person.AnimatorGaitEntryState);
-        Assert.Equal(9, person.AnimatorControlState); // +0x188=9 is selected at distance >=3; +0x194 gates skill 20.
+        Assert.Equal(9, person.AnimatorControlState);
         Assert.Equal((short)20, person.NativeRoute?.MotionAnimationIndex);
     }
 
@@ -2140,7 +2134,7 @@ public sealed class GoToRoutingSlotPrimitiveTests
         var (context, _) = World();
         var person = (XPerson)context.Me;
         context.World.LotRoomMaps[1] = TwoRoomsSplitAtX();
-        context.World.SetObjectPosition(person, new ObjectPosition(24, 24, 1)); // Arry 9 byte 0x00: source pool flag.
+        context.World.SetObjectPosition(person, new ObjectPosition(24, 24, 1));
         person.AnimatorPoolTile = true;
         person.TypeRecord = new TypeRecord(0x7ffe) { FootprintMask = 0 };
         var swimExit = new AvatarAnimationClip("pool-exit", 4, []);
@@ -2164,22 +2158,22 @@ public sealed class GoToRoutingSlotPrimitiveTests
         Assert.True(person.AnimationPlayback?.Backwards);
         Assert.False(person.AnimationPlayback?.Loop);
         Assert.True(person.AnimationPlayback?.PoolSwimExit);
-        Assert.Equal(1, person.NativeRoute?.AnimatorFollowState); // Mac keeps +0x180=1 while state 7 plays skill 0x13.
-        Assert.False(person.NativeRoute?.EndFollowPending); // The deferred request was consumed; state 7 owns completion.
+        Assert.Equal(1, person.NativeRoute?.AnimatorFollowState);
+        Assert.False(person.NativeRoute?.EndFollowPending);
         person.AnimationPlayback = AvatarAnimationPlayback.RestoreState(person.AnimationPlayback!.SaveState());
-        Assert.True(person.AnimationPlayback?.PoolSwimExit); // The one-shot channel marker survives native save state.
+        Assert.True(person.AnimationPlayback?.PoolSwimExit);
 
         context.World.AvatarAnimationRootOnly = true;
-        context.World.TickAvatarAnimations(person); // State 7's next Tick sees +0x288 cleared and ends the follow.
+        context.World.TickAvatarAnimations(person);
 
         Assert.Equal(3, person.AnimatorControlState);
         Assert.Equal(3, person.NativeRoute?.AnimatorFollowState);
-        Assert.Equal(swimExit.Name, person.AnimationPlayback?.Clip.Name); // Primary Practice 0x13 outlives the route state.
+        Assert.Equal(swimExit.Name, person.AnimationPlayback?.Clip.Name);
 
         context.World.AvatarAnimationRootOnly = false;
         for (var tick = 0; tick < 10 && person.AnimationPlayback is { EndReached: false }; tick++)
             context.World.TickAvatarAnimations(person);
-        context.World.TickAvatarAnimations(person); // The completed one-shot is stopped on the following Tick.
+        context.World.TickAvatarAnimations(person);
         Assert.Null(person.AnimationPlayback);
     }
 
@@ -2214,7 +2208,7 @@ public sealed class GoToRoutingSlotPrimitiveTests
         Assert.Equal(12.75f, person.AnimatorRootX);
         Assert.Equal(13.25f, person.AnimatorRootY);
         Assert.Equal(7.7f, person.AnimatorRootDirection);
-        Assert.Equal((short)0, person[ObjectData.Direction]); // fctiwz(7.7 + 0.5), then wrap 8 -> 0.
+        Assert.Equal((short)0, person[ObjectData.Direction]);
         Assert.Equal(1, person.AnimatorStateTailField198);
     }
 
@@ -2325,9 +2319,9 @@ public sealed class GoToRoutingSlotPrimitiveTests
         var map = House05Portal51DiagonalApproachWall();
         Assert.Equal(map.RoomAt(26, 25), map.RoomAt(27, 26));
 
-        // House05 Arry2 at (26,25) contains segment 0x01 (-X edge), which yields route mask 0x40 (FUN_00435a8f).
-        // The neighboring wall also blocks the orthogonal corner exit, but the diagonal
-        // endpoints themselves are open in both directions, as FUN_004550e0 requires.
+        // A wall segment on the -X edge (segment 0x01) maps to route mask 0x40. Orthogonal corner exits are
+        // blocked by neighboring walls, but diagonal endpoints remain traversable when open in both
+        // directions.
         Assert.Equal(0x40u, map.RouteBlockingMaskAt(26, 25));
         Assert.True(world.BlocksRouteDirectionAt(map, 26, 26, 6));
         Assert.False(world.BlocksRouteDirectionAt(map, 27, 26, 7));
@@ -2406,9 +2400,9 @@ public sealed class GoToRoutingSlotPrimitiveTests
         world.LotRoomMaps[1] = TwoRoomsSplitAtXWithApproach();
         world.CaptureExecutionTrace = true;
         var person = (XPerson)baseContext.Me;
-        world.SetObjectPosition(person, new ObjectPosition(24, 24, 1)); // source tile 1,1
+        world.SetObjectPosition(person, new ObjectPosition(24, 24, 1));
         var anchor = baseContext.StackObject!;
-        world.SetObjectPosition(anchor, new ObjectPosition(56, 24, 1)); // destination tile 3,1
+        world.SetObjectPosition(anchor, new ObjectPosition(56, 24, 1));
         var map = world.LotRoomMaps[1];
         var sourceRoom = map.RoomAt(1, 1);
         var destinationRoom = map.RoomAt(3, 1);
@@ -2431,9 +2425,9 @@ public sealed class GoToRoutingSlotPrimitiveTests
         });
         portal[ObjectData.Direction] = 2;
         portal.RoomWord84 = unchecked((short)sourceRoom);
-        world.SetObjectPosition(portal, new ObjectPosition(40, 24, 1)); // source tile 2,1
-        // FUN_0044350d does not register portal-class objects without function 0x0f in Sims.exe's
-        // routing manager. Keep a nearer window-like object here to guard the engine/geometry distinction.
+        world.SetObjectPosition(portal, new ObjectPosition(40, 24, 1));
+        // Portal-class objects without function table entry 0x0F are excluded from route manager
+        // registration, distinguishing decorative fixtures like windows from usable doors.
         var window = world.Add(new XObject(7, PrimitiveTestWorld.Definition())
         {
             RuntimeClass = ObjectClass.Portal,
@@ -2489,8 +2483,8 @@ public sealed class GoToRoutingSlotPrimitiveTests
         world.SetObjectPosition(person, new ObjectPosition(24, 24, 1));
         var anchor = world.ObjectById(2)!;
         world.SetObjectPosition(anchor, new ObjectPosition(40, 24, 1));
-        // FollowOneStep/Tick use ordinary placement after the portal callback. A solid anchor
-        // at the final root rejects that placement; referenced-slot validation does not bypass it.
+        // Post-portal movement executes standard placement checks, so a solid destination anchor rejects
+        // placement even when targeted by a valid routing slot.
         if (destinationAllowsPerson) AllowPersonOverlapWithRouteAnchor(anchor);
         var sourceRoom = world.RoomAtTile(1, 1, 1);
         var destinationRoom = world.RoomAtTile(2, 1, 1);
@@ -2521,8 +2515,6 @@ public sealed class GoToRoutingSlotPrimitiveTests
         portal[ObjectData.RouteId] = 2;
         portal.RoutingSlots.Add(new RoutingSlotRequest { Flags = 0xff, MinProximity = 0, MaxProximity = 0, OptimalProximity = 0 });
         portal[ObjectData.Direction] = 2;
-        // FUN_00463dd9 selects from the routing Sim's current-room portal list; the portal
-        // occupies the source-side tile at the room boundary.
         world.SetObjectPosition(portal, new ObjectPosition(24, 24, 1));
         portal.RoomWord84 = sourceRoom;
         var portalPartDefinition = PrimitiveTestWorld.Definition();
@@ -2562,7 +2554,6 @@ public sealed class GoToRoutingSlotPrimitiveTests
         portalPart.MultiTileMasterId = portalMaster.Id;
         portalPart.MultiTileNextId = functionPart.Id;
         functionPart.MultiTileMasterId = portalMaster.Id;
-        // This is a runtime-created portal and has no corresponding saved ObjM record.
         world.SavedLotObjects = null;
         world.SavedObjectClasses = new Dictionary<short, (ObjectClass, bool)>();
 
@@ -2573,9 +2564,6 @@ public sealed class GoToRoutingSlotPrimitiveTests
         stack.OnPopped = () =>
         {
             PersonInteractionStack.Release(person, stack.Frames.Count);
-            // This fixture's callback only checks interaction ownership. Model the successful door
-            // crossing before the owner route resumes; a callback that leaves the Sim in this room
-            // must instead make the route manager rank another portal.
             if (person.NativeRoute is { PendingPortalId: not 0 })
                 world.SetObjectPosition(person, new ObjectPosition(40, 24, 1));
         };
@@ -2659,17 +2647,17 @@ public sealed class GoToRoutingSlotPrimitiveTests
         Assert.Equal((short)4096, stack.Top!.TreeId);
 
         while (stack.Frames.Count > 1) Assert.Equal(StepResult.Continue, stack.Step());
-        Assert.Equal(start, person.Position); // the callback returned without crossing rooms
+        Assert.Equal(start, person.Position);
         Assert.Equal(PrimitiveResult.Again, RouteExecutor.Continue(world, person, caller, stack));
         Assert.Equal(first.Id, person.NativeRoute!.UsedPortalIds![0]);
         Assert.Contains(first.Id, person.NativeRoute.UsedPortalIds);
-        Assert.Contains((short)4, person.NativeRoute.UsedPortalIds); // linked F0-bearing part
+        Assert.Contains((short)4, person.NativeRoute.UsedPortalIds);
         Assert.True(first.PortalRouteCostAt(person[ObjectData.RouteId]) == 1101f,
             $"route={person[ObjectData.RouteId]}; costs={string.Join(',', first.PortalRouteCosts.Select(entry => entry.Key + ":" + entry.Value))}");
         Assert.Equal(1101f, world.ObjectById(4)!.PortalRouteCostAt(person[ObjectData.RouteId]));
         Assert.Equal(second.Id, person.NativeRoute.PendingPortalId);
         Assert.Equal((short)4097, stack.Top!.TreeId);
-        Assert.Equal(2, stack.Frames.Count); // first callback was popped, second was started once
+        Assert.Equal(2, stack.Frames.Count);
 
         while (stack.Frames.Count > 1) Assert.Equal(StepResult.Continue, stack.Step());
         var completion = RouteExecutor.Continue(world, person, caller, stack);
@@ -2679,7 +2667,7 @@ public sealed class GoToRoutingSlotPrimitiveTests
             completion = RouteExecutor.Continue(world, person, caller, stack);
         }
         Assert.Equal(PrimitiveResult.False, completion);
-        Assert.Null(person.NativeRoute); // exhausted route fails and releases the owner
+        Assert.Null(person.NativeRoute);
         Assert.False(caller.Waiting);
         Assert.Empty(person.InteractingObjects);
         Assert.Single(stack.Frames);
@@ -2851,7 +2839,6 @@ public sealed class GoToRoutingSlotPrimitiveTests
     private static RoomMap RoomWithVerticalWall(int x)
     {
         var records = new byte[64 * 64 * 8];
-        // The barrier faces west from x and east from x-1; set both opposing wall segments in the ARRy records.
         for (var y = 0; y < 64; y++)
         {
             records[(7 * 64 + y) * 8] |= 4;
@@ -2868,8 +2855,9 @@ public sealed class GoToRoutingSlotPrimitiveTests
         var records = new byte[64 * 64 * 8];
         for (var y = 0; y < 64; y++)
         {
-            // FUN_00435a8f tests wall segments even when style 2 leaves room fill connected.
-            // Segment 4 is a tile's east edge and segment 1 the next tile's west edge.
+            // In array chunk records, segment 4 represents a tile's east edge and segment 1 represents the
+            // adjacent tile's west edge. Wall segments block movement even when room fill connectivity
+            // remains open.
             records[(x * 64 + y) * 8] |= 0x04;
             records[(x * 64 + y) * 8 + 4] = 2;
             records[((x + 1) * 64 + y) * 8] |= 0x01;
@@ -2914,7 +2902,6 @@ public sealed class GoToRoutingSlotPrimitiveTests
         const int width = 4;
         const int height = 4;
         var wallBytes = new byte[width * height * 8];
-        // The west edge of tile (2, 1) crosses the arrival footprint without lying on the Sim's route.
         wallBytes[(2 * width + 1) * 8] = 0x01;
         for (var index = 0; index < width * height; index++)
         {
@@ -2941,7 +2928,6 @@ public sealed class GoToRoutingSlotPrimitiveTests
     [Fact]
     public void ModeZeroReadsTheSlotIndexFromTheParameterAtTheIndex()
     {
-        // Parameter 1 is 2, so the slot is the stack object's slot 2.
         var (context, host) = World(parameters: [0, 2]);
         Assert.Equal(PrimitiveResult.True, GoToRoutingSlotPrimitive.Execute(context, Operand(1, 0)));
         Assert.Equal(new[] { "RoutingEnabled", "Route(100,slot)" }, host.Calls);
@@ -3010,31 +2996,28 @@ public sealed class GoToRoutingSlotPrimitiveTests
         person.AnimatorControlState = 3;
         person.AnimatorRootX = 10f;
         person.AnimatorRootY = 10f;
-        person.AnimatorRootDirection = 1.85f; // within 0.25f threshold of +X target heading 2.0f
+        person.AnimatorRootDirection = 1.85f;
         person[ObjectData.Direction] = 2;
         person.AnimatorWalkingScale = 1f;
         person.NativeRoute = new RouteState(0, default, new RoutingSlotRequest(),
             MotionTargetX: 12, MotionTargetY: 10, MotionX: 10f, MotionY: 10f,
             MotionAnimationIndex: 15, MotionDirection: 2);
 
-        // State 3 enters State 5 via TryBeginRouteTurnRoot
         Assert.True(RouteExecutor.TryBeginRouteTurnRoot(world, person));
 
         Assert.Equal(5, person.AnimatorControlState);
         Assert.Equal((float?)1.85f, person.NativeRoute!.TurnRootStartDirection);
         Assert.Equal((float?)2.0f, person.NativeRoute.TurnRootPracticeDirection);
         Assert.Equal((float?)2.0f, person.NativeRoute.TurnRootSavedDirection);
-        Assert.Equal(1.85f, person.AnimatorRootDirection); // Must NOT snap immediately!
+        Assert.Equal(1.85f, person.AnimatorRootDirection);
 
-        // Mid-stride: advance to phase 0.5 (frame 2 of 4)
         person.NativeRoute = person.NativeRoute with { MotionPracticeFrame = 2f };
         world.TickAvatarAnimations(person);
 
         Assert.Equal(5, person.AnimatorControlState);
-        Assert.Equal(1.925f, person.AnimatorRootDirection); // 1.85 + (2.0 - 1.85) * 0.5
+        Assert.Equal(1.925f, person.AnimatorRootDirection);
         Assert.Equal((short)2, person[ObjectData.Direction]);
 
-        // End-of-stride: advance to phase >= 1.0 (frame 4 of 4)
         person.NativeRoute = person.NativeRoute! with { MotionPracticeFrame = 4f };
         world.TickAvatarAnimations(person);
 
@@ -3046,21 +3029,21 @@ public sealed class GoToRoutingSlotPrimitiveTests
     }
 
     [Theory]
-    [InlineData(0f, 0f, -1f)]           // -LotY (FUN_00452129 dir 0)
-    [InlineData(1f, 0.7071f, -0.7071f)] // +LotX, -LotY (dir 1)
-    [InlineData(2f, 1f, 0f)]            // +LotX (dir 2)
-    [InlineData(3f, 0.7071f, 0.7071f)]  // +LotX, +LotY (dir 3)
-    [InlineData(4f, 0f, 1f)]            // +LotY (dir 4)
-    [InlineData(5f, -0.7071f, 0.7071f)] // -LotX, +LotY (dir 5)
-    [InlineData(6f, -1f, 0f)]           // -LotX (dir 6)
-    [InlineData(7f, -0.7071f, -0.7071f)]// -LotX, -LotY (dir 7)
+    [InlineData(0f, 0f, -1f)]
+    [InlineData(1f, 0.7071f, -0.7071f)]
+    [InlineData(2f, 1f, 0f)]
+    [InlineData(3f, 0.7071f, 0.7071f)]
+    [InlineData(4f, 0f, 1f)]
+    [InlineData(5f, -0.7071f, 0.7071f)]
+    [InlineData(6f, -1f, 0f)]
+    [InlineData(7f, -0.7071f, -0.7071f)]
     public void FacingMatrixAlignsMeshForwardWithLotTravelDirection(float rootDir, float expectedLotDx, float expectedLotDy)
     {
         var facing = AvatarDirection.LotFacingAngle(rootDir);
         var facingMatrix = System.Numerics.Matrix4x4.CreateRotationY(facing);
-        var meshForward = new System.Numerics.Vector3(0f, 0f, 1f); // local +Z bind pose forward
+        var meshForward = new System.Numerics.Vector3(0f, 0f, 1f);
         var transformed = System.Numerics.Vector3.Transform(meshForward, facingMatrix);
-        // Avatar world coordinates map matrix Z to LotX and matrix X to LotY
+        // Avatar world coordinates map transform matrix Z to LotX and matrix X to LotY.
         var lotVector = new System.Numerics.Vector3(transformed.Z, transformed.X, transformed.Y);
         Assert.Equal(expectedLotDx, lotVector.X, precision: 4);
         Assert.Equal(expectedLotDy, lotVector.Y, precision: 4);
@@ -3083,29 +3066,23 @@ public sealed class GoToRoutingSlotPrimitiveTests
         person.GenericSimsCall02GateWordA84 = 88;
         person.ActivePriority = 50;
 
-        // Start routing
         Assert.Equal(PrimitiveResult.Stop, GoToRoutingSlotPrimitive.Execute(context, Operand(0, 2)));
         Assert.NotNull(person.NativeRoute);
 
-        // Cancel interaction while moving
         Assert.True(world.CancelInteractionAction(person, 88));
 
-        // When follow state is active (1), Continue yields Stop with Waiting=true instead of snapping
         person.NativeRoute = person.NativeRoute! with { AnimatorFollowState = 1, EndFollowPending = false };
         var result = GoToRoutingSlotPrimitive.Execute(context, Operand(0, 2));
         Assert.Equal(PrimitiveResult.Stop, result);
         Assert.True(context.Frame.Waiting);
         Assert.True(person.NativeRoute!.EndFollowPending);
 
-        // Footstep completes in animator (status advances to 3)
         person.NativeRoute = person.NativeRoute with { AnimatorFollowState = 3 };
         var finalResult = GoToRoutingSlotPrimitive.Execute(context, Operand(0, 2));
         Assert.Equal(PrimitiveResult.False, finalResult);
         Assert.False(context.Frame.Waiting);
         Assert.Null(person.NativeRoute);
-        // Discrete heading is committed cleanly on exit
         Assert.True(person[ObjectData.Direction] is >= 0 and <= 7);
-        // Arrival facing of slot (6) must NOT have overwritten actor's facing on cancelled route
         Assert.NotEqual((short)6, person[ObjectData.Direction]);
     }
 
@@ -3167,13 +3144,11 @@ public sealed class GoToRoutingSlotPrimitiveTests
         stack.Frames.Add(context.Frame);
         var treeContext = new TreeContext(world, person, context.Frame) { Stack = stack };
 
-        // First call pushes the seat's Stand tree (4097) and returns Again
         var first = GoToRoutingSlotPrimitive.Execute(treeContext, Operand(0, 1));
         Assert.Equal(PrimitiveResult.Again, first);
         Assert.Equal(2, stack.Frames.Count);
         Assert.Equal(4097, stack.Frames[^1].TreeId);
 
-        // Stand tree finishes without clearing PersonData.Sitting
         stack.Frames.RemoveAt(stack.Frames.Count - 1);
         var resumed = GoToRoutingSlotPrimitive.Execute(treeContext, Operand(0, 1));
         Assert.Equal(PrimitiveResult.False, resumed);

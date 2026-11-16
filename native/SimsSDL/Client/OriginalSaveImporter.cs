@@ -1,6 +1,6 @@
 namespace SimsSDL.Client;
 
-/// <summary>Imports an original Sims save directory into a separate native profile without modifying the source.</summary>
+/// <summary>Imports a legacy save directory into a separate profile without modifying the source files.</summary>
 public static class OriginalSaveImporter
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -8,7 +8,6 @@ public static class OriginalSaveImporter
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
     };
 
-    /// <summary>Runs <see cref="ImportSynchronously"/> on a background thread-pool task.</summary>
     public static Task<string> RunAsync(
         string gameRoot,
         string workspace,
@@ -18,7 +17,6 @@ public static class OriginalSaveImporter
         CancellationToken cancellationToken = default) =>
         Task.Run(() => ImportSynchronously(gameRoot, workspace, sourceDirectory, profileId, dataRoot), cancellationToken);
 
-    /// <summary>Runs <see cref="ImportSynchronously"/> on a background thread-pool task.</summary>
     public static Task<string> Run(
         string gameRoot,
         string workspace,
@@ -28,7 +26,6 @@ public static class OriginalSaveImporter
         CancellationToken cancellationToken = default) =>
         RunAsync(gameRoot, workspace, sourceDirectory, profileId, dataRoot, cancellationToken);
 
-    /// <summary>Imports an original save directory into <paramref name="dataRoot"/> (or <paramref name="workspace"/> when omitted) and returns the camelCase JSON summary.</summary>
     public static string ImportSynchronously(
         string gameRoot,
         string workspace,
@@ -39,7 +36,6 @@ public static class OriginalSaveImporter
         var storageRoot = dataRoot ?? workspace;
         try
         {
-            // SimsSimulation is linked in-process via InternalsVisibleTo, avoiding a child dotnet process spawn.
             var imported = global::ProfileBootstrap.ImportOriginalUserData(
                 gameRoot,
                 Path.GetFullPath(storageRoot),

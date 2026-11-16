@@ -55,11 +55,13 @@ public sealed class OriginalBuyOverlay
     public BuyCatalogPage? Page { get; private set; }
     public int Category { get; private set; }
 
-    /// <summary>FUN_0053a478 flips the sort type between 0 (room) and 1 (function) when the Buy button is clicked again in buy mode.</summary>
+    /// <summary>Toggles catalog sorting between room view and function view when activating buy mode while
+    /// already in buy mode.</summary>
     public bool RoomMode { get; private set; }
     public int Room { get; private set; }
 
-    /// <summary>FUN_005063ab: clicking a room button enters its sub-sort level (+0xa4 = 1), where the same eight buttons pick the function and a back button returns.</summary>
+    /// <summary>Indicates whether the catalog is in room sub-sort mode, where category buttons filter by
+    /// item function within the chosen room.</summary>
     public bool SubSorting { get; private set; }
     public int SubSort { get; private set; }
     public bool FunctionSubSorting { get; private set; }
@@ -366,7 +368,7 @@ public sealed class OriginalBuyOverlay
             return;
 
         var parts = new List<OriginalGameplayOverlay.Part>(2);
-        // FUN_00539fe8 renders the control-panel clock at y = 85 in 8pt (variablesans_08.ffn) and household funds at y = 125 in 10pt.
+        // Renders the control panel clock at y=85 in 8pt font and household funds at y=125 in 10pt font.
         (string Value, SimsBitmapFont ItemFont, double X, double Y)[] fields =
         [
             (clock, _clockFont, 123, 85),
@@ -426,7 +428,7 @@ public sealed class OriginalBuyOverlay
 
     private bool SubSortEnabled(int index)
     {
-        // FUN_00505151 disables room sub-sort buttons whose function count in the selected room is zero.
+        // Disables function sub-sort buttons when no items in the active room belong to that category.
         if (Page?.FunctionCounts is not { Count: 8 } counts)
             return true;
         return counts[OriginalBuyLayout.EngineCategories[index]] > 0;
@@ -436,7 +438,6 @@ public sealed class OriginalBuyOverlay
 
     private bool FunctionSubsortEnabled(int index)
     {
-        // UpdateViewFromCPState disables a product filter when no catalog product matches it.
         if (Page?.FunctionSubsortCounts is not { Count: 8 } counts)
             return true;
         return counts[index] > 0;
@@ -594,7 +595,6 @@ public sealed class OriginalBuyOverlay
         return null;
     }
 
-    /// <summary>The icon of the item in thumbnail slot <c>index</c>, at its own size.</summary>
     private OriginalGameplayOverlay.Part IconAt(int index, GameplayPanelState.Image? iconSpec, bool highlighted = false) =>
         OriginalBuildOverlay.Icon(index >= 0 && index < _icons.Count ? _icons[index] : null, iconSpec, _unknown, highlighted);
 
@@ -602,10 +602,8 @@ public sealed class OriginalBuyOverlay
 
     public void ClearHover() => HoveredPoint = null;
 
-    /// <summary>
-    /// cWinCatalogBtn::CreateButton (004cc877.c lines 58-66) + GetToolTipWindow (004cc9df.c lines 12-14):
-    /// immediate price tag tooltip colored black when affordable or red (RGB 255, 0, 0) when budget &lt; item.price.
-    /// </summary>
+    /// <summary>Renders the catalog price tag tooltip, styling text black when affordable or red when the
+    /// item price exceeds the current budget.</summary>
     private OriginalGameplayOverlay.Image? PriceTooltip(int price, bool unaffordable)
     {
         string key = $"{price}:{(unaffordable ? 1 : 0)}";
@@ -748,7 +746,7 @@ public sealed class OriginalBuyOverlay
 
                 if (hovered && PriceTooltip(item.Price, budget is { } b && item.Price > b) is { } tip)
                 {
-                    // cWinCatalogBtn::PositionToolTip (005e8b76.c line 10): bottom-left of the hovered catalog cell.
+                    // Positions the price tooltip at the bottom-left corner of the hovered catalog cell.
                     hoveredPricePart = new OriginalGameplayOverlay.Part(
                         tip,
                         new CGRect(rect.MinX, rect.MaxY - tip.Size.Height, tip.Size.Width, tip.Size.Height));

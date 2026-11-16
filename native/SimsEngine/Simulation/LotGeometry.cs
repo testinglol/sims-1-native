@@ -1,16 +1,13 @@
 namespace SimsEngine.Simulation;
 
-/// <summary>Pure lot geometry functions recovered from Sims.exe.</summary>
 public static class LotGeometry
 {
-    /// <summary>Sims.exe FUN_00415c5b constructs the lot manager with dimension 0x40 via FUN_00479161.</summary>
     public const int LotDimension = 0x40;
 
-    /// <summary>FUN_00479318 stores its orientation argument masked with 3 at lot-manager +0x84.</summary>
     public static int NormalizeOrientation(int orientation) => orientation & 3;
 
-    /// <summary>FUN_0047bd91's 0x400-unit transform as called by FUN_00434895 with the inverse of the lot
-    /// orientation. Coordinates are in the game's 0..1023 lot-unit space.</summary>
+    /// <summary>Transforms search center coordinates within the 0..1023 lot-unit space using inverse lot
+    /// orientation.</summary>
     public static ObjectPosition TransformSearchCenter(ObjectPosition position, int orientation)
     {
         orientation = NormalizeOrientation(orientation);
@@ -23,12 +20,8 @@ public static class LotGeometry
         };
     }
 
-    /// <summary>
-    /// FUN_00407761 builds DAT_006DE81C and FUN_00434FFD indexes it as a 64 × 64 pair table.
-    /// For tile coordinates inside the lot, return the precomputed pair for orientations 1–3.
-    /// Orientation 0 is the caller's unchanged path. False leaves unusual/out-of-lot coordinates
-    /// to the caller, since the original helper indexes outside this table for them.
-    /// </summary>
+    /// <summary>Rotates lot tile coordinates for orientations 1–3, leaving orientation 0 unchanged and
+    /// returning false for coordinates outside the 64x64 bounds.</summary>
     public static bool TryTransformTile(sbyte x, sbyte y, int orientation, out sbyte transformedX, out sbyte transformedY)
     {
         transformedX = x;
@@ -47,10 +40,8 @@ public static class LotGeometry
         return true;
     }
 
-    /// <summary>
-    /// FUN_00479318 transforms the four lot corners and stores their extrema at manager +0x70..+0x7c.
-    /// Sims.exe creates 64 × 64 lots; the size parameter also makes the corner calculation independently testable.
-    /// </summary>
+    /// <summary>Calculates bounding box extrema by transforming the four corners of a square lot under the
+    /// given orientation.</summary>
     public static LotCoordinateBounds TransformLotBounds(int dimension, int orientation)
     {
         if (dimension is < 1 or > 64) throw new ArgumentOutOfRangeException(nameof(dimension), "Lot dimension must fit the 64 × 64 transform table.");
@@ -75,12 +66,8 @@ public static class LotGeometry
         return new LotCoordinateBounds(minX, maxX, minY, maxY);
     }
 
-    /// <summary>
-    /// FUN_004222bd/FUN_004222ef: the one-tile footprint offset for a direction. Sims.exe masks the
-    /// direction to three bits and maps it onto the eight isometric neighbors, then scales each axis by 16.
-    /// FUN_004549b6 adds the first component to the +0xf4 field (Y) and the second to +0xf8 (X), so the
-    /// returned X and Y are the table's second and first components.
-    /// </summary>
+    /// <summary>Returns the 16-unit footprint offset for one of eight isometric directions, mapped to the
+    /// corresponding coordinate axes.</summary>
     public static (int X, int Y) FootprintOffset(short direction) => (direction & 7) switch
     {
         0 => (0, -16),
@@ -94,9 +81,8 @@ public static class LotGeometry
         _ => throw new InvalidOperationException("A three-bit direction must be between 0 and 7."),
     };
 
-    /// <summary>FUN_004549b6's free SLOT projection: convert the local X/Y slot offset to a lot position after
-    /// rotating it by the anchor object's direction. The original scales tile coordinates by 3/16, transforms the
-    /// vector, scales back by 16/3 and rounds half values away from zero in FUN_00454ff9.</summary>
+    /// <summary>Converts a local slot offset into an absolute lot position rotated by the anchor object's
+    /// direction, scaling by 3/16 and 16/3 with half-away-from-zero rounding.</summary>
     public static ObjectPosition SlotPosition(ObjectPosition anchor, short direction, float slotX, float slotY)
     {
         var angle = (direction & 7) * (MathF.PI / 4f);

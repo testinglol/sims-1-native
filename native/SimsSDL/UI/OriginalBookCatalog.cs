@@ -2,16 +2,10 @@ using System.Globalization;
 
 namespace SimsSDL.UI;
 
-/// <summary>
-/// <c>FUN_005109fe</c> builds the 600x382 book screen (<c>cWinMagicBook</c>) for Dialog styles 0 (Spellbook) and 1 (Cookbook).
-/// Style 1 (<c>DAT_006f38b0 = 2</c>) uses <c>magic.iff</c> STR# 14/10 for recipe titles/descriptions and
-/// <c>MagicMasterSpells.iff</c> STR# 5 for the 3 ingredient IDs per recipe (ordered 1..9 per <c>FUN_004ecfea</c>).
-/// Style 0 uses adult mode (<c>DAT_006f38b0 = 1</c>: <c>MagicMasterSpells.iff</c> STR# 15 order, STR# 3 ingredients, <c>magic.iff</c> STR# 12/8)
-/// or child mode (<c>DAT_006f38b0 = 0</c>: <c>MagicMasterSpells.iff</c> STR# 16 order, STR# 4 ingredients, <c>magic.iff</c> STR# 13/9).
-/// <c>FUN_005117ea</c> calls Global BHAV 496 ("Magic - Has Made Spell/Recipe?") for the selected spell; an unmade spell
-/// shows its 3 ingredient icons on the left page, while the right page title and description show Unknown Charm /
-/// Unknown Spell / Unknown Magic and the discovery hint from index 0 (or 24) of the corresponding STR# table.
-/// </summary>
+/// <summary>Builds the 600x382 spellbook and cookbook catalog screens. Cookbook mode reads recipes from
+/// <c>magic.iff</c> string tables 14 and 10 with ingredients from <c>MagicMasterSpells.iff</c> table 5,
+/// while spellbook mode resolves adult or child spell lists through tables 15/3 or 16/4; uncrafted recipes
+/// show unknown titles and hint strings alongside ingredient icons until discovered.</summary>
 public sealed class OriginalBookCatalog
 {
     public readonly record struct Entry(
@@ -71,7 +65,7 @@ public sealed class OriginalBookCatalog
         string unknownCharmDescription = string.Empty;
         string unknownSpellDescription = string.Empty;
 
-        // FUN_005109fe line 66 calls FUN_005e50fa(1), which is UIText.iff STR# 152 (0x98) index 1 ("Cancel").
+        // Loads the cancel button label from string table 152, index 1 in <c>UIText.iff</c>.
         byte[]? uiTextData = TryReadContent(content, "GameData/UIText.iff", "UIText.iff");
         if (uiTextData is not null &&
             OriginalStringResource.TryParse(uiTextData, content.Language.Code, new HashSet<ushort>([152]))?.Tables.TryGetValue(152, out var dlgStrings) == true &&
@@ -80,8 +74,8 @@ public sealed class OriginalBookCatalog
             ok = dlgStrings[1];
         }
 
-        // FUN_005109fe lines 44, 78, 94, 136, 146 and FUN_00511d39 line 90 load
-        // Spellbook/Cookbook titles (1, 2), Back (3), Next (4), and Page %d of %d (5) from magic.iff STR# 1.
+        // Loads book dialog labels from string table 1 in <c>magic.iff</c> (indices 1 through 5 provide
+        // titles, navigation, and pagination formats).
         byte[]? magicStrings = TryReadContent(content, "GameData/magic.iff", "magic.iff");
         if (magicStrings is not null &&
             OriginalStringResource.TryParse(magicStrings, content.Language.Code, new HashSet<ushort>([1, 8, 9, 10, 12, 13, 14])) is { } magicResource)
@@ -188,7 +182,6 @@ public sealed class OriginalBookCatalog
         var builtEntries = new List<Entry>();
         if (isCookbook)
         {
-            // FUN_004ec793 + FUN_004ecfea: Cookbook (DAT_006f38b0 == 2) iterates 1..9 directly.
             for (int resourceID = 1; resourceID <= 9; resourceID++)
             {
                 if ((resourceID == 7 && !hasUnleashed) ||
@@ -213,8 +206,8 @@ public sealed class OriginalBookCatalog
         }
         else if (adultSpellbook)
         {
-            // FUN_004ec793's adult list omits source row 12, the Unleashed spell (22) when bit 0x20 is absent,
-            // and The Price of Fame (10) when bit 0x40 is absent.
+            // Filters out expansion-specific adult spells when corresponding expansion flags (such as
+            // Unleashed or Superstar) are not active.
             for (int offset = 0; offset < adultOrder.Count; offset++)
             {
                 int resourceID = adultOrder[offset];
@@ -238,7 +231,6 @@ public sealed class OriginalBookCatalog
         }
         else
         {
-            // Child mode (DAT_006f38b0 == 0) uses STR# 16 order, STR# 4 ingredients, and magic.iff STR# 13/9.
             for (int offset = 0; offset < kidOrder.Count; offset++)
             {
                 int resourceID = kidOrder[offset];
@@ -261,7 +253,8 @@ public sealed class OriginalBookCatalog
         }
         Entries = builtEntries;
 
-        // Resolve ingredient GUIDs (STR# 7) against TokensMagic.iff and GardenCrops.iff (FUN_004ec25d, FUN_004ec5aa, FUN_004ec5f0).
+        // Resolves ingredient GUIDs from string table 7 against <c>TokensMagic.iff</c> and
+        // <c>GardenCrops.iff</c> to extract preview bitmaps and display names.
         var guidToCatalogChunk = new Dictionary<uint, (byte[]? Bmp, string? Name)>();
         var iffSources = new List<byte[]>(2);
         if (masterArchive is not null && TryReadArchiveEntry(masterArchive, "TokensMagic.iff") is { } tokensData)
@@ -442,10 +435,10 @@ public sealed class OriginalBookCatalog
             if (chunks.Contains(chunkID) &&
                 copy[position] == 0x43 && copy[position + 1] == 0x54 && copy[position + 2] == 0x53 && copy[position + 3] == 0x53)
             {
-                copy[position] = 0x53;     // 'S'
-                copy[position + 1] = 0x54; // 'T'
-                copy[position + 2] = 0x52; // 'R'
-                copy[position + 3] = 0x23; // '#'
+                copy[position] = 0x53;
+                copy[position + 1] = 0x54;
+                copy[position + 2] = 0x52;
+                copy[position + 3] = 0x23;
             }
 
             position += chunkSize;
@@ -477,7 +470,6 @@ public sealed class OriginalBookCatalog
             }
             catch
             {
-                // Try fallback path.
             }
         }
         return null;

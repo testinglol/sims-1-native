@@ -63,7 +63,6 @@ public static unsafe partial class Sdl3Native
         return NativeLibrary.TryLoad(libraryName, assembly, searchPath, out var fallback) ? fallback : nint.Zero;
     }
 
-    // ---- Init / Window / Events / Time ----
     public const uint SDL_INIT_AUDIO = 0x10u;
     public const uint SDL_INIT_VIDEO = 0x20u;
 
@@ -103,6 +102,10 @@ public static unsafe partial class Sdl3Native
     public const uint SDLK_UP = 0x40000052u;
     public const uint SDLK_KP_MINUS = 0x40000056u;
     public const uint SDLK_KP_PLUS = 0x40000057u;
+    public const int SDL_SCANCODE_RIGHT = 79;
+    public const int SDL_SCANCODE_LEFT = 80;
+    public const int SDL_SCANCODE_DOWN = 81;
+    public const int SDL_SCANCODE_UP = 82;
     public const uint SDLK_KP_ENTER = 0x40000058u;
     public const uint SDLK_KP_1 = 0x40000059u;
     public const uint SDLK_KP_2 = 0x4000005Au;
@@ -121,14 +124,12 @@ public static unsafe partial class Sdl3Native
     public const uint SDL_EVENT_MOUSE_BUTTON_UP = 0x402u;
     public const uint SDL_EVENT_MOUSE_WHEEL = 0x403u;
 
-    // ---- MessageBox ----
     public const uint SDL_MESSAGEBOX_ERROR = 0x10u;
     public const uint SDL_MESSAGEBOX_WARNING = 0x20u;
     public const uint SDL_MESSAGEBOX_INFORMATION = 0x40u;
     public const uint SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT = 0x1u;
     public const uint SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT = 0x2u;
 
-    // ---- GPU ----
     public const uint SDL_GPU_SHADERFORMAT_SPIRV = 1u << 1;
     public const uint SDL_GPU_SHADERFORMAT_DXIL = 1u << 3;
     public const uint SDL_GPU_SHADERFORMAT_MSL = 1u << 4;
@@ -153,6 +154,8 @@ public static unsafe partial class Sdl3Native
     public const int SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD = 1;
 
     public const int SDL_GPU_SAMPLECOUNT_1 = 0;
+    public const int SDL_GPU_SAMPLECOUNT_2 = 1;
+    public const int SDL_GPU_SAMPLECOUNT_4 = 2;
     public const int SDL_GPU_PRIMITIVETYPE_TRIANGLELIST = 0;
     public const int SDL_GPU_PRIMITIVETYPE_POINTLIST = 4;
 
@@ -162,10 +165,12 @@ public static unsafe partial class Sdl3Native
 
     public const int SDL_GPU_STOREOP_STORE = 0;
     public const int SDL_GPU_STOREOP_DONT_CARE = 1;
+    public const int SDL_GPU_STOREOP_RESOLVE = 2;
 
     public const int SDL_GPU_FILTER_NEAREST = 0;
     public const int SDL_GPU_FILTER_LINEAR = 1;
     public const int SDL_GPU_SAMPLERMIPMAPMODE_NEAREST = 0;
+    public const int SDL_GPU_SAMPLERMIPMAPMODE_LINEAR = 1;
     public const int SDL_GPU_SAMPLERADDRESSMODE_REPEAT = 0;
     public const int SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE = 2;
 
@@ -183,6 +188,7 @@ public static unsafe partial class Sdl3Native
 
     public const int SDL_GPU_FILLMODE_FILL = 0;
     public const int SDL_GPU_CULLMODE_NONE = 0;
+    public const int SDL_GPU_COMPAREOP_EQUAL = 3;
     public const int SDL_GPU_COMPAREOP_LESS_OR_EQUAL = 4;
     public const int SDL_GPU_COMPAREOP_ALWAYS = 8;
 
@@ -197,8 +203,6 @@ public static unsafe partial class Sdl3Native
     public const int SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2 = 10;
     public const int SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3 = 11;
     public const int SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4 = 12;
-
-    // ---- Structs ----
 
     [StructLayout(LayoutKind.Sequential)]
     public struct SDL_AudioSpec
@@ -244,31 +248,26 @@ public static unsafe partial class Sdl3Native
     {
         [FieldOffset(0)] public uint type;
 
-        // Keyboard
         [FieldOffset(24)] public int key_scancode;
         [FieldOffset(28)] public uint key_key;
         [FieldOffset(32)] public ushort key_mod;
         [FieldOffset(36)] public byte key_down;
         [FieldOffset(37)] public byte key_repeat;
 
-        // Mouse motion
         [FieldOffset(28)] public float motion_x;
         [FieldOffset(32)] public float motion_y;
         [FieldOffset(36)] public float motion_xrel;
         [FieldOffset(40)] public float motion_yrel;
 
-        // Mouse button
         [FieldOffset(24)] public byte button_button;
         [FieldOffset(25)] public byte button_down;
         [FieldOffset(26)] public byte button_clicks;
         [FieldOffset(28)] public float button_x;
         [FieldOffset(32)] public float button_y;
 
-        // Mouse wheel
         [FieldOffset(24)] public float wheel_x;
         [FieldOffset(28)] public float wheel_y;
 
-        // Text input
         [FieldOffset(24)] public nint text_text;
     }
 
@@ -601,8 +600,6 @@ public static unsafe partial class Sdl3Native
         public byte layer;
     }
 
-    // ---- Core / Video / Events / Input ----
-
     [LibraryImport(LibraryName)]
     [return: MarshalAs(UnmanagedType.U1)]
     public static partial bool SDL_Init(uint flags);
@@ -658,7 +655,8 @@ public static unsafe partial class Sdl3Native
     [LibraryImport(LibraryName)]
     public static partial ushort SDL_GetModState();
 
-    // ---- Surface / Cursor / Dialogs / MessageBox ----
+    [LibraryImport(LibraryName)]
+    public static partial byte* SDL_GetKeyboardState(out int numkeys);
 
     [LibraryImport(LibraryName)]
     public static partial SDL_Surface* SDL_CreateSurface(int width, int height, uint format);
@@ -695,8 +693,6 @@ public static unsafe partial class Sdl3Native
         nint window,
         string? default_location,
         [MarshalAs(UnmanagedType.U1)] bool allow_many);
-
-    // ---- Audio / IO ----
 
     [LibraryImport(LibraryName)]
     public static partial nint SDL_IOFromConstMem(nint mem, nuint size);
@@ -742,8 +738,6 @@ public static unsafe partial class Sdl3Native
         out byte* dst_data,
         out int dst_len);
 
-    // ---- GPU ----
-
     [LibraryImport(LibraryName, StringMarshalling = StringMarshalling.Utf8)]
     public static partial nint SDL_CreateGPUDevice(
         uint format_flags,
@@ -762,6 +756,10 @@ public static unsafe partial class Sdl3Native
 
     [LibraryImport(LibraryName)]
     public static partial uint SDL_GetGPUShaderFormats(nint device);
+
+    [LibraryImport(LibraryName)]
+    [return: MarshalAs(UnmanagedType.U1)]
+    public static partial bool SDL_GPUTextureSupportsSampleCount(nint device, uint format, int sample_count);
 
     [LibraryImport(LibraryName)]
     [return: MarshalAs(UnmanagedType.U1)]

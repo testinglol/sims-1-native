@@ -32,7 +32,6 @@ public sealed class Wave10CrashAndContainmentTests
     [Fact]
     public void ObjectsAtTile_TerminatesOnSelfCycleMutualCycleAndMismatchedParentId()
     {
-        // Self-referential slot + ParentId cycle: a.Slots[0] = a, a.ParentId = a
         {
             var world = new SimulationWorld();
             var pos = new ObjectPosition(0x20, 0x30, 1);
@@ -43,7 +42,6 @@ public sealed class Wave10CrashAndContainmentTests
             Assert.Equal([a], world.ObjectsAtTile(2, 3, 1).ToArray());
         }
 
-        // Mutual 2-node slot + ParentId cycle: a <-> b
         {
             var world = new SimulationWorld();
             var pos = new ObjectPosition(0x20, 0x30, 1);
@@ -57,7 +55,6 @@ public sealed class Wave10CrashAndContainmentTests
             Assert.Equal([a, b], world.ObjectsAtTile(2, 3, 1).ToArray());
         }
 
-        // Mismatched ParentId + SlotHierNumber that previously caused an infinite ascent loop
         {
             var world = new SimulationWorld();
             var pos = new ObjectPosition(0x20, 0x30, 1);
@@ -67,7 +64,6 @@ public sealed class Wave10CrashAndContainmentTests
             var grandchild = world.Add(MakeObject(4, pos, childA.ClockManagerIndex));
             root.Slots.AddRange([childA.ClockManagerIndex, childB.ClockManagerIndex]);
             childA.Slots.Add(grandchild.ClockManagerIndex);
-            // Desynced ParentId / SlotHierNumber pointing back to childA itself
             childA[ObjectData.ParentId] = childA.ClockManagerIndex;
             childA[ObjectData.SlotHierNumber] = 0;
             grandchild[ObjectData.ParentId] = grandchild.ClockManagerIndex;
@@ -80,7 +76,6 @@ public sealed class Wave10CrashAndContainmentTests
     [Fact]
     public void AvatarGeometry_SkipsUnknownSuitsAndResolvesChemsetAliasWithoutThrowing()
     {
-        // Uninstalled body/head and unknown extra suit skip cleanly when no fallback exists
         var emptyGameDir = Path.Combine(Path.GetTempPath(), $"sims-wave10-empty-{Guid.NewGuid():N}");
         Directory.CreateDirectory(Path.Combine(emptyGameDir, "GameData", "Skins"));
         try
@@ -104,8 +99,6 @@ public sealed class Wave10CrashAndContainmentTests
                 Directory.Delete(emptyGameDir, recursive: true);
         }
 
-        // Real game assets: verify suit-chemset-heed-stars104.apr resolves via suit-chemsuit-heed-stars104
-        // and unknown extra suits skip cleanly without crashing.
         var gameDir = LocateGameDirectory();
         var house05Path = gameDir is null ? null : Path.Combine(gameDir, "UserData", "Houses", "House05.iff");
         if (gameDir is null || !File.Exists(house05Path))
@@ -155,19 +148,16 @@ public sealed class Wave10CrashAndContainmentTests
             var geometry = AvatarSceneGeometry.For(emptyGameDir, new ObjectRegistry());
             var camera = new LotCamera(0, 64, 64);
 
-            // Null SavedCharacter / PresentationCharacter
             var nullCharNpc = MakePerson(101, new ObjectPosition(0x30, 0x30, 1), saved: null);
             Assert.Empty(geometry.Build(nullCharNpc, 1, 0, (_, _) => 0f, camera));
             _ = geometry.RootPosition(nullCharNpc);
             Assert.NotNull(geometry.RootDirection(nullCharNpc));
 
-            // Short (< 5) Parts list padded cleanly
             var shortPartsNpc = MakePerson(102, new ObjectPosition(0x30, 0x30, 1),
                 new PersonCharacter(0, 0, [("NONE", ""), ("NONE", "")], [], [], null, []));
             Assert.Empty(geometry.Build(shortPartsNpc, 1, 0, (_, _) => 0f, camera));
             _ = geometry.RootPosition(shortPartsNpc);
 
-            // Suitless "NONE" NPC with an unknown ExtraPart
             var suitlessNpc = MakePerson(103, new ObjectPosition(0x30, 0x30, 1),
                 new PersonCharacter(0, 0,
                     Enumerable.Repeat(("NONE", ""), 5).ToArray(),
@@ -182,8 +172,8 @@ public sealed class Wave10CrashAndContainmentTests
                 Directory.Delete(emptyGameDir, recursive: true);
         }
 
-        // With real game BodyStrings: AnimatorBodyStringMode = 2 with "NONE" saved parts resolves BodyStrings defaults
-        // without throwing and ignores CurrentOutfit category switching.
+        // When character parts are unspecified, body string mode 2 falls back to default body string
+        // definitions and ignores outfit category changes.
         var gameDir = LocateGameDirectory();
         var house05Path = gameDir is null ? null : Path.Combine(gameDir, "UserData", "Houses", "House05.iff");
         if (gameDir is null || !File.Exists(house05Path))
@@ -221,13 +211,11 @@ public sealed class Wave10CrashAndContainmentTests
         {
             var boot = WorldBootstrap.Load(gameDir, house05Path!);
             var bella = Assert.IsType<XPerson>(boot.World.ObjectById(18));
-            // Self-referential HEAD slot attachment cycle on Bella
             bella[ObjectData.ParentId] = bella.ClockManagerIndex;
             bella[ObjectData.SlotHierNumber] = 2;
             while (bella.Slots.Count <= 2) bella.Slots.Add(0);
             bella.Slots[2] = bella.ClockManagerIndex;
 
-            // Mutual containment cycle on two world objects
             var pos = new ObjectPosition(0x40, 0x40, 1);
             var objA = boot.World.Add(MakeObject(9001, pos));
             var objB = boot.World.Add(MakeObject(9002, pos));

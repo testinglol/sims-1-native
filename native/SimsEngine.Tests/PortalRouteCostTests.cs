@@ -89,7 +89,6 @@ public sealed class PortalRouteCostTests
     [Fact]
     public void PortalFunctionLookupFallsBackToTheMasterWhenTheChainEnds()
     {
-        // FUN_00463804 takes +0x18c and, when it is empty, +0x190: a stair's last part reaches the function part through its master.
         var world = new SimulationWorld();
         var function = world.Add(FunctionPortal(1, 0, 10));
         var tail = world.Add(Portal(2, 160, 11));
@@ -190,7 +189,6 @@ public sealed class PortalRouteCostTests
         farDestinationPortal.MultiTileNextId = farFunctionPart.Id;
         world.InitializePortalRouteCosts(person);
 
-        // FUN_00463dd9 projects from each current-room portal; a link to the destination room is required.
         nearPortal.MultiTileNextId = nearFunctionPart.Id;
         farPortal.MultiTileNextId = farFunctionPart.Id;
         var selected = RouteExecutor.SelectPortalForDestination(world, person, destination, 10, 20);

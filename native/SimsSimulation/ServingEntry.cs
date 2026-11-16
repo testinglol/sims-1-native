@@ -354,8 +354,6 @@ internal static class ServingEntry
 
         var protocol = new StreamWriter(Console.OpenStandardOutput()) { AutoFlush = true };
         Console.SetOut(Console.Error);
-        // The first argument is the host's extracted content cache. WorldBootstrap needs the installed
-        // directory layout (GameData, UIGraphics, expansion packs), supplied separately by --install-root.
         var server = SimsSimulation.SimulationServer.Load(game, session, profile, house, protocol, languageCode);
         await server.Run();
         return 0;

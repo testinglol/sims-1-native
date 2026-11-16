@@ -26,10 +26,23 @@ fragment main0_out main0(main0_in in [[stage_in]], texture2d<float> art [[textur
     }
     if (in.inTextureOnly > 0.5)
     {
-        out.color = sampled;
+        out.color = float4((sampled.xyz * in.inTint.xyz) * in.inTint.w, sampled.w * in.inTint.w);
         return out;
     }
-    float light = 0.64999997615814208984375 + (0.3499999940395355224609375 * fast::max(0.0, dot(fast::normalize(in.inNormal), float3(-0.3244428336620330810546875, 0.811107099056243896484375, -0.4866642653942108154296875))));
-    out.color = float4((sampled.xyz * light) * in.inTint.xyz, sampled.w);
+    float nLenSq = dot(in.inNormal, in.inNormal);
+    float3 _72;
+    if (nLenSq > 9.9999999747524270787835121154785e-07)
+    {
+        _72 = in.inNormal * rsqrt(nLenSq);
+    }
+    else
+    {
+        _72 = float3(0.0, 1.0, 0.0);
+    }
+    float3 n = _72;
+    float ndotl = fast::max(0.0, dot(n, float3(-0.3244428336620330810546875, 0.811107099056243896484375, -0.4866642653942108154296875)));
+    float hemi = 0.5 + (0.5 * n.y);
+    float light = (0.60000002384185791015625 + (0.3300000131130218505859375 * ndotl)) + (0.070000000298023223876953125 * hemi);
+    out.color = float4(((sampled.xyz * light) * in.inTint.xyz) * in.inTint.w, sampled.w * in.inTint.w);
     return out;
 }

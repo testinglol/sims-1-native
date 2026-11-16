@@ -3,8 +3,6 @@ using SimsEngine.Formats;
 
 namespace SimsEngine.Tests;
 
-/// <summary>PALT, SPR#, SPR2 and DGRP on hand-built chunks that follow FUN_004b9685, FUN_004c173f, FUN_004c29b0,
-/// FUN_004bf678 and FUN_004078d2.</summary>
 public class SpriteTests
 {
     private static byte[] BigEndian(params uint[] values)
@@ -32,8 +30,8 @@ public class SpriteTests
     [Fact]
     public void SpriteFrameCommandsDrawRowsAndPadLiteralRuns()
     {
-        // Header (version, count, palette) and one offset: the frame starts at 16. Row 0: one literal pixel (the run
-        // ends at an odd offset, so a padding byte follows), skip one pixel, fill one. Row 1 is left empty.
+        // Sprite chunks contain a header and row offset table. Literal pixel runs ending at odd byte
+        // offsets are padded to 16-bit boundaries.
         var chunk = new ChunkBuilder().U32(504).U32(1).U32(7).U32(16)
             .U16(unchecked((ushort)-4)).U16(6).U16(2).U16(3)
             .U8(4).U8(0).U8(3).U8(1).U8(9).U8(0xEE).U8(1).U8(1).U8(2).U8(1).U8(7).U8(0).U8(5).U8(0);
@@ -72,8 +70,8 @@ public class SpriteTests
     [Fact]
     public void DepthSpriteDecodesColourDepthAndAlphaRuns()
     {
-        // Frame at 16: header, then row 0 with a (depth, colour) pair and a (depth, colour, alpha) triple padded to an
-        // even offset; row 1 skips a pixel and draws one colour byte, padded again.
+        // SPR2 frames encode row commands with depth, color, and alpha channel tuples padded to even byte
+        // boundaries.
         var chunk = new ChunkBuilder().U32(1000).U32(1).S32(-1).U32(16)
             .U16(2).U16(2).U32(7).U16(0).U16(255).S16(3).S16(-4)
             .U16(0x0000).U16(0x2001).U8(10).U8(20).U16(0x4001).U8(11).U8(21).U8(15).U8(0)

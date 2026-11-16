@@ -54,9 +54,9 @@ public sealed class CreateObjectInstancePrimitiveTests
     {
         var (context, host, world) = Setup(x: 32, y: 48, level: 1, meType: XPerson.PersonType);
         context.Me.TypeRecord = new TypeRecord(context.Me.Id);
-        // FUN_00440b6d clears the new object's data (FUN_00431c90) and then runs its function 0, so the placement words
-        // come from that init tree: AllowedHeightFlags := 1, then Flags := 4 (FUN_004338a5 bypasses person overlap for
-        // candidate Flags bit 2 set with bit 1 clear).
+        // Newly instantiated objects clear their data and run their init tree (entry point 0) to establish
+        // placement flags; person overlap checks are bypassed when object flag bit 2 is set while bit 1 is
+        // clear.
         var init = new ChunkBuilder().U16(0x8002).S16(2).U8(0).U8(4).U8(0).U8(0).U32(0)
             .U16(2).U8(1).U8(0xFF).Raw(AssignLiteral(ObjectData.AllowedHeightFlags, 1))
             .U16(2).U8(0xFE).U8(0xFF).Raw(AssignLiteral(ObjectData.Flags, 4));

@@ -5,16 +5,16 @@ namespace SimsEngine.Tests;
 
 public sealed class SetToNextPrimitiveTests
 {
-    // Operand: byte 4 is the mode (low seven bits) and the flag (bit 7), byte 5 the owner, byte 7 the data,
-    // bytes 0 to 3 the GUID for mode 4, byte 6 the frame local for mode 9.
+    // Operand encodes GUID in bytes 0-3, mode (bits 0-6) and explicit flag (bit 7) in byte 4, owner in byte
+    // 5, local variable index in byte 6, and target data in byte 7.
     private static byte[] Operand(byte mode, bool explicitTarget = false, byte owner = 0, byte data = 0, int guid = 0, byte local = 0) =>
         [(byte)guid, (byte)(guid >> 8), (byte)(guid >> 16), (byte)(guid >> 24),
             (byte)(mode | (explicitTarget ? 0x80 : 0)), owner, local, data];
 
     private static SimulationError Fails(Action action) => Assert.Throws<SimulationException>(action).Error;
 
-    // The walk order is the person (id 100, added first by the helper), then objects 3, 1 and 2; mode 1 sees only
-    // persons, while modes 0/2/6 walk the whole order.
+    // Mode 1 filters iteration strictly to person objects, whereas modes 0, 2, and 6 iterate over all
+    // objects in lot order.
     private static (TreeContext Context, XPerson Me) Lot(short stackObject = 0)
     {
         var (context, me, _) = PrimitiveTestWorld.Create(stackObject: stackObject);
@@ -28,7 +28,8 @@ public sealed class SetToNextPrimitiveTests
     public void WithoutTheFlagTheWalkMovesTheStackObject()
     {
         var (context, me) = Lot();
-        // Stack object 0 is "no object yet", so the walk starts at the first object (the person).
+        // A stack object value of 0 indicates uninitialized iteration, beginning traversal at the first
+        // matching object.
         Assert.Equal(PrimitiveResult.True, SetToNextPrimitive.Execute(context, Operand(1)));
         Assert.Equal(me.Id, context.Frame.StackObject);
     }
@@ -50,10 +51,10 @@ public sealed class SetToNextPrimitiveTests
         var (context, me) = Lot();
         Assert.Equal(PrimitiveResult.True, SetToNextPrimitive.Execute(context, Operand(1)));
         Assert.Equal(me.Id, context.Frame.StackObject);
-        // Objects 3, 1 and 2 are not on the person walk; it ends and writes 0.
+        // When person traversal reaches the end of eligible objects, iteration terminates and resets the
+        // stack object to 0.
         Assert.Equal(PrimitiveResult.False, SetToNextPrimitive.Execute(context, Operand(1)));
         Assert.Equal(0, context.Frame.StackObject);
-        // From 0 the walk starts again at the first person.
         Assert.Equal(PrimitiveResult.True, SetToNextPrimitive.Execute(context, Operand(1)));
         Assert.Equal(me.Id, context.Frame.StackObject);
     }
@@ -76,7 +77,8 @@ public sealed class SetToNextPrimitiveTests
         Assert.Equal(PrimitiveResult.True, SetToNextPrimitive.Execute(context, Operand(1)));
         Assert.Equal(second.Id, context.Frame.StackObject);
 
-        // A target that is not on the person walk (objects 1 and 3 are not persons) writes 0 and answers false.
+        // Starting person iteration from a non-person object terminates traversal immediately, resetting
+        // the target to 0 and returning false.
         context.Frame.StackObject = 3;
         Assert.Equal(PrimitiveResult.False, SetToNextPrimitive.Execute(context, Operand(1)));
         Assert.Equal(0, context.Frame.StackObject);
@@ -87,7 +89,6 @@ public sealed class SetToNextPrimitiveTests
     {
         var (context, me) = Lot();
         var second = context.World.Add(new XPerson(4, PrimitiveTestWorld.Definition(XPerson.PersonType)));
-        // Temporary 2 (owner 8, data 2) holds the first person, which the walk advances past.
         me.Temporaries[2] = me.Id;
         Assert.Equal(PrimitiveResult.True, SetToNextPrimitive.Execute(context, Operand(1, explicitTarget: true, owner: 8, data: 2)));
         Assert.Equal(second.Id, me.Temporaries[2]);
@@ -110,7 +111,8 @@ public sealed class SetToNextPrimitiveTests
     public void ReadOnlyOrMotiveTargetIsAnError()
     {
         var (context, _) = Lot();
-        // A literal and a motive are not shorts, so the reference is refused before the mode.
+        // Explicit iteration target variables must be writable short locations; non-writable or mismatched
+        // scopes trigger a read-only error.
         Assert.Equal(SimulationError.ExpressionAttemptingToWriteInAReadOnlyArea, Fails(() => SetToNextPrimitive.Execute(context, Operand(1, true, 7, 0))));
         Assert.Equal(SimulationError.ExpressionAttemptingToWriteInAReadOnlyArea, Fails(() => SetToNextPrimitive.Execute(context, Operand(1, true, 14, 0))));
     }
@@ -126,7 +128,6 @@ public sealed class SetToNextPrimitiveTests
     public void ReferenceErrorComesBeforeTheMode()
     {
         var (context, _) = Lot();
-        // Mode 2 is not ported, but a read-only target is refused first.
         Assert.Equal(SimulationError.ExpressionAttemptingToWriteInAReadOnlyArea, Fails(() => SetToNextPrimitive.Execute(context, Operand(2, true, 7, 0))));
     }
 
@@ -164,7 +165,7 @@ public sealed class SetToNextPrimitiveTests
     [Fact]
     public void Mode9_FollowsTheDeltasNeighborOrder()
     {
-        // Target tile (5, 3) against base (2, 3): the machine tries (0, +1), then (-1, 0), then (0, -1).
+        // Tile adjacency search tests neighboring offsets in sequence: (0, +1), (-1, 0), and (0, -1).
         var (context, host) = Mode9Lot(9, [5]);
         At(context.World, 5, 0x20, 0x30);
         At(context.World, 9, 0x50, 0x30);
@@ -511,8 +512,8 @@ public sealed class SetToNextPrimitiveTests
     [Fact]
     public void Mode10_ComparesFullIdsAndTruncatesToShort()
     {
-        // Entry ids are dwords: 5 does not match 0x10005, so the missing entry takes the first,
-        // and the target takes its low word.
+        // Career entry IDs are 32-bit values; unmatched lookups default to the first entry and extract its
+        // low 16-bit word.
         var (context, host) = HostLot(stackObject: 5);
         host.CareerEntries.AddRange([0x10005, 9]);
         Assert.Equal(PrimitiveResult.True, SetToNextPrimitive.Execute(context, Operand(10)));
@@ -600,5 +601,61 @@ public sealed class SetToNextPrimitiveTests
         var (context, _) = Lot();
         var error = Assert.Throws<SimulationException>(() => SetToNextPrimitive.Execute(context, Operand(13)));
         Assert.Equal(SimulationError.SearchTypeIsInvalid, error.Error);
+    }
+
+    [Fact]
+    public void NativeRequestKeys_RoundTripStackObjectKeyAcrossModesWithoutIdCollision()
+    {
+        // SetToNext compares and writes stack object keys rather than raw object IDs to prevent identifier
+        // aliasing across iteration modes.
+        var world = new SimulationWorld();
+        var me = world.Add(new XPerson(10, PrimitiveTestWorld.Definition(XPerson.PersonType))
+        {
+            RequestKey = 10,
+            Position = new ObjectPosition(64, 64, 1),
+        });
+        me[PersonData.FamilyNumber] = 7;
+
+        var kin = world.Add(new XPerson(40, PrimitiveTestWorld.Definition(XPerson.PersonType))
+        {
+            RequestKey = 20,
+            Position = new ObjectPosition(32, 32, 1),
+        });
+        kin[PersonData.FamilyNumber] = 7;
+        me.SetObjectTableEntry(20, kin);
+
+        var objA = world.Add(new XObject(1, PrimitiveTestWorld.Definition())
+        {
+            RequestKey = 30,
+            Position = new ObjectPosition(64, 64, 1),
+        });
+        var objB = world.Add(new XObject(2, PrimitiveTestWorld.Definition())
+        {
+            RequestKey = 40,
+            Position = new ObjectPosition(64, 64, 1),
+        });
+        me.SetObjectTableEntry(30, objA);
+        me.SetObjectTableEntry(40, objB);
+        objA[ObjectData.ParentId] = objB.RequestKey;
+        objB.Slots.Add(objA.RequestKey);
+
+        // Modes 1 and 12 operate strictly in stack object key space rather than object ID space.
+        var mode1 = new TreeContext(world, me, new StackFrame(0, [], []));
+        Assert.Equal(PrimitiveResult.True, SetToNextPrimitive.Execute(mode1, Operand(1)));
+        Assert.Equal(me.StackObjectKey, mode1.Frame.StackObject);
+        Assert.Equal(PrimitiveResult.True, SetToNextPrimitive.Execute(mode1, Operand(1)));
+        Assert.Equal(kin.StackObjectKey, mode1.Frame.StackObject);
+
+        var mode12 = new TreeContext(world, me, new StackFrame(me.StackObjectKey, [], []));
+        Assert.Equal(PrimitiveResult.True, SetToNextPrimitive.Execute(mode12, Operand(12)));
+        Assert.Equal(kin.StackObjectKey, mode12.Frame.StackObject);
+
+        // Mode 8 tile traversal iterates through objects on the tile using stack object keys, cycling
+        // through members and wrapping back to the start.
+        var mode8 = new TreeContext(world, me, new StackFrame(objB.StackObjectKey, [], []));
+        Assert.Equal(PrimitiveResult.True, SetToNextPrimitive.Execute(mode8, Operand(8)));
+        Assert.Equal(objA.StackObjectKey, mode8.Frame.StackObject);
+        Assert.Equal(PrimitiveResult.True, SetToNextPrimitive.Execute(mode8, Operand(8)));
+        Assert.Equal(objB.StackObjectKey, mode8.Frame.StackObject);
     }
 }

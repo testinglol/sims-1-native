@@ -258,7 +258,6 @@ public sealed partial class GameContent
                 }
                 catch
                 {
-                    // Ignore cleanup errors.
                 }
             }
         }

@@ -48,16 +48,11 @@ public sealed record BuyCatalogPage
     [JsonPropertyName("room")]
     public int? Room { get; init; }
 
-    /// <summary>
-    /// Items per engine function category in the page's room; the original enables a room sub-sort button only when
-    /// its count is not zero.
-    /// </summary>
+    /// <summary>Item counts per function category; sub-sort category buttons are enabled only when their
+    /// respective count is greater than zero.</summary>
     [JsonPropertyName("functionCounts")]
     public IReadOnlyList<int>? FunctionCounts { get; init; }
 
-    /// <summary>
-    /// Residential FunctionSubsort options in Sims.exe button order, for the selected function category.
-    /// </summary>
     [JsonPropertyName("subsort")]
     public int? Subsort { get; init; }
 
@@ -82,9 +77,8 @@ public sealed record BuyCatalogPage
         return count > 0 && Offset + count < Total ? Offset + count : null;
     }
 
-    /// <summary>
-    /// The Mac CatalogSortPred compares price first and name on ties; the host breaks remaining ties by GUID.
-    /// </summary>
+    /// <summary>Orders catalog items primarily by price, breaking ties by name and resolving any remaining
+    /// ties by GUID.</summary>
     private static bool Ordered(Item previous, Item item)
     {
         if (previous.Price != item.Price)
@@ -335,9 +329,8 @@ public sealed record EditableLotObject
     [JsonPropertyName("sellable")]
     public required bool Sellable { get; init; }
 
-    /// <summary>
-    /// The object's catalog category (8 doors, 9 windows, ...), or null when it is not in the catalog.
-    /// </summary>
+    /// <summary>Specifies the catalog category index (such as 8 for doors or 9 for windows), or <c>null</c>
+    /// if not cataloged.</summary>
     [JsonPropertyName("catalogCategory")]
     public int? CatalogCategory { get; init; }
 
@@ -390,6 +383,18 @@ public sealed class BuySelection
         Direction = lotObject.Direction;
     }
 
+    public void SetDirection(int direction)
+    {
+        if (Target is not { } target)
+            return;
+        if (target.IsPlaced && target.PlacedObject is { Movable: false })
+            return;
+        if (direction is not (1 or 4 or 16 or 64))
+            return;
+
+        Direction = direction;
+    }
+
     public void Rotate(int steps = 1)
     {
         if (Target is not { } target)
@@ -404,10 +409,8 @@ public sealed class BuySelection
         Direction = directions[((index + steps % 4) + 4) % 4];
     }
 
-    /// <summary>
-    /// Turns the held object toward a tile offset, as dragging away from where it is put down does:
-    /// 1 faces north (-y), 4 east (+x), 16 south (+y) and 64 west (-x). Returns whether the direction changed.
-    /// </summary>
+    /// <summary>Rotates the held object toward a tile offset using directional bitmasks: 1 for north (-y),
+    /// 4 for east (+x), 16 for south (+y), and 64 for west (-x).</summary>
     public bool Face(int dx, int dy)
     {
         if (Target is not { } target || (dx == 0 && dy == 0))
@@ -520,6 +523,9 @@ public sealed record PlacementPreview
     [JsonPropertyName("status")]
     public required string Status { get; init; }
 
+    [JsonPropertyName("direction")]
+    public int? Direction { get; init; }
+
     [JsonPropertyName("tiles")]
     public required IReadOnlyList<Tile> Tiles { get; init; }
 
@@ -558,14 +564,10 @@ public sealed record PlacementPreview
 
 public static class PlacementTooltip
 {
-    /// <summary>
-    /// Mac cOptionsMgr::SetQuickTips writes 0 ms with Quick Tips and 0x2ee ms without it.
-    /// </summary>
+    /// <summary>Returns the tooltip delay in seconds: 0.0 when quick tips are enabled, or 0.750 seconds
+    /// (750 ms) when disabled.</summary>
     public static double Delay(bool quickTips) => quickTips ? 0.0 : 0.750;
 
-    /// <summary>
-    /// cOptionsMgr::SetQuickTips sets the shared tooltip delay and unfurl duration.
-    /// </summary>
     public static double? Progress(ref double? startedAt, bool quickTips, double? now = null)
     {
         double timestamp = now ?? (Stopwatch.GetTimestamp() / (double)Stopwatch.Frequency);
@@ -595,14 +597,13 @@ public static class PlacementTooltip
             maxLineWidth = Math.Max(maxLineWidth, font.TextWidth(lines[i]));
         }
 
-        // cDefaultTTWindow::SetToolTip sizes its frame to measured text + 6 px wide and + 2 px tall.
         int width = Math.Max(6, maxLineWidth + 6);
         int height = Math.Max(2, lines.Length * font.LineHeight + 2);
         byte[] pixels = new byte[width * height * 4];
         Array.Fill(pixels, (byte)255);
 
         for (int pixel = 0; pixel < width * height; pixel++)
-            pixels[pixel * 4 + 2] = 224; // cDefaultTTWindow fills tooltips with RGB(255, 255, 224).
+            pixels[pixel * 4 + 2] = 224;
 
         for (int y = 0; y < height; y++)
         {
@@ -645,10 +646,6 @@ public static class PlacementTooltip
             size.Height);
 }
 
-/// <summary>
-/// A versioned, declarative panel contributed by a pack. Packs describe layout and bindings only; the client draws
-/// every element with original-game primitives inside the 800x600 logical interface.
-/// </summary>
 public sealed record PanelDescription
 {
     public const int SupportedSchemaVersion = 1;
@@ -696,15 +693,10 @@ public sealed record PanelDescription
     [JsonConverter(typeof(StrictCamelCaseEnumConverter<Kind>))]
     public enum Kind
     {
-        /// <summary>Static or bound text in the original bitmap font.</summary>
         Label,
-        /// <summary>An original-art button that sends <see cref="Element.Action"/> to the owning plugin.</summary>
         Button,
-        /// <summary>A horizontal bar like the original needs meters; <see cref="Element.Binding"/> supplies a number between minimum and maximum.</summary>
         Meter,
-        /// <summary>An image read from the original or pack-provided UIGraphics resources.</summary>
         Image,
-        /// <summary>Bound text split into rows by newline characters.</summary>
         List
     }
 
@@ -759,7 +751,6 @@ public sealed record PanelDescription
     [JsonPropertyName("frame")]
     public required Rect Frame { get; init; }
 
-    /// <summary>Draws the original dialog frame behind the panel when true or omitted.</summary>
     [JsonPropertyName("framed")]
     public bool? Framed { get; init; }
 
@@ -789,7 +780,6 @@ public sealed record PanelDescription
         if (Elements is null || Elements.Count > MaximumElements)
             throw new ContentError($"Panel {Id} has more than {MaximumElements} elements");
 
-        // The renderer reserves the title band and the bottom band for the original title text and close button.
         if (Frame.Width < 140 || Frame.Height < TitleHeight + CloseBandHeight + 8)
             throw new ContentError($"Panel {Id} must be at least 140x{TitleHeight + CloseBandHeight + 8}");
 
@@ -859,9 +849,6 @@ public sealed record PanelDescription
         }
     }
 
-    /// <summary>
-    /// Text shown for an element given the plugin's current binding values.
-    /// </summary>
     public string DisplayText(Element element, IReadOnlyDictionary<string, string> values)
     {
         if (element.Binding is { } binding && values.TryGetValue(binding, out string? value))
@@ -869,9 +856,6 @@ public sealed record PanelDescription
         return element.Text ?? string.Empty;
     }
 
-    /// <summary>
-    /// Fill fraction for a meter element, clamped to 0...1; null when the bound value is missing or not numeric.
-    /// </summary>
     public double? MeterFraction(Element element, IReadOnlyDictionary<string, string> values)
     {
         if (element.Kind != Kind.Meter || element.Binding is not { } binding

@@ -136,7 +136,6 @@ public sealed class Wave11EngineAndCatalogParityTests
         world.PersonRecordKeys.AddRange([meGuid, selectedGuid]);
         world.Clock.Restore(10, 20, 0);
 
-        // Seed distinct motives/executor state on me and companion selected.
         me.SetInteractionExecutorFloat(9, 42f);
         me.SetInteractionExecutorFloat(6, -15f);
         me.InteractionBehaviorSavedWord = 111;
@@ -147,7 +146,6 @@ public sealed class Wave11EngineAndCatalogParityTests
         selected.InteractionBehaviorSavedWord = 222;
         selected.SetInteractionExecutorWord(0x62c, 223);
 
-        // Store companion selector (1, selectedGuid) in me's scope.
         var meScope = world.InteractionExecutorScope(me);
         meScope.AddOrIncrement(1, selectedGuid, 1);
 
@@ -170,7 +168,6 @@ public sealed class Wave11EngineAndCatalogParityTests
             return unchecked((short)value);
         }
 
-        // Both selected's scope and me's scope receive their respective motive snapshots.
         var selectedScope = world.InteractionExecutorScope(selected);
         Assert.Equal((short)88, ReadScopeWord(selectedScope, 2, 0));
         Assert.Equal((short)33, ReadScopeWord(selectedScope, 2, 1));
@@ -182,7 +179,6 @@ public sealed class Wave11EngineAndCatalogParityTests
         Assert.Equal((short)111, ReadScopeWord(meScope, 2, 9));
         Assert.Equal((short)112, ReadScopeWord(meScope, 2, 10));
 
-        // Arrival clock (2, 7) and (2, 8) is stored in me's scope only, never selected's.
         Assert.Equal((short)11, ReadScopeWord(meScope, 2, 7));
         Assert.Equal((short)45, ReadScopeWord(meScope, 2, 8));
         short selectedClockCursor = -1;
@@ -190,7 +186,6 @@ public sealed class Wave11EngineAndCatalogParityTests
         selectedClockCursor = -1;
         Assert.False(selectedScope.TryFindNext(2, ref selectedClockCursor, 8, out _));
 
-        // PendingLotSwitch carries me's GUID and family, plus selected's GUID as CompanionGuid.
         var pending = world.PendingLotSwitch;
         Assert.NotNull(pending);
         Assert.Equal((short)21, pending.RawTargetHouse);

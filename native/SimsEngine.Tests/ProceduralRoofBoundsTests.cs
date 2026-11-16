@@ -4,7 +4,6 @@ using Xunit;
 
 namespace SimsEngine.Tests;
 
-/// <summary>Unit tests for A13 procedural roof bounds, lot-boundary vertex clamping, multi-story roofs, and pitch limits.</summary>
 public class ProceduralRoofBoundsTests
 {
     private static IffFile CreateLotWithUpperFloor(Func<int, int, ushort> upperFloor)
@@ -46,7 +45,6 @@ public class ProceduralRoofBoundsTests
     [InlineData(10.0f, 2.0f)]
     public void PitchIsStrictlyClampedToZeroThroughTwo(float input, float expected)
     {
-        // Sims.exe FUN_0056f23d clamps pitch strictly to [0.0, 2.0] in LotRoof.SetPitch
         var roof = LotRoof.Read(new IffFile(ChunkBuilder.File(), "empty.iff"));
         Assert.Equal(LotRoof.DefaultPitch, roof.Pitch);
         Assert.Equal(2.0f, LotRoof.MaxPitch);
@@ -54,7 +52,6 @@ public class ProceduralRoofBoundsTests
         roof.SetPitch(input);
         Assert.Equal(expected, roof.Pitch);
 
-        // RoofCellMesh.Build accepts all valid clamped pitches without throwing
         var vertices = RoofCellMesh.Build(256, roof.Pitch);
         Assert.NotEmpty(vertices);
     }
@@ -62,7 +59,6 @@ public class ProceduralRoofBoundsTests
     [Fact]
     public void RoofCellMeshRejectsInvalidPitchesOutsideBounds()
     {
-        // RoofCellMesh.Build validates pitch strictly against [0, LotRoof.MaxPitch]
         Assert.Throws<ArgumentOutOfRangeException>(() => RoofCellMesh.Build(256, -0.01f));
         Assert.Throws<ArgumentOutOfRangeException>(() => RoofCellMesh.Build(256, 2.01f));
         Assert.Throws<ArgumentOutOfRangeException>(() => RoofCellMesh.Build(256, float.NaN));
@@ -71,10 +67,9 @@ public class ProceduralRoofBoundsTests
     [Fact]
     public void RoofVerticesDoNotEscapeLotBoundaries()
     {
-        // A 64x64 lot corresponds to 128x128 RoofGrid half-tile cells
+        // A 64x64 lot corresponds to 128x128 half-tile roof grid cells.
         var grid = new RoofGrid(128);
 
-        // Seed roofs at opposite corners of the lot
         for (var r = 2; r <= 6; r++)
         for (var c = 2; c <= 6; c++)
             grid.Seed(r, c, roofed: true, blocked: false);
@@ -85,7 +80,6 @@ public class ProceduralRoofBoundsTests
 
         grid.Plan(false);
 
-        // Verify all generated roof mesh vertices are bounded within the 64x64 lot dimensions
         for (var row = 1; row < 127; row++)
         for (var column = 1; column < 127; column++)
         {
@@ -103,25 +97,20 @@ public class ProceduralRoofBoundsTests
     [Fact]
     public void MultiStoryRoofPlacementAltitudeSeparation()
     {
-        // Lot with upper floor at (6, 5)
         var lot = CreateLotWithUpperFloor((x, y) => x == 6 && y == 5 ? (ushort)256 : (ushort)0);
 
-        // Level 1: upper floor blocks roof under the second story
         var level1Grid = LotRoofGrid.Seed(lot, 1, []);
-        Assert.False(level1Grid.Has(2 * 5, 2 * 6)); // (6, 5) is blocked
+        Assert.False(level1Grid.Has(2 * 5, 2 * 6));
 
-        // Level 2: roof is placed above the upper floor
         var level2Grid = LotRoofGrid.Seed(lot, 2, []);
         Assert.True(level2Grid.Has(2 * 5, 2 * 6));
 
-        // World altitude separation follows level * EntityTransform.StoryHeight (SceneExporter.cs:2022)
-        const float StoryHeight = 2.95f; // EntityTransform.StoryHeight
+        const float StoryHeight = 2.95f;
         var level1Altitude = 1 * StoryHeight;
         var level2Altitude = 2 * StoryHeight;
         Assert.True(level2Altitude > level1Altitude);
         Assert.Equal(StoryHeight, level2Altitude - level1Altitude, precision: 3);
 
-        // Invalid story levels are rejected by LotRoofGrid
         Assert.Throws<ArgumentOutOfRangeException>(() => LotRoofGrid.Seed(lot, 0, []));
         Assert.Throws<ArgumentOutOfRangeException>(() => LotRoofGrid.Seed(lot, 3, []));
     }
@@ -129,7 +118,6 @@ public class ProceduralRoofBoundsTests
     [Fact]
     public void RoofRelaxationSolverConvergesWithinMaxRounds()
     {
-        // An irregular L-shaped roof footprint requiring multiple relaxation passes
         var grid = new RoofGrid(24);
         for (var r = 4; r <= 14; r++)
         for (var c = 4; c <= 8; c++)
@@ -139,10 +127,8 @@ public class ProceduralRoofBoundsTests
         for (var c = 9; c <= 16; c++)
             grid.Seed(r, c, roofed: true, blocked: false);
 
-        // RoofGrid.Plan executes Sims.exe FUN_0056ea87 relaxation passes (Grow, Heights, Kinds, Shapes up to 9 rounds)
         grid.Plan(grow: false);
 
-        // Verify convergence: every roofed cell received valid height, shape, and mesh resource
         for (var r = 1; r < 23; r++)
         for (var c = 1; c < 23; c++)
         {
@@ -159,34 +145,27 @@ public class ProceduralRoofBoundsTests
     public void EdgeEavesExpandBeyondEnclosedRooms()
     {
         var grid = new RoofGrid(32);
-        // Seed an 11x11 square from row 10..20, column 10..20
         for (var r = 10; r <= 20; r++)
         for (var c = 10; c <= 20; c++)
             grid.Seed(r, c, roofed: true, blocked: false);
 
-        // Mark (9, 10) as blocked to verify blocked cells do not grow
         grid.Seed(9, 10, roofed: false, blocked: true);
 
-        // Before Plan: cardinal neighbor cell (9, 15) is not roofed
         Assert.False(grid.Has(9, 15));
         Assert.False(grid.Has(21, 15));
         Assert.False(grid.Has(15, 9));
         Assert.False(grid.Has(15, 21));
 
-        // Plan runs Grow() (FUN_0056e3da) which expands eaves by 1 half-tile cell
         grid.Plan(grow: false);
 
-        // Cardinal unblocked neighbors are now roofed with the Grown flag (bit 2 = 4)
         Assert.True(grid.Has(9, 15));
         Assert.True(grid.Has(21, 15));
         Assert.True(grid.Has(15, 9));
         Assert.True(grid.Has(15, 21));
         Assert.NotEqual(0, grid.Flags(9, 15) & 4);
 
-        // Blocked neighbor did NOT grow
         Assert.False(grid.Has(9, 10));
 
-        // Cells two steps out did NOT grow (growth does not propagate from grown cells)
         Assert.False(grid.Has(8, 15));
         Assert.False(grid.Has(22, 15));
         Assert.False(grid.Has(15, 8));

@@ -2,11 +2,6 @@ using System.Buffers.Binary;
 using System.Text.Json;
 using SimsNative.Plugins;
 
-/// <summary>
-/// Runs a built plugin assembly (by default the example allowance pack) through <see cref="PluginHost"/> with a
-/// scripted simulation instead of a VM: trust and hash gating, loading, ticks, panel values and actions, save, state
-/// migration, save validation and failure isolation. Needs no game data.
-/// </summary>
 internal static class PluginChecks
 {
     private const string PackId = "local.example-allowance";
@@ -111,7 +106,6 @@ internal static class PluginChecks
 
         try
         {
-            // Gating: nothing runs unless the exact pack version and folder digest are trusted and still match.
             using (var host = Host(trust: new { schemaVersion = 1, plugins = Array.Empty<object>() }))
                 Require(Status(host).State == "untrusted", "an untrusted plugin does not load");
             using (var host = Host(trust: new { schemaVersion = 1, plugins = new[] { new { packId = PackId, version = "0.1.0", sha256 = digest } } }))
@@ -145,7 +139,6 @@ internal static class PluginChecks
                 Require(Status(host) is { State: "failed" } status && status.Reason!.Contains("not declared"),
                     "writing an undeclared panel during Initialize fails the plugin");
 
-            // A trusted plugin runs against the scripted simulation.
             simulation.Sims.AddRange([new PluginSim(1, 10, "Parent", false), new PluginSim(2, 11, "Kid", true), new PluginSim(3, 12, "Baby", true)]);
             using (var host = Host())
             {
@@ -211,7 +204,8 @@ internal static class PluginChecks
                 Require(Invalid(PackId, Record(values: new() { [new string('k', 65)] = "" })), "saves with overlong keys are refused");
                 Require(Invalid(PackId, Record(values: new() { ["k"] = new string('v', 4097) })), "saves with overlong values are refused");
 
-                // A plugin that throws is disabled for the session and blocks saving rather than losing its state.
+                // A plugin that throws an unhandled exception is disabled for the remainder of the session
+                // and blocks saving to prevent state corruption.
                 host.PanelAction(PackId, Panel, "resume");
                 PluginObject Sim(short id) => new(id, 0, "Sim", 1, 1, 1, id);
                 Require(host.MenuEntries(1, Sim(2)) is [{ PackId: PackId, Entry: "pay-now", Name: "Allowance/Pay Now" }, { Entry: "details" }] &&

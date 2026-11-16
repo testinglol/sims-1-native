@@ -3,12 +3,8 @@ using System.Text;
 
 namespace SimsEngine.Formats;
 
-/// <summary>Writes the resource stream of <see cref="PersistReader"/> (Sims.exe FUN_00464faf writes it with the same
-/// FUN_00464a5e, FUN_00464973, FUN_00464895 and FUN_00464d2c that read it): the 12-byte header, values, field coding
-/// (FUN_004645e3) and blocks (FUN_00464c0a). A value is coded as one bit for zero, then a two-bit width selector and
-/// the value in that width; the writer picks the smallest width whose signed range holds the value, which is what the
-/// reader's sign extension expects. A string flushes to the next byte and is padded so it ends on an even stream
-/// offset, as FUN_0046494e reads it.</summary>
+/// <summary>Writes structured persistence resource streams, supporting 12-byte headers, variable-width bit
+/// field coding, block skip patching, and even-aligned string padding.</summary>
 public sealed class PersistWriter
 {
     private static ReadOnlySpan<byte> ByteWidths => [2, 4, 6, 8];
@@ -22,7 +18,6 @@ public sealed class PersistWriter
     private int _bitMask;
     private byte _bits;
 
-    /// <summary>Size of the header; stored stream offsets count from its end.</summary>
     public const int HeaderSize = 12;
 
     private PersistWriter(bool swap, int positionOffset)
@@ -31,10 +26,8 @@ public sealed class PersistWriter
         _positionOffset = positionOffset;
     }
 
-    /// <summary>Starts a stream with the header: the byte-order flag, three unused bytes, the little-endian version and
-    /// the stored type tag.</summary>
-    /// <param name="positionOffset">Added to <see cref="Position"/> when a string decides its even padding, so a stream
-    /// written out of place can reproduce the stored parity.</param>
+    /// <summary>Initializes a persistence stream with a 12-byte header containing the endian flag, version,
+    /// and type tag.</summary>
     public static PersistWriter Start(bool swap, int version, string tag, int positionOffset = 0)
     {
         if (tag.Length != 4) throw new ArgumentException("The stored tag is four characters.", nameof(tag));
@@ -48,8 +41,6 @@ public sealed class PersistWriter
 
     public int Position => (int)_output.Position;
 
-    /// <summary>Writes the coding flag byte and switches the following values to field coding when it is set
-    /// (<see cref="PersistReader.ReadCodingFlag"/>).</summary>
     public void WriteCodingFlag(bool coded)
     {
         WriteRawByte(coded ? (byte)1 : (byte)0);
@@ -58,9 +49,8 @@ public sealed class PersistWriter
 
     public bool FieldCoded => _coded;
 
-    /// <summary>One byte. The reader sign-extends a coded field before its byte cast, so a value up to 127 uses the
-    /// smallest width whose signed range holds it and 128 and above use the 8-bit width, whose sign extension casts
-    /// back to the value.</summary>
+    /// <summary>Writes a byte value. When field coding is active, values above 127 force the 8-bit width so
+    /// signed extension preserves the unsigned byte value.</summary>
     public void Byte(byte value)
     {
         if (!_coded)
@@ -119,11 +109,10 @@ public sealed class PersistWriter
         var bytes = Encoding.Latin1.GetBytes(value);
         _output.Write(bytes);
         _output.WriteByte(0);
-        // Sims.exe pads an odd string with 0xA3 (the even-string convention of the resource readers).
+        // Pads strings ending at an odd stream offset with 0xA3.
         if (((Position + _positionOffset) & 1) != 0) _output.WriteByte(0xA3);
     }
 
-    /// <summary>Copies already-encoded bytes (a block from a source that is not re-encoded) after flushing any bits.</summary>
     public void Raw(ReadOnlySpan<byte> bytes)
     {
         FlushBits();
@@ -132,8 +121,8 @@ public sealed class PersistWriter
 
     private int _blockStart;
 
-    /// <summary>Starts a block: a u32 offset, swapped but never coded, is patched by <see cref="EndBlock"/> to the
-    /// position where the following block starts (the offset field itself).</summary>
+    /// <summary>Emits a placeholder 32-bit offset for a record block to be patched by
+    /// <see cref="EndBlock"/>.</summary>
     public void BeginBlock()
     {
         FlushBits();
@@ -141,7 +130,6 @@ public sealed class PersistWriter
         WriteRawInt32(0, _swap);
     }
 
-    /// <summary>Patches the block's stored offset to the current position, then the next block starts there.</summary>
     public void EndBlock()
     {
         FlushBits();
@@ -158,8 +146,8 @@ public sealed class PersistWriter
         return _output.ToArray();
     }
 
-    /// <summary>Codes one value: a zero bit for zero, otherwise the marker, a two-bit width selector and the value's
-    /// bits in the smallest width whose signed range holds it.</summary>
+    /// <summary>Encodes a numeric value as a single zero bit for zero, or a set bit followed by a two-bit
+    /// width selector and sign-extended data bits.</summary>
     private void Field(ReadOnlySpan<byte> widths, long value, int size)
     {
         if (value == 0)

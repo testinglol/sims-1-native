@@ -229,7 +229,6 @@ public sealed class Wave11TravelAndHouseholdServerTests
         var (tempRoot, profile, userData, session) = CreateIsolatedProfile(gameDir, copyCharacters: true, 5, 21);
         try
         {
-            // Provide a valid House99.iff in the isolated profile so targetHouse == 99 arrival clock can be tested end-to-end.
             File.Copy(house21!, Path.Combine(userData, "Houses", "House99.iff"));
 
             using var outputStream = new MemoryStream();
@@ -238,7 +237,6 @@ public sealed class Wave11TravelAndHouseholdServerTests
             Assert.NotNull(server.World);
             DrainEvents(outputStream, writer);
 
-            // Create a separate unhoused household so a valid User#####.iff and NBRS entry exist to adopt later.
             Assert.True(server.Handle(JsonSerializer.Serialize(new
             {
                 id = "adopt-seed",
@@ -255,7 +253,6 @@ public sealed class Wave11TravelAndHouseholdServerTests
             var nghSeed = IffFile.Open(Path.Combine(userData, "Neighborhood.iff"));
             var adoptedGuid = Family.Read(nghSeed, nghSeed.Find(ResourceType.Parse("FAMI"), seedFamilyChunkId)!).Members[0];
 
-            // Reload lot 5 so homeWorld's SavedNeighbors includes the newly created neighborhood bin member.
             server = SimulationServer.Load(gameDir, session, profile, 5, writer);
             Assert.NotNull(server.World);
             DrainEvents(outputStream, writer);
@@ -271,12 +268,11 @@ public sealed class Wave11TravelAndHouseholdServerTests
             var companionGuid = companion.TypeRecord!.Key;
             var familyNumber = traveller[PersonData.FamilyNumber];
 
-            // Seed travel motives for both traveller and companion, with NO clock override, and travel to House 99.
             var travellerScope99 = homeWorld.InteractionExecutorScope(traveller);
-            travellerScope99.AddOrIncrement(2, 0, 35); // Bladder = 35
-            travellerScope99.AddOrIncrement(2, 4, 60); // Hunger = 60
+            travellerScope99.AddOrIncrement(2, 0, 35);
+            travellerScope99.AddOrIncrement(2, 4, 60);
             var companionScope99 = homeWorld.InteractionExecutorScope(companion);
-            companionScope99.AddOrIncrement(2, 4, 45); // Hunger = 45 (without (2,0) set)
+            companionScope99.AddOrIncrement(2, 4, 45);
             homeWorld.PendingLotSwitch = new SimulationWorld.LotSwitchRequest(99, travellerGuid, familyNumber);
 
             server.BatchRun(1);
@@ -295,13 +291,12 @@ public sealed class Wave11TravelAndHouseholdServerTests
             Assert.Equal(60f, arrivedTraveller.Motives[(int)Motive.Hunger]);
             Assert.Equal(45f, arrivedCompanion!.Motives[(int)Motive.Hunger]);
 
-            // Simulate away progress: skills/fame in PersonData, updated return motives, and adopting a new household member.
             arrivedTraveller[PersonData.CookingHouseBrokenSkill] = 450;
             arrivedTraveller[PersonData.FameScore] = 350;
             var returnScope = awayWorld.InteractionExecutorScope(arrivedTraveller);
-            returnScope.AddOrIncrement(2, 0, 77);  // Bladder = 77
-            returnScope.AddOrIncrement(2, 4, -25); // Hunger = -25
-            returnScope.AddOrIncrement(2, 7, 18);  // 18:10 return clock
+            returnScope.AddOrIncrement(2, 0, 77);
+            returnScope.AddOrIncrement(2, 4, -25);
+            returnScope.AddOrIncrement(2, 7, 18);
             returnScope.AddOrIncrement(2, 8, 10);
 
             var awayBudget = Assert.IsType<FamilyBudget>(awayWorld.FamilyBudget);

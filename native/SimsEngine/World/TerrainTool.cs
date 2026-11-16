@@ -3,12 +3,10 @@ using SimsEngine.Simulation;
 
 namespace SimsEngine.World;
 
-/// <summary>The build-mode terrain tools (FUN_00491f06 raise and lower, FUN_00485361 level). Heights are one byte per
-/// vertex, 0 to 0x40. Neighbouring vertices may differ by at most 5, so a change that exceeds it pulls the neighbour to
-/// within 5 and carries on from there (FUN_00491375); the charge is the price per unit of height moved, counting the
-/// units pulled along. A vertex only changes when no wall, floor or pool touches the four tiles around it on any level
-/// and no object that needs flat ground sits on them (FUN_00491801). A refused edit changes nothing, as the original
-/// restores its altitude snapshot, and a charge the household cannot afford is refused too (FUN_00492b81).</summary>
+/// <summary>Provides build-mode terrain modification tools. Vertex heights range from 0 to 0x40, with
+/// neighboring vertices constrained to a maximum difference of 5 units, pulling adjacent vertices when
+/// exceeded. Changes require surrounding tiles across all levels to be free of walls, floors, pools, and
+/// flat-ground objects, rolling back if refused or unaffordable.</summary>
 public sealed class TerrainTool(SimulationWorld world, LotTerrain terrain, IFamilyBudget budget, int unitPrice, LotTiles? tiles = null,
     LotPool? pool = null, IReadOnlyList<LotFloors>? floors = null, IReadOnlyList<LotWalls>? walls = null, LotWater? water = null)
 {
@@ -17,22 +15,19 @@ public sealed class TerrainTool(SimulationWorld world, LotTerrain terrain, IFami
     private const int Slope = 5;
     private static readonly (int X, int Y)[] Neighbours = [(-1, 0), (0, -1), (1, 0), (0, 1)];
 
-    /// <summary>Tool +0x20: what the stroke's commit will charge.</summary>
     public int Pending { get; private set; }
 
-    /// <summary>Tool +0x3e: the last edit was refused for lack of funds.</summary>
     public bool InsufficientFunds { get; private set; }
 
-    /// <summary>Tool +0x38 is nonzero after a refusal: the edit hit a vertex that cannot change.</summary>
     public bool Refused { get; private set; }
 
-    /// <summary>FUN_00491113 for one vertex: moves it by <paramref name="delta"/> (clamped to 0..0x40) and lets the slope limit
-    /// carry the change outwards. Returns the vertices whose height changed, or zero when the edit was refused.</summary>
+    /// <summary>Sets a vertex to the target height clamped to 0..0x40, propagating slope constraints
+    /// outward to neighboring vertices. Returns the count of modified vertices, or zero if refused.</summary>
     public int Raise(int x, int y, int target) => Apply([(x, y)], (_, _) => target, [(x, y)]);
 
-    /// <summary>FUN_00491f06 smooth hill mode: jitters 7 times around (<paramref name="x"/>, <paramref name="y"/>) with
-    /// CenteredJitter(4) (FUN_0046f59a), calls TrySmoothVertex (FUN_00490f92) on valid 4-neighbours and twice on the
-    /// jittered center, rolling back terrain and pending cost on any refusal or insufficient funds.</summary>
+    /// <summary>Applies smooth hill elevation by jittering seven times around the center coordinate within
+    /// a radius of 4, smoothing valid 4-neighbors and the jittered center. Rolls back terrain and pending
+    /// charges if any vertex modification is refused or unaffordable.</summary>
     public int SmoothRaise(int x, int y, int delta, Func<int>? nextRandom = null)
     {
         var rng = nextRandom ?? (() => Random.Shared.Next(0, 0x8000));
@@ -106,7 +101,6 @@ public sealed class TerrainTool(SimulationWorld world, LotTerrain terrain, IFami
         return changedCount;
     }
 
-    /// <summary>FUN_00485361: brings every vertex of the inclusive rectangle to <paramref name="height"/>.</summary>
     public int Level(int left, int top, int right, int bottom, int height)
     {
         var vertices = new List<(int X, int Y)>();
@@ -141,8 +135,7 @@ public sealed class TerrainTool(SimulationWorld world, LotTerrain terrain, IFami
         }
         if (levelBounds is { } rect)
         {
-            // FUN_00485361 lines 113 to 171: interior tiles allow multi-tile objects without PlacementFlags 0x100 only
-            // when every member of the linked chain lies within the leveled tile rectangle, charging $5 per tile.
+            // Multi-tile objects are allowed only if all linked parts are in bounds.
             for (var tx = rect.Left; tx < rect.Right; tx++)
             for (var ty = rect.Top; ty < rect.Bottom; ty++)
             {
@@ -211,8 +204,8 @@ public sealed class TerrainTool(SimulationWorld world, LotTerrain terrain, IFami
         return 0;
     }
 
-    /// <summary>FUN_00491801: the vertex lies inside the lot, and the four tiles around it are free of walls, floors, pools and,
-    /// when <paramref name="checkObjects"/> is true, objects that must stand on flat ground, on both levels.</summary>
+    /// <summary>Checks whether a vertex can be modified, requiring it to be inside lot bounds and all four
+    /// adjacent tiles across all levels free of walls, floors, pools, and flat-ground objects.</summary>
     private bool Editable(int x, int y, bool checkObjects = true, (int Left, int Top, int Right, int Bottom)? levelBounds = null)
     {
         if (x < 2 || y < 2 || x > LotWalls.Size - 2 || y > LotWalls.Size - 2) return false;
@@ -237,7 +230,6 @@ public sealed class TerrainTool(SimulationWorld world, LotTerrain terrain, IFami
         return true;
     }
 
-    /// <summary>FUN_00492bc4: charges the pending amount and clears it.</summary>
     public int Commit()
     {
         var amount = Pending;

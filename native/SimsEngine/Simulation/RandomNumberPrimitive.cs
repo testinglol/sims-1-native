@@ -1,14 +1,7 @@
 namespace SimsEngine.Simulation;
 
-/// <summary>The Random Number primitive (opcode 8), after Sims.exe FUN_00451eab. Its operand holds the result (data u16
-/// at 0, owner byte 2) and the range (data u16 at 4, owner byte 6). An owner byte of 128 and up is not an owner, so it
-/// raises "Illegal owner field" (9) whichever way it is read.
-/// <para>Sims.exe takes the result as a reference first, then reads the range. A range of zero raises "Random number
-/// range evaluated to zero." (4). A result that is neither a short nor a float (a read-only owner) raises "Expression
-/// attempting to write in a read-only area." (19), before the random source is asked. Otherwise the value is
-/// <c>random % (uint)(int)range</c>: a short gets its low 16 bits, a float (a motive) gets the value as an int. A
-/// negative range is a large unsigned divisor, so the value is the random number itself (inferred from the unsigned
-/// arithmetic). The primitive always answers true.</para></summary>
+/// <summary>Executes the Random Number primitive (opcode 8) to generate and store a pseudo-random value
+/// within a specified range, raising an error if the range is zero or the target is read-only.</summary>
 public static class RandomNumberPrimitive
 {
     public static PrimitiveResult Execute(in TreeContext context, ReadOnlySpan<byte> operand)

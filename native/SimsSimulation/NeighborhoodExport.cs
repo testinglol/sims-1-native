@@ -33,7 +33,6 @@ internal static class NeighborhoodExport
     private sealed record HouseRoomStats(int SquareFeet, int Bathrooms, int Bedrooms, int Floors, int SizeRating,
         int? FurnishingsRating, int? YardRating, int? UpkeepRating, int? LayoutRating, int? DaysRunning);
 
-    /// <summary>The installed game folder, set by the host so the export can tell which packs are installed.</summary>
     internal static string? GameRoot { get; set; }
 
     private static readonly IReadOnlyDictionary<int, Mode> Modes = new Dictionary<int, Mode>
@@ -451,7 +450,7 @@ internal static class NeighborhoodExport
             if (!ngbhData.Inventories.TryGetValue(neighbor.NeighborId, out var items)) continue;
             foreach (var item in items)
             {
-                // Sims.exe FUN_00410315 (00410315.c:23) queries SimInventory token type 7, GUID 0x99e81bec.
+                // MagiCoin currency is tracked as inventory token type 7 with GUID 0x99E81BEC.
                 if (IsMagiCoinItem(item)) total += item.Count;
             }
         }
@@ -828,8 +827,8 @@ internal static class NeighborhoodExport
     internal sealed record FamilyChoice(int Id, string Name, int Budget, int NetWorth, int Friends, string[] Members,
         MemberProfile[] MemberProfiles, byte[]?[] MemberThumbnails, int MagiCoins = 0);
 
-    /// <summary>Sums Family MagiCoins across member SimInventory records per Sims.exe FUN_00410315 (00410315.c:16-30):
-    /// inventory token type 7, GUID 0x99e81bec, truncated to int16.</summary>
+    /// <summary>Calculates total household MagiCoins by summing inventory tokens of type 7 with GUID
+    /// 0x99E81BEC across all family members.</summary>
     internal static int SumFamilyMagiCoins(
         Family family,
         IReadOnlyDictionary<uint, Neighbor> neighborsByGuid,
@@ -869,7 +868,8 @@ internal static class NeighborhoodExport
         return nghFile.OfType(ResourceType.Parse("FAMI"))
             .Where(c => c.Id != 0)
             .Select(c => (ChunkId: c.Id, Family: Family.Read(nghFile, c)))
-            // Sims.exe 004e2f00.c:14 excludes families with bit 3 (0x08) set (Strays = 0x18), keeping Maxis & user bin families (Flags == 0).
+            // Excludes stray animal families flagged with bit 0x08, retaining default and user household
+            // bin families.
             .Where(f => f.Family.HouseNumber == 0 && f.Family.Members.Count > 0 && (f.Family.Flags & 8) == 0 && !IsPetsOnly(f.Family, neighborsByGuid))
             .OrderBy(f => f.ChunkId)
             .Select(f =>
@@ -912,10 +912,8 @@ internal static class NeighborhoodExport
         bool IsCommunity = false,
         int ArchitectureValue = 0);
 
-    /// <summary>
-    /// Ports Sims.exe cWinLotPopup::GetPopupIndex (00551013.c:17-85) and Magic Town residential lot
-    /// MagiCoin affordability (00556352.c:26-31, 77-85).
-    /// </summary>
+    /// <summary>Computes neighborhood lot rollover status codes based on lot zoning, occupancy, and
+    /// household currency affordability.</summary>
     internal static int RolloverStatusCode(
         RolloverHouseInfo house,
         int mode,

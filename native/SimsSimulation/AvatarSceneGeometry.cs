@@ -10,26 +10,18 @@ using SimsEngine.Content;
 using SimsEngine.Formats;
 using SimsEngine.Simulation;
 
-/// <summary>Resolves the five appearance pairs stored on Sims.exe's person character (+0xadc) and skins those original
-/// meshes into the lot scene. FUN_0059187a reads those pairs from saved Sim state; FUN_0059903f links skeleton bones by
-/// name, and FUN_005d337d draws textured indexed mesh triangles. Saved appearance resources are used when installed;
-/// when imported Sim data names absent resources, the preview selects a compatible installed body/head mesh so one
-/// missing custom resource cannot suppress the rest of the household. Character data and CFP channels stay in their
-/// authored Sims.exe coordinates; bone hierarchy composition follows the Mac Bone::UpdateTransform routine. Root
-/// placement follows SAnimator::UpdateRootPos; VitaBoy then composes its retained
-/// uniform scale with the supplied heading and translation before installing the skeleton root.</summary>
+/// <summary>Resolves avatar appearance mesh pairs, binds them to skeleton bone hierarchies, and transforms
+/// deformable skinned meshes into lot scene coordinates.</summary>
 internal sealed class AvatarSceneGeometry
 {
-    // UpdateRootPos uses the Y component written by ZBufferLookup::GenerateLookupTables: the two doubles at
-    // lbl_1059B280 + 0x30/+0x38 sum to 9.3005113679684 source units. Its lot coordinates use 3/16 per FTile
-    // (lbl_1059BBC4 + 0x40), while native root coordinates use 1/16, so convert this basis component by 3.
+    // Vertical level separation in root avatar coordinates is scaled by one third of the story height
+    // lookup basis to convert to sixteenth-tile elevation units.
     private const float AnimatorLevelHeight = 3.1001704f;
 
     internal sealed record Vertex(float X, float Y, float Z, float U, float V, float Nx, float Ny, float Nz);
     internal sealed record Part(byte[] Texture, string TextureHash, string Encoding, int Width, int Height, Vertex[] Vertices, bool IgnoreRoomLighting = false);
     internal sealed record CensorBounds(float X, float Y, float Width, float Height, float Depth);
 
-    // FUN_005a21ae stores the search path a suit was read from; the suit's meshes are found on that path.
     private sealed record AppearanceSource(Appearance Appearance, CharacterFile File, CharacterData Data, CharacterSearchPath Path);
     private sealed record TextureSource(byte[] Bytes, string Sha1Hex, string Encoding, int Width, int Height, string FileName);
     private sealed record AnimationSource(Animation Animation, AnimationCurves Curves);
@@ -186,6 +178,7 @@ internal sealed class AvatarSceneGeometry
     private readonly Dictionary<string, AppearanceSource> appearances = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Mesh> meshes = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, TextureSource> textureCache = new(StringComparer.OrdinalIgnoreCase);
+    private Dictionary<string, string>? textureStemByLower;
     private readonly Dictionary<(byte R, byte G, byte B), (byte[] Bytes, string Hash)> plumbobTextures = [];
     private readonly Dictionary<(IffFile File, ushort ChunkId), IReadOnlyList<string>> bodyStringsCache = [];
     private readonly Dictionary<string, SkateMesh> skateMeshes = new(StringComparer.OrdinalIgnoreCase);
@@ -206,8 +199,8 @@ internal sealed class AvatarSceneGeometry
     private readonly Dictionary<short, Vector3> avatarRootPositions = [];
     private readonly Dictionary<short, float> avatarRootDirections = [];
     private readonly Dictionary<short, CensorBounds> censorBounds = [];
-    private readonly Dictionary<short, (long Updates, float RootX, float RootY, int Level)> lastTickRoots = [];
-    private readonly Dictionary<short, (long Updates, float RootX, float RootY, int Level)> prevTickRoots = [];
+    private readonly Dictionary<short, (long Updates, float RootX, float RootY, float RootDirection, int Level)> lastTickRoots = [];
+    private readonly Dictionary<short, (long Updates, float RootX, float RootY, float RootDirection, int Level)> prevTickRoots = [];
 
     private AvatarSceneGeometry(string gameRoot, ObjectRegistry registry)
     {
@@ -218,8 +211,8 @@ internal sealed class AvatarSceneGeometry
         textures = sharedIndex.Textures;
         animationPath = sharedIndex.Animation;
         curveFiles = sharedIndex.CurveFiles;
-        // FUN_005837c0 reads the skins path, then the animation path (FUN_005a009d -> FUN_0059fad3);
-        // both readers register skeletons and suits, so adult/child skeletons and hand suits come from Animation.
+        // Skeletons and suits are registered from the skins directory first and then from the animation
+        // directory.
         for (var i = 0; i < sharedIndex.ParsedFiles.Count; i++)
         {
             var parsed = sharedIndex.ParsedFiles[i];
@@ -241,10 +234,8 @@ internal sealed class AvatarSceneGeometry
     internal static AvatarSceneGeometry For(string gameRoot, ObjectRegistry registry) =>
         Instances.GetValue(registry, _ => new AvatarSceneGeometry(gameRoot, registry));
 
-    /// <summary>A mesh of the head appearance posed without facing, scale or projection, as the pie menu's head draws it.
-    /// <see cref="OnHead"/> marks the vertices bound to the HEAD bone, <see cref="HeadPivot"/>/<see cref="HeadHeight"/>
-    /// carry the pie-head skull center and nominal height, and <see cref="HeadOrigin"/>/<see cref="HeadScale"/> carry
-    /// the HEAD bone origin and actor scale for MakePersonHeadImage's fixed (76,45,122,125) portrait window.</summary>
+    /// <summary>Presents an unrotated, unscaled head mesh for pie menu and dialog portrait rendering,
+    /// providing vertex bindings and skull anchor metrics.</summary>
     internal sealed record PosedHeadMesh(Vector3[] Positions, Vector3[] Normals, Vector2[] UVs, bool[] OnHead,
         (int A, int B, int C)[] Faces, byte[] Texture, Vector3? HeadPivot = null, float HeadHeight = 0f,
         Vector3? HeadOrigin = null, float HeadScale = 1f);
@@ -252,7 +243,7 @@ internal sealed class AvatarSceneGeometry
     internal IReadOnlyList<Part> Build(XPerson person, int level, int cameraOrientation,
         Func<float, float, float> elevation, LotCamera camera, List<PosedHeadMesh>? headMeshes = null,
         Vector3? attachmentRoot = null, float? inheritedRootDirection = null, int headIndicatorKind = 0,
-        float subTickAlpha = 0f, long updates = 0)
+        float subTickAlpha = 0f, long updates = 0, ISimulationCareerHost? careerHost = null)
     {
         var character = person.PresentationCharacter ?? person.SavedCharacter;
         if (character is null)
@@ -265,16 +256,16 @@ internal sealed class AvatarSceneGeometry
             ? character.Parts
             : character.Parts.Concat(Enumerable.Repeat(("NONE", ""), 5 - character.Parts.Count)).ToArray();
 
-        var (bodyPair, leftHandPair, rightHandPair, headPair) = ResolveEffectiveParts(person, effectiveParts);
+        var (bodyPair, leftHandPair, rightHandPair, headPair) = ResolveEffectiveParts(person, effectiveParts, careerHost);
         var selected = new List<(string Name, string? Texture, string? TextureFilter, string SavedName, int Role)>();
         const int RoleBody = 0;
         const int RoleHand = 1;
         const int RoleHead = 2;
         const int RoleExtra = 3;
-        AddPair(bodyPair, RoleBody); // body
-        AddPair(leftHandPair, RoleHand); // left hand
-        AddPair(rightHandPair, RoleHand); // right hand
-        AddPair(headPair, RoleHead); // head
+        AddPair(bodyPair, RoleBody);
+        AddPair(leftHandPair, RoleHand);
+        AddPair(rightHandPair, RoleHand);
+        AddPair(headPair, RoleHead);
         var extraPartStart = selected.Count;
         var seenExtraParts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var extraPart in character.ExtraParts.Concat(person.TransientExtraParts))
@@ -312,8 +303,8 @@ internal sealed class AvatarSceneGeometry
                     source = appearances.GetValueOrDefault(normalizedName["accessory-".Length..]);
                 else if (normalizedName.StartsWith("suit-", StringComparison.OrdinalIgnoreCase))
                     source = appearances.GetValueOrDefault(normalizedName["suit-".Length..]);
-                // ExpansionPack STR# 304 names "suit-chemset-heed-stars104.apr", while accessory-chemset-heed-stars104.cmx.bcf
-                // registers "suit-chemsuit-heed-stars104" (Maxis BCF typo).
+                // Normalizes a typo in the chemistry set expansion pack string table where the suit name
+                // mismatches its registered character definition.
                 if (source is null &&
                     (normalizedName.Equals("suit-chemset-heed-stars104", StringComparison.OrdinalIgnoreCase) ||
                      normalizedName.Equals("chemset-heed-stars104", StringComparison.OrdinalIgnoreCase)))
@@ -328,10 +319,8 @@ internal sealed class AvatarSceneGeometry
                 source = HeadFallback(normalizedName) ?? HeadFallbackByMarker(PersonFallbackMarker(person));
             if (source is null)
             {
-                // The saved appearance can name a downloaded or otherwise absent character file. Missing hands are
-                // optional; a body or head uses the nearest compatible installed original appearance when available.
-                // Added suits/accessories (Change Suit/Accessory extra parts) and missing suits skip cleanly via
-                // VitaBoy's suit lookup (0058a17c.c:51, 0059187a.c:112,149) rather than aborting avatar draw.
+                // Missing hand meshes and extra accessory parts are ignored gracefully, allowing avatar
+                // rendering to continue without aborting when custom parts are absent.
                 if (item.Role == RoleHand || normalizedName.StartsWith("h", StringComparison.OrdinalIgnoreCase) || isExtraPart)
                     continue;
                 continue;
@@ -342,9 +331,8 @@ internal sealed class AvatarSceneGeometry
                 Mesh mesh;
                 try { mesh = ReadMesh(source.Path, binding.Mesh); }
                 catch (InvalidDataException) when (isExtraPart) { continue; }
-                // VitaBoy::CreateDeformableMesh (00599e94.c:27-49, 0059996c.c:59-63): a "FILTER=texture" override
-                // (e.g. "HEAD-HEAD=c003fclgt_goth" or "BODY=...") applies only to bindings whose mesh name contains FILTER,
-                // leaving companion bindings in the same suit (glasses SPECS, hats, props) on their own authored mesh.Texture.
+                // Texture overrides containing filter prefixes only apply to bindings whose mesh name
+                // matches the filter, preserving default textures for companion meshes.
                 var useOverride = item.Texture is not null &&
                     (item.TextureFilter is null || binding.Mesh.Contains(item.TextureFilter, StringComparison.OrdinalIgnoreCase));
                 var requestedTexture = useOverride ? item.Texture! : mesh.Texture;
@@ -357,8 +345,8 @@ internal sealed class AvatarSceneGeometry
                 }
                 catch (InvalidDataException) when (isExtraPart)
                 {
-                    // Sims.exe FUN_005d337d:49-50 binds NULL Direct3D texture when an accessory/prop mesh names an
-                    // unshipped texture (e.g. "coffeecup" on coffeecupbigempty/full, "white" on suit-RRings103).
+                    // Falls back to a default white texture when accessory meshes reference unbundled or
+                    // missing texture assets.
                     texture = FallbackWhiteTexture;
                 }
                 bindingsList.Add((binding, mesh, texture));
@@ -404,8 +392,6 @@ internal sealed class AvatarSceneGeometry
             skeleton = SelectSkeleton(bodySource, coreRequiredBones, person);
         }
         var skeletonInfo = GetSkeletonInfo(skeleton);
-        // Mac Bone::ReadFromFile and the CFP loader retain the authored channel values. These values
-        // are used directly by Sims.exe's avatar transform path.
         var pose = headMeshes is null
             ? Pose.ApplyHeadAdjustment(skeleton, AnimationPose(person, skeleton, subTickAlpha), person.AnimatorHeadAdjustment)
             : Pose.BindPose(skeleton);
@@ -422,24 +408,18 @@ internal sealed class AvatarSceneGeometry
 
         var (tileX, tileY, altitude, rootDirection) = PrepareRootTransform(
             person, level, elevation, camera, headMeshes, attachmentRoot, inheritedRootDirection, subTickAlpha, updates);
-        // In lot coordinates, direction 0 is -LotY, 2 is +LotX, 4 is +LotY, and 6 is -LotX (FUN_00452129, FUN_004222ef;
-        // cWorldPt stores LotY at +0xf4 and LotX at +0xf8). The original adult HEAD skin maps facial vertices to
-        // positive local Z (xskin-C592MA_Tom-HEAD-HEAD.skn). In avatar world coordinates, matrix Z maps to LotX and
-        // matrix X maps to LotY via AvatarCoordinates.ToLot. Rotating local +Z by SAnimator::UpdateRootPos's
-        // (rootDirection + 6) * pi/4 (005920ea.c:106) yields (sin facing, 0, cos facing), whose ToLot vector
-        // (cos facing, sin facing) in (LotX, LotY) aligns the authored +Z forward vector with the Sim's facing.
+        // Direction index maps to lot coordinates where 0 is -Y, 2 is +X, 4 is +Y, and 6 is -X, aligning
+        // the mesh forward (+Z) axis with avatar facing.
         var facing = AvatarDirection.LotFacingAngle(rootDirection);
-        // An attached animator inherits its owner's root heading, while the named slot joint contributes its
-        // translation only. Mac SAnimator::Tick reads bone +0x3c/+0x40/+0x44 into
-        // a translation transform, then composes that with the owner root transform (0x10351634–0x103516B8).
+        // Attached animators inherit the parent's root heading while extracting only translation from the
+        // target slot bone.
         var facingMatrix = headMeshes is null ? Matrix4x4.CreateRotationY(facing) : Matrix4x4.Identity;
         var headName = NormalizeAppearance(headPair.Item1.Trim());
         var headResolved = headName.Length > 0 && !headName.Equals("NONE", StringComparison.OrdinalIgnoreCase)
             ? resolved.FirstOrDefault(item => item.Name.Equals(headName, StringComparison.OrdinalIgnoreCase))
             : default;
-        // FUN_004e8249 (004e8249.c:20-35) and cPieMenuHead::Draw (004623e6.c:128-132) iterate all suits on the
-        // character and collect only bindings attached to the "HEAD" bone, excluding quadruped PELVIS body bindings
-        // on single-suit pets while retaining HEAD-bound accessories across ExtraParts.
+        // Collects only bindings attached to the HEAD bone across all suits, excluding quadruped pelvis
+        // body bindings while preserving head-mounted accessories.
         var headBindingsList = headMeshes is null
             ? null
             : resolved.SelectMany(item => item.bindings)
@@ -463,15 +443,9 @@ internal sealed class AvatarSceneGeometry
                 .ToHashSet();
         }
         if (skullMeshes is { Count: 0 }) skullMeshes = headBindings;
-        // The source updates VitaBoy scale only on every tenth Simulate pass and retains its prior value when
-        // ScalingSim is out of range; use the retained runtime transform value for rendered geometry.
         var scale = person.AnimatorBodyScale;
-        // Animator::SetRootTransform copies the supplied transform to +0x38; VitaBoy::SetRootTransform
-        // composes its internal transform with that root matrix before installing the result on Skeleton
-        // (Animator.s 0x10476D10–0x10476DE4; vitaboy.s 0x10382AB0–0x10382B2C). Keep the same order here:
-        // bone pose, root heading, actor scale, then root translation.
-        // UpdateRootPos writes FTile Y to source matrix X and FTile X to source matrix Z. Preserve that
-        // source transform here; avatar vertices are converted back to lot (X,Y) only at scene projection.
+        // Root transformation is composed in order of bone pose, root heading, uniform actor scale, and
+        // fractional tile root translation.
         var rootTransform = facingMatrix * Matrix4x4.CreateScale(scale / 3f) *
                            Matrix4x4.CreateTranslation(AvatarCoordinates.RootTranslation(tileX, tileY, altitude));
         var bodyStrings = ReadBodyStrings(person);
@@ -487,9 +461,8 @@ internal sealed class AvatarSceneGeometry
         {
             if (headMeshes is not null)
             {
-                // MakePersonHeadImage (004e7902.c:105-126, 165-179) and cPieMenuHead::Draw (004623e6.c:133, 286-311)
-                // overwrite the HEAD bone matrix with a standalone upright camera-facing HEAD transform (local +X crown -> +Y,
-                // local +Y ear -> -X, local +Z nose -> +Z with 10 deg isometric camera elevation), avoiding quadruped neck pitch.
+                // Transforms the head bone into an upright camera-facing pose with a 10-degree isometric
+                // pitch for icon generation, overriding quadruped neck rotation.
                 var uprightHead = Matrix4x4.CreateRotationZ(MathF.PI * 0.5f) * Matrix4x4.CreateRotationX(10f * MathF.PI / 180f);
                 uprightHead.M41 = head.WorldTranslation.X;
                 uprightHead.M42 = head.WorldTranslation.Y;
@@ -497,8 +470,6 @@ internal sealed class AvatarSceneGeometry
                 boneMatrices[headIndex] = uprightHead;
             }
             var headRoot = Vector3.Transform(head.WorldTranslation, rootTransform);
-            // rootTransform already uses native (lot X, height, lot Y); the attachment cache stores
-            // (tile X, tile Y, altitude) like RootPosition, so reorder the components without swapping X/Z.
             headPositions[person.Id] = AvatarCoordinates.ToLot(headRoot);
             headOrigin = headRoot;
             pieHeadPivot = headRoot + new Vector3(0f, 0.105f * scale, 0f);
@@ -550,11 +521,8 @@ internal sealed class AvatarSceneGeometry
             : null;
         var leftFootPositions = skateFootPositions?["left"];
         var rightFootPositions = skateFootPositions?["right"];
-        // SAnimator::StartVitaBoy (00588351.c:42-48), SAnimator::UpdateCensorSuit (0058fafa.c:8-28),
-        // SuitInstance::Init (00595645.c:23-24), SAnimator::Draw (00590c09.c:160-296), and
-        // cLotRenderer::DrawCensorRects (004ac916.c:51-104):
-        // bit 0x80 censors the full visible avatar bounding box; bits 0x01..0x7f instantiate the hidden
-        // "<skeleton.Name>-needs" suit and censor the projected vertices of bindings whose Integers[0] mask matches.
+        // Flag bit 0x80 censors the entire avatar bounds, while bits 0x01 through 0x7F censor specific
+        // vertex clusters matching the skeleton needs mesh.
         var rawCensorFlags = headMeshes is null ? unchecked((ushort)person[PersonData.CensorshipFlags]) : (ushort)0;
         var fullBodyCensor = (rawCensorFlags & 0x80) != 0;
         var censorMask = fullBodyCensor ? 0x7f : (rawCensorFlags & 0x7f);
@@ -579,8 +547,8 @@ internal sealed class AvatarSceneGeometry
             var skeletonMap = meshLayout.ResolveSkeleton(mesh, skeleton);
             if (skeletonMap.BoneIndices is not { } meshBoneToSkeleton)
             {
-                // VitaBoy::CreateDeformableMesh (00599e94.c:76-85) drops an accessory mesh whose bone is absent on
-                // the Sim's skeleton rather than failing the character draw.
+                // Drops accessory meshes whose target bones do not exist on the skeleton rather than
+                // aborting mesh creation.
                 if (isExtraPart) continue;
                 throw new InvalidDataException($"Sim {person.Id} skeleton {skeleton.Name} has no mesh bone {skeletonMap.MissingBoneName}");
             }
@@ -609,6 +577,9 @@ internal sealed class AvatarSceneGeometry
                     normal = Vector3.Lerp(normal, blendNormal, blendWeight);
                 }
                 normal = Vector3.TransformNormal(normal, facingMatrix);
+                var cameraNormal = camera.CameraNormal(new Microsoft.Xna.Framework.Vector3(normal.Z, normal.Y, normal.X));
+                if (cameraNormal.LengthSquared() > 0) cameraNormal.Normalize();
+                var camNorm = new Vector3(cameraNormal.X, cameraNormal.Y, cameraNormal.Z);
                 if (hasSkates)
                 {
                     if (meshLayout.IsLeftFootVertex[vertexIndex])
@@ -617,7 +588,7 @@ internal sealed class AvatarSceneGeometry
                         rightFootPositions!.Add(Vector3.Transform(position, facingMatrix) * skateScale);
                 }
                 var rootPosition = Vector3.Transform(position, rootTransform);
-                posed[vertexIndex] = (rootPosition, normal, mesh.TextureCoordinates[vertexIndex]);
+                posed[vertexIndex] = (rootPosition, camNorm, mesh.TextureCoordinates[vertexIndex]);
             }
 
             if (headBindings is not null && headBindings.Contains(mesh))
@@ -657,10 +628,8 @@ internal sealed class AvatarSceneGeometry
                     if (point.Y > censorMaxY) censorMaxY = point.Y;
                     if (vertexDepth < censorMinDepth) censorMinDepth = vertexDepth;
                 }
-                var normal = camera.CameraNormal(new Microsoft.Xna.Framework.Vector3(item.Normal.Z, item.Normal.Y, item.Normal.X));
-                if (normal.LengthSquared() > 0) normal.Normalize();
                 vertices[output] = new Vertex(point.X, point.Y, vertexDepth,
-                    item.UV.X, item.UV.Y, normal.X, normal.Y, normal.Z);
+                    item.UV.X, item.UV.Y, item.Normal.X, item.Normal.Y, item.Normal.Z);
             }
             parts.Add(new Part(texture.Bytes, texture.Sha1Hex, texture.Encoding, texture.Width, texture.Height, vertices));
         }
@@ -684,8 +653,8 @@ internal sealed class AvatarSceneGeometry
                     var needsBlendBone = needsLayout.BlendBoneForVertex;
                     var needsBlendWeight = needsLayout.BlendWeightForVertex;
                     var needsBlendVertex = needsLayout.BlendVertexForVertex;
-                    // SAnimator::Draw (00590c09.c:230-265) projects each deformed primary vertex of the
-                    // invisible "<skeleton>-needs" suit without creating visible scene parts (0059e041.c:19-21).
+                    // Projects the deformed vertices of the needs mesh to calculate the censor mosaic
+                    // rectangle without rendering the mesh.
                     for (var vertexIndex = 0; vertexIndex < needsMesh.TextureCoordinates.Count; vertexIndex++)
                     {
                         var matrix = boneMatrices[needsBoneMap[needsBoneForVertex[vertexIndex]]];
@@ -718,8 +687,8 @@ internal sealed class AvatarSceneGeometry
                     : new Vector3(tileX, tileY, altitude + 0.5f);
                 var baseCensorDepth = Math.Min(camera.Depth(pelvisLot.X, pelvisLot.Y, pelvisLot.Z) - 0.0013428f, censorMinDepth - 0.0001f);
                 var censorDepth = Math.Clamp(baseCensorDepth, 0.001f, 0.999f);
-                // cLotRenderer::DrawCensorRects (004ac916.c:64-83) expands censor bounds by 1/2/4 px at zoom 1/2/3
-                // (2f in medium-zoom scene units, scaled by LotZoom.factor 0.5/1.0/2.0).
+                // Expands censor bounds by 2 medium-zoom scene units, scaling to 1, 2, or 4 screen pixels
+                // depending on the active zoom level.
                 censorBounds[person.Id] = new CensorBounds(censorMinX - 2f, censorMinY - 2f,
                     censorMaxX - censorMinX + 4f, censorMaxY - censorMinY + 4f, censorDepth);
             }
@@ -737,8 +706,6 @@ internal sealed class AvatarSceneGeometry
         void AddPair((string, string) pair, int role)
         {
             var name = pair.Item1.Trim();
-            // Sims.exe writes an empty part name as "NONE" (FUN_0058fb9f, 0x6c0fd4) and FUN_0040a5ea sets it for the parts of
-            // people that have none, so it reads back as no part.
             if (name.Length == 0 || name.Equals("NONE", StringComparison.OrdinalIgnoreCase)) return;
             var equals = pair.Item2.IndexOf('=');
             var filter = equals >= 0 ? pair.Item2[..equals].Trim() : null;
@@ -754,10 +721,8 @@ internal sealed class AvatarSceneGeometry
         List<PosedHeadMesh>? headMeshes, Vector3? attachmentRoot, float? inheritedRootDirection,
         float subTickAlpha, long updates)
     {
-        // SAnimator::FollowOneStep retains floating root coordinates in +0x80/+0x84 while
-        // cXPerson placement is rounded back to an FTile point. Use the retained animator
-        // coordinates for the rendered root so the avatar does not lose the sub-point part
-        // of its movement on each scene build.
+        // Uses high-precision floating root coordinates rather than rounded tile positions to avoid
+        // sub-tile movement jitter across scene builds.
         var route = person.NativeRoute;
         var rootFtileX = (person.AnimatorRootX is { } rootX && float.IsFinite(rootX)
             ? rootX
@@ -769,50 +734,115 @@ internal sealed class AvatarSceneGeometry
             : route is { } activeRouteY && float.IsFinite(activeRouteY.MotionY)
                 ? activeRouteY.MotionY
             : person.Position.Y) + person.AnimatorDisplacementY;
+        var baseRootDirection = AvatarDirection.RootDirection(person.AnimatorRootDirection,
+            person[ObjectData.Direction], person.AnimatorDisplacementDirection, inheritedRootDirection);
+        var rootDirection = baseRootDirection;
+        var subTickMoved = false;
         if (headMeshes is null && updates > 0)
         {
             if (!lastTickRoots.TryGetValue(person.Id, out var lastRoot) || lastRoot.Updates != updates)
             {
                 if (lastRoot.Updates > 0) prevTickRoots[person.Id] = lastRoot;
-                lastRoot = (updates, rootFtileX, rootFtileY, level);
+                lastRoot = (updates, rootFtileX, rootFtileY, baseRootDirection, level);
                 lastTickRoots[person.Id] = lastRoot;
             }
-            if (subTickAlpha > 0f && route is { } subRoute && person.AnimationPlayback is { RouteDriven: true } &&
-                prevTickRoots.TryGetValue(person.Id, out var prevRoot) && prevRoot.Level == level &&
-                prevRoot.Updates == updates - 1)
+            var hasPrevRoot = prevTickRoots.TryGetValue(person.Id, out var prevRoot) &&
+                prevRoot.Level == level && prevRoot.Updates == updates - 1;
+            if (subTickAlpha > 0f && route is { AnimatorFollowState: 1 } subRoute && person.AnimationPlayback is { RouteDriven: true } playback)
             {
-                var velX = lastRoot.RootX - prevRoot.RootX;
-                var velY = lastRoot.RootY - prevRoot.RootY;
-                var stepSq = velX * velX + velY * velY;
-                var toTargetX = subRoute.MotionTargetX - lastRoot.RootX;
-                var toTargetY = subRoute.MotionTargetY - lastRoot.RootY;
-                var toTargetSq = toTargetX * toTargetX + toTargetY * toTargetY;
-                if (stepSq is > 0.0001f and < 16f && toTargetSq > 0.0001f && (velX * toTargetX + velY * toTargetY) > 0f)
+                var hasTarget = subRoute.MotionTargetX != int.MinValue && subRoute.MotionTargetY != int.MinValue;
+                var projectedAlongVel = false;
+                if (hasPrevRoot)
                 {
-                    var factor = MathF.Min(subTickAlpha, MathF.Sqrt(toTargetSq / stepSq));
-                    rootFtileX = lastRoot.RootX + velX * factor;
-                    rootFtileY = lastRoot.RootY + velY * factor;
+                    var velX = lastRoot.RootX - prevRoot.RootX;
+                    var velY = lastRoot.RootY - prevRoot.RootY;
+                    var stepSq = velX * velX + velY * velY;
+                    var toTargetX = subRoute.MotionTargetX - lastRoot.RootX;
+                    var toTargetY = subRoute.MotionTargetY - lastRoot.RootY;
+                    var toTargetSq = toTargetX * toTargetX + toTargetY * toTargetY;
+                    if (stepSq is > 0.0001f and < 16f && toTargetSq > 0.0001f && (velX * toTargetX + velY * toTargetY) > 0f)
+                    {
+                        var dist = MathF.Sqrt(toTargetSq);
+                        var speed = MathF.Sqrt(stepSq);
+                        var move = MathF.Min(speed * subTickAlpha, dist);
+                        rootFtileX = lastRoot.RootX + (toTargetX / dist) * move;
+                        rootFtileY = lastRoot.RootY + (toTargetY / dist) * move;
+                        projectedAlongVel = true;
+                        subTickMoved = move > 0f;
+                    }
+                }
+                if (!projectedAlongVel && hasTarget)
+                {
+                    var toTargetX = subRoute.MotionTargetX - lastRoot.RootX;
+                    var toTargetY = subRoute.MotionTargetY - lastRoot.RootY;
+                    var toTargetSq = toTargetX * toTargetX + toTargetY * toTargetY;
+                    if (toTargetSq > 0.0001f)
+                    {
+                        var nominalStep = playback.Clip.DurationMilliseconds > 0f && playback.Clip.StandardDistance > 0f
+                            ? playback.Clip.StandardDistance * (16f / 3f) * (42f * playback.PracticeScale / playback.Clip.DurationMilliseconds)
+                            : 0.8f * subRoute.MotionPlaybackScale;
+                        var dist = MathF.Sqrt(toTargetSq);
+                        var move = MathF.Min(nominalStep * subTickAlpha, dist);
+                        rootFtileX = lastRoot.RootX + (toTargetX / dist) * move;
+                        rootFtileY = lastRoot.RootY + (toTargetY / dist) * move;
+                        subTickMoved = move > 0f;
+                    }
+                }
+            }
+            if (subTickAlpha > 0f && inheritedRootDirection is null && hasPrevRoot && route is { EndFollowPending: false } activeTurnRoute)
+            {
+                var angVel = AvatarDirection.ShortestDelta(prevRoot.RootDirection, lastRoot.RootDirection);
+                if (MathF.Abs(angVel) is > 0.0001f and <= 1.5f)
+                {
+                    var delta = angVel * subTickAlpha;
+                    if (activeTurnRoute.MotionTargetX != int.MinValue && activeTurnRoute.MotionTargetY != int.MinValue)
+                    {
+                        var tdx = activeTurnRoute.MotionTargetX - lastRoot.RootX;
+                        var tdy = activeTurnRoute.MotionTargetY - lastRoot.RootY;
+                        if (tdx * tdx + tdy * tdy > 0.01f)
+                        {
+                            var targetHeading = AvatarDirection.Toward(tdx, tdy);
+                            var remaining = AvatarDirection.ShortestDelta(lastRoot.RootDirection, targetHeading);
+                            if (angVel * remaining > 0f && MathF.Abs(delta) > MathF.Abs(remaining))
+                                delta = remaining;
+                        }
+                    }
+                    rootDirection = AvatarDirection.Wrap(lastRoot.RootDirection + delta);
                 }
             }
         }
         var tileX = rootFtileX / 16f;
         var tileY = rootFtileY / 16f;
-        // UpdateRootPos adds 0.5 and uses fctiwz on each root FTile coordinate before GetFAlt; preserve that 1/16-tile
-        // sample point rather than sampling the unrounded animator position (SAnimator.s 0x1034B5E4–0x1034B6A4;
-        // cFixedWorld::GetFAlt at world.s 0x10159E50). Elevation uses the native scene terrain sampler.
+        // Offsets and truncates tile coordinates to sixteenth-tile increments before sampling terrain
+        // elevation.
         var levelDelta = level - 1;
-        // GenerateLookupTables writes the level basis (.5, 9.300511..., .5) in source root units. UpdateRootPos
-        // rotates that vector around Y by -viewerRotation * pi/2 before adding it to the root. The horizontal
-        // components become camera-space lot offsets after the 3/16-to-1/16 conversion, so inverse-rotate them
-        // into lot coordinates before LotCamera projects the scene (ZBufferLookup.s 0x101FAC10–0x101FAE44;
-        // SAnimator.s 0x1034B740–0x1034B840).
+        // Converts the story elevation basis vector into lot coordinates by inverse-rotating against camera
+        // rotation before lot scene projection.
         var levelTileOffset = levelDelta / 6f;
         var levelLotOffset = camera.SourceVector(levelTileOffset, levelTileOffset);
         tileX += levelLotOffset.X;
         tileY += levelLotOffset.Y;
-        var altitude = elevation(AvatarCoordinates.ElevationSample(rootFtileX),
-                           AvatarCoordinates.ElevationSample(rootFtileY)) / 40 +
-                       levelDelta * AnimatorLevelHeight;
+        float sampledElevation;
+        if (subTickMoved && attachmentRoot is null)
+        {
+            var fx0 = MathF.Floor(rootFtileX);
+            var fy0 = MathF.Floor(rootFtileY);
+            var tx = rootFtileX - fx0;
+            var ty = rootFtileY - fy0;
+            var e00 = elevation(fx0 / 16f, fy0 / 16f);
+            var e10 = elevation((fx0 + 1f) / 16f, fy0 / 16f);
+            var e01 = elevation(fx0 / 16f, (fy0 + 1f) / 16f);
+            var e11 = elevation((fx0 + 1f) / 16f, (fy0 + 1f) / 16f);
+            var e0 = e00 + (e10 - e00) * tx;
+            var e1 = e01 + (e11 - e01) * tx;
+            sampledElevation = e0 + (e1 - e0) * ty;
+        }
+        else
+        {
+            sampledElevation = elevation(AvatarCoordinates.ElevationSample(rootFtileX),
+                AvatarCoordinates.ElevationSample(rootFtileY));
+        }
+        var altitude = sampledElevation / 40 + levelDelta * AnimatorLevelHeight;
         if (attachmentRoot is { } inheritedRoot)
         {
             tileX = inheritedRoot.X;
@@ -820,14 +850,8 @@ internal sealed class AvatarSceneGeometry
             altitude = inheritedRoot.Z;
         }
         avatarRootPositions[person.Id] = new Vector3(tileX, tileY, altitude);
-        // Keep the retained animator direction for the native facing transform, with the parent's direction taking
-        // precedence for an animated Sim attached through the parent's HEAD object slot. Mac UpdateRootPos converts
-        // root direction +0x88 and displacement direction +0x94 to (direction + 6) * PI/4; the native angle below is
-        // equivalent modulo 2 PI. This transform stays in lot coordinates; camera.Project below applies viewer
-        // orientation to each resulting vertex. Mac rotates coordinates in its own viewer-space transform
-        // (SAnimator.s 0x1034B61C–0x1034B990), so applying camera rotation to facingMatrix as well would rotate it twice.
-        var rootDirection = AvatarDirection.RootDirection(person.AnimatorRootDirection,
-            person[ObjectData.Direction], person.AnimatorDisplacementDirection, inheritedRootDirection);
+        // Avatar facing angle in lot coordinates is derived from root direction without applying camera
+        // rotation, which is handled later during projection.
         avatarRootDirections[person.Id] = rootDirection;
         return (tileX, tileY, altitude, rootDirection);
     }
@@ -850,8 +874,8 @@ internal sealed class AvatarSceneGeometry
         if (existing.Length > 0) return existing;
         if (values.Count <= 14 || values.Count <= 1) return null;
 
-        // Body Strings entry 1 stores the avatar type prefix after "xskin-"/"bskin-" (index 4 up to '_'),
-        // and derives the texture prefix from the outfit name before '_' plus the selected skin.
+        // Extracts the avatar type prefix after the mesh prefix and combines the outfit prefix with the
+        // skin tone identifier.
         var avatarType = StripComment(values[1]).ToLowerInvariant();
         if (avatarType.Length <= 4) return null;
         avatarType = avatarType[4..];
@@ -880,12 +904,105 @@ internal sealed class AvatarSceneGeometry
         return null;
     }
 
-    /// <summary>Implements SAnimator::UpdateSuits (0058a17c.c:33-250): resolves single-suit pet/collar entries
-    /// when OBJD VitaBoyFlags bit 0x8 is set, active human outfits from PersonData.CurrentOutfit, and hand gesture
-    /// appearances from PersonData.HandGestureLeft / HandGestureRight against the Sim's BodyStrings table, while
-    /// preserving PresentationCharacter overrides when CurrentOutfit is 0.</summary>
+    /// <summary>Resolves single-suit animal entries, human outfits, and hand gestures from body string
+    /// tables and person outfit data.</summary>
+    private sealed record OutfitTemplate(
+        string? BodyMesh,
+        string? BodyTex,
+        string? FallbackBodyMesh = null,
+        string? FallbackBodyTex = null,
+        string? HeadMesh = null,
+        string? HeadTex = null,
+        string? FallbackHeadMesh = null,
+        string? FallbackHeadTex = null,
+        string? HandTex = null,
+        string? FallbackHandTex = null);
+
+    private static OutfitTemplate? ResolveSpecialOutfitTemplate(int currentOutfit) => currentOutfit switch
+    {
+        19 => new("superstar$gaFit_movieactor1", "superstar$gaFit$c_movieactor1"),
+        20 => new("superstar$gaFit_movieactor2", "superstar$gaFit$c_movieactor2"),
+        21 => new("superstar$gaFit_movieactor3", "superstar$gaFit$c_movieactor3"),
+        22 => new("Superstar$gAfit_Doctor", "Superstar$gAfit$c_Doctor"),
+        23 => new("Superstar$gAfit_Relative", "Superstar$gAfit$c_Relative"),
+        24 => new("Runway$gAfit_Coffee", "Runway$gAfit$c_Coffee"),
+        25 => new("Runway$gAfit_Floral", "Runway$gAfit$c_Floral"),
+        26 => new("Runway$gAfit_Architectural", "Runway$gAfit$c_Architectural"),
+        >= 27 and <= 32 => RunwayTemplate(currentOutfit switch
+        {
+            27 => "Formal1",
+            28 => "Formal2",
+            29 => "Formal3",
+            30 => "Lingerie1",
+            31 => "Lingerie2",
+            _ => "Lingerie3",
+        }),
+        33 => new("Superstar$gAfit_JumpSuit", "Superstar$gAfit$c_JumpSuit"),
+        34 => new("Superstar$gAfit_WetSuit", "Superstar$gAfit$c_WetSuit"),
+        35 => new("Superstar$gAFit_BackupDancerDance", "Superstar$gAFit$c_BackupDancerDance"),
+        36 => new("Superstar$gAfit_BackupDancerPop", "Superstar$gAfit$c_BackupDancerPop"),
+        37 => new("Superstar$gAfit_BackupDancerRock", "Superstar$gAfit$c_BackupDancerRock"),
+        38 => new("MagicMAFat_BeeKeeper", "MagicMAFat_BeeKeeper", HandTex: "HUA$h_BeeKeeper"),
+        39 => new("Magic$gAFit_BlueGenie", "BMagic$gAFit_BlueGenie",
+            HeadMesh: "CMagic$gA_BlueGenie", HeadTex: "CMagic$gAFit_BlueGenie",
+            FallbackHeadMesh: "CMagic$gAFit_BlueGenie", FallbackHeadTex: "CMagic$gA_BlueGenie",
+            HandTex: "H$gA$h_BlueGenie"),
+        40 => new("MagicMAFit_Minotaur", "BMagicMAFit_Minotaur",
+            HeadMesh: "CMagicMAFit_Minotaur", HeadTex: "CMagicMAFit_Minotaur", HandTex: "HMA$h_Minotaur"),
+        41 => new("Magic$gAFit_Spookshow", "Magic$gAFit$c_Spookshow"),
+        42 => new("Magic$gAFit_SideShow", "Magic$gAFit$c_SideShow"),
+        43 => new("MagicFAFit_Vampire", "MagicFAFit_Vampire",
+            HeadMesh: "CMagicFAFit_Vampire", HeadTex: "CMagicFAFit_Vampire",
+            FallbackHeadMesh: "CMagicFAFit_Vampire", FallbackHeadTex: "CMagicFA$c_Vampiress",
+            HandTex: "HFA$h_Vampire", FallbackHandTex: "HUA$h_Vampiress"),
+        44 => new("Magic$gAFit_Werewolf", "Magic$gAFit_Werewolf",
+            HeadMesh: "CMagic$gAFit_Werewolf", HeadTex: "CMagic$gAFit_Werewolf", HandTex: "HMA$h_Werewolf"),
+        45 => new("MagicMAFit_Headless", "MagicMAFit_Headless",
+            HeadMesh: "CMagicMA_Headless", HeadTex: "CMagicMA_Headless", HandTex: "HUA$h_Headless"),
+        46 => new("MagicMAFat_Troll", "MagicMAFat_Troll",
+            HeadMesh: "CMagicMAFat_Troll", HeadTex: "CMagicMAFat_Troll", HandTex: "HUA$h_Troll"),
+        47 => new("MagicMAFat_Hunchback", "MagicMAFat_Hunchback",
+            HeadMesh: "CMagicMAFat_Hunchback", HeadTex: "CMagicMAFat_Hunchback", HandTex: "HUA$h_Hunchback"),
+        48 => new("Magic$gAFit_Sorcerer", "Magic$gAFit_Sorcerer",
+            HeadMesh: "CMagic$gAFit_Sorcerer", HeadTex: "CMagic$gAFit_Sorcerer", HandTex: "HMA$h_Sorcerer"),
+        49 => new("MagicFAFit_Witch", "MagicFAFit_Witch",
+            HeadMesh: "CMagicFAFit_Witch", HeadTex: "CMagicFAFit_Witch", HandTex: "HUA$h_Hunchback"),
+        50 => new("MagicFAFat_Ogress", "BMagicFAFat_Ogress",
+            HeadMesh: "CMagicFAFat_Ogress", HeadTex: "CMagicFAFat_Ogress", HandTex: "HFA$h_Ogress"),
+        51 => new("MagicFASkn_Crone", "BMagicFASkn_Crone",
+            HeadMesh: "CMagicFASkn_Crone", HeadTex: "CMagicFASkn_Crone", HandTex: "HFA$h_Crone"),
+        52 => new("MagicFASkn_Nymph", "BMagicFASkn_Nymph",
+            HeadMesh: "CMagicFASkn_Nymph", HeadTex: "CMagicFASkn_Nymph", HandTex: "HUA$h_Nymph"),
+        53 => new("MagicMCChd_Goblin", "MagicMCChd_Goblin",
+            HeadMesh: "CMagicMCChd_Goblin", HeadTex: "CMagicMCChd_Goblin", HandTex: "HUC$h_Goblin"),
+        54 => new("MagicFCChd_WizardGirl", "MagicFCChd_WizardGirl",
+            HeadMesh: "CMagicFC_WizardGirl", HeadTex: "CMagicFC_WizardGirl", HandTex: "HFC$h_WizardGirl"),
+        57 => new(null, null, HeadMesh: "CMagicMAFat_Donkey", HeadTex: "CMagicMAFat_Donkey"),
+        58 => new("MagicMASkn_Vampire", "MagicMASkn_Vampire",
+            HeadMesh: "CMagicMASkn_Vampire", HeadTex: "CMagicMASkn_Vampire", HandTex: "HMA$h_Vampire"),
+        59 => new("MagicMAFit_PrinceCharming", "MagicMAFitlgt_PrinceCharming"),
+        60 => new("MagicMCChd_Skeleton", "MagicMCChd_Skeleton",
+            HeadMesh: "CMagicMCChd_Skeleton", HeadTex: "CMagicMCChd_Skeleton", HandTex: "GUA$h_SkeletonChild"),
+        _ => null,
+    };
+
+    private static OutfitTemplate RunwayTemplate(string name) =>
+        new($"Runway$gA$b_{name}", $"Runway$gA$b$c_{name}", $"Runway$gAfit_{name}", $"Runway$gAfit$c_{name}");
+
+    internal ((string, string) Body, (string, string) LeftHand, (string, string) RightHand, (string, string) Head) ResolveEffectivePartsForTest(
+        XPerson person, ISimulationCareerHost? careerHost = null)
+    {
+        var character = person.PresentationCharacter ?? person.SavedCharacter;
+        var effectiveParts = character is null
+            ? Enumerable.Repeat(("NONE", ""), 5).ToArray()
+            : character.Parts.Count >= 5
+                ? character.Parts
+                : character.Parts.Concat(Enumerable.Repeat(("NONE", ""), 5 - character.Parts.Count)).ToArray();
+        return ResolveEffectiveParts(person, effectiveParts, careerHost);
+    }
+
     private ((string, string) Body, (string, string) LeftHand, (string, string) RightHand, (string, string) Head) ResolveEffectiveParts(
-        XPerson person, IReadOnlyList<(string, string)> parts)
+        XPerson person, IReadOnlyList<(string, string)> parts, ISimulationCareerHost? careerHost = null)
     {
         var body = parts[0];
         var leftHand = parts[2];
@@ -894,9 +1011,8 @@ internal sealed class AvatarSceneGeometry
 
         var values = ReadBodyStrings(person);
         var objectEntry = person.TypeRecord is { } type ? registry.Find(unchecked((uint)type.Key)) : null;
-        // SAnimator::UpdateSuits (0058a17c.c:33-59): single-suit actors (pets/creatures with OBJD +0xCC bit 0x8)
-        // index CurrentOutfit directly into BodyStrings (1-based CurrentOutfit + 1 == 0-based CurrentOutfit) and
-        // bypass human outfit categories and hand-gesture slots. Runs before AnimatorBodyStringMode checks.
+        // Single-suit actors with animation flag bit 0x8 index their outfit directly into body strings,
+        // bypassing human clothing categories and hand gestures.
         if (objectEntry is not null && (objectEntry.Definition[ObjdField.VitaBoyFlags] & 8) != 0)
         {
             if (IsUnsetPart(body.Item1))
@@ -929,21 +1045,69 @@ internal sealed class AvatarSceneGeometry
                 var fallbackHead = BodyString(values, 2);
                 if (fallbackHead.Length > 0) head = ParseSuitSpecification(fallbackHead);
             }
-            // SAnimator::UpdateSuits (0058a17c.c:118-178) restores idle hands (gesture 0) from BodyStrings 18/19 (0-based 17/18)
-            // even when SavedCharacter previously serialized "NONE" while carrying an item (gesture 3).
+            // Restores idle hands from body string indices 17 and 18 when returning to gesture 0, even if
+            // saved state recorded no mesh while carrying an item.
             if (defaultLeftHand.Length > 0)
                 leftHand = ParseSuitSpecification(defaultLeftHand);
             if (defaultRightHand.Length > 0)
                 rightHand = ParseSuitSpecification(defaultRightHand);
         }
 
-        // SAnimator::UpdateSuits (0058a17c.c:67-69): AnimatorBodyStringMode bits 0x6 force CurrentOutfit to 0
-        // without bypassing BodyStrings default body/head/hand resolution or hand gestures.
+        // Body string mode bits 0x6 force outfit selection to index 0 while preserving default meshes and
+        // hand gestures.
         var currentOutfit = (person.AnimatorBodyStringMode & 6) != 0 ? 0 : (int)person[PersonData.CurrentOutfit];
-        if (currentOutfit != 0)
+        if (currentOutfit != 0 && (person.PresentationCharacter is null || currentOutfit is 1 or 2 or 4 or 5 or 17 or 18))
         {
             if (defaultLeftHand.Length > 0) leftHand = ParseSuitSpecification(defaultLeftHand);
             if (defaultRightHand.Length > 0) rightHand = ParseSuitSpecification(defaultRightHand);
+        }
+
+        var leftGesture = (int)person[PersonData.HandGestureLeft];
+        var rightGesture = (int)person[PersonData.HandGestureRight];
+        var leftHiddenByGesture3 = leftGesture == 3;
+        var rightHiddenByGesture3 = rightGesture == 3;
+        leftHand = leftGesture switch
+        {
+            1 => ResolveGesturePart(values, 19, leftHand),
+            2 => ResolveGesturePart(values, 21, leftHand),
+            3 => ("NONE", ""),
+            4 => ResolveGesturePart(values, 25, leftHand),
+            _ => leftHand,
+        };
+        rightHand = rightGesture switch
+        {
+            1 => ResolveGesturePart(values, 20, rightHand),
+            2 => ResolveGesturePart(values, 22, rightHand),
+            3 => ("NONE", ""),
+            4 => ResolveGesturePart(values, 26, rightHand),
+            _ => rightHand,
+        };
+
+        var genderString = BodyString(values, 12);
+        var isFemale = genderString.Equals("female", StringComparison.OrdinalIgnoreCase)
+            ? true
+            : genderString.Equals("male", StringComparison.OrdinalIgnoreCase)
+                ? false
+                : (person[PersonData.Gender] & 1) != 0;
+        var age = int.TryParse(BodyString(values, 13), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedAge)
+            ? parsedAge
+            : (int)person[PersonData.PersonAge];
+        var isChild = age is > 0 and < 18;
+        var rawSkin = BodyString(values, 14).ToLowerInvariant();
+        var skin = rawSkin is "lgt" or "med" or "drk"
+            ? rawSkin
+            : person[PersonData.SkinColor] switch
+            {
+                2 => "drk",
+                3 => "med",
+                _ => "lgt",
+            };
+        var bodySourceName = BodyString(values, 1);
+        if (bodySourceName.Length == 0) bodySourceName = body.Item1;
+        var bodyFit = InferBodyFit(bodySourceName);
+
+        if (currentOutfit != 0)
+        {
             switch (currentOutfit)
             {
                 case 1:
@@ -954,13 +1118,34 @@ internal sealed class AvatarSceneGeometry
                     if (ResolveCategorySuit(values, 31, 's', fallbackIndex: 16) is { } swim && swim.Length > 0)
                         body = ParseSuitSpecification(swim);
                     break;
+                case 3:
+                {
+                    var careerLevel = isChild ? (short)0 : person[PersonData.JobPromotionLevel];
+                    if (careerHost is not null && careerHost.TryGetCareerUniform(
+                        person[PersonData.JobType], careerLevel, isFemale,
+                        out var careerMesh, out var careerSkin))
+                    {
+                        var tex = string.IsNullOrWhiteSpace(careerSkin) ? careerMesh : careerSkin;
+                        if (!string.IsNullOrWhiteSpace(careerMesh) &&
+                            !careerMesh.Equals("none", StringComparison.OrdinalIgnoreCase))
+                        {
+                            ApplyBody(careerMesh, tex);
+                        }
+                        else if (!string.IsNullOrWhiteSpace(tex) &&
+                            !tex.Equals("none", StringComparison.OrdinalIgnoreCase))
+                        {
+                            ApplyBody(tex, tex);
+                        }
+                    }
+                    break;
+                }
                 case 4:
                 {
                     var nudeBody = BodyString(values, 27);
                     var nudeLeft = BodyString(values, 28);
                     var nudeRight = BodyString(values, 29);
                     var nudeOverride = BodyString(values, 30);
-                    if (int.TryParse(BodyString(values, 13), NumberStyles.Integer, CultureInfo.InvariantCulture, out var age) && age < 18)
+                    if (isChild)
                     {
                         if (nudeBody.Length > 0 && !nudeBody.Equals("ADDED", StringComparison.OrdinalIgnoreCase))
                             body = ParseSuitSpecification(nudeBody);
@@ -973,17 +1158,58 @@ internal sealed class AvatarSceneGeometry
                     {
                         if (nudeBody.Length > 0 && !nudeBody.Equals("ADDED", StringComparison.OrdinalIgnoreCase))
                             body = ParseSuitSpecification(nudeBody);
-                        if (nudeLeft.Length > 0 && !nudeLeft.Equals("ADDED", StringComparison.OrdinalIgnoreCase))
+                        if (!leftHiddenByGesture3 && nudeLeft.Length > 0 && !nudeLeft.Equals("ADDED", StringComparison.OrdinalIgnoreCase))
                             leftHand = ParseSuitSpecification(nudeLeft);
-                        if (nudeRight.Length > 0 && !nudeRight.Equals("ADDED", StringComparison.OrdinalIgnoreCase))
+                        if (!rightHiddenByGesture3 && nudeRight.Length > 0 && !nudeRight.Equals("ADDED", StringComparison.OrdinalIgnoreCase))
                             rightHand = ParseSuitSpecification(nudeRight);
                     }
                     break;
                 }
                 case 5:
-                    if (ResolveCategorySuit(values, 32, 'l') is { } pajamas && pajamas.Length > 0)
-                        body = ParseSuitSpecification(pajamas);
+                {
+                    var explicitPajama = BodyString(values, 32);
+                    if (explicitPajama.Length > 0 && !explicitPajama.Equals("ADDED", StringComparison.OrdinalIgnoreCase))
+                    {
+                        body = ParseSuitSpecification(explicitPajama);
+                    }
+                    else if (!(isChild
+                        ? (ApplyBody("pjs$gchd", "pajama$g$c") || ApplyBody("pjs$gchd", "pjs$g$c"))
+                        : ApplyBody("pajama$g$b", "pajama$g$c")))
+                    {
+                        if (ResolveCategorySuit(values, 32, 'l') is { } pajamas && pajamas.Length > 0)
+                            body = ParseSuitSpecification(pajamas);
+                    }
                     break;
+                }
+                case 6:
+                case 7:
+                {
+                    var neg = currentOutfit == 7;
+                    ApplyBody(isChild ? "skeletonchd_01" : "skeleton_01", neg ? "skeleneg_01" : "skeleton_01");
+                    ApplyHead(isChild ? "c_kidskull" : "c_skeleton", neg ? "c_skeleneg" : "c_skeleton");
+                    ApplyHands(neg ? "_GUAO_sneg" : "_GUAO_skel");
+                    break;
+                }
+                case >= 8 and <= 16:
+                {
+                    var style = currentOutfit switch
+                    {
+                        8 => "toga",
+                        9 => "cow",
+                        10 => "luau",
+                        11 => "rave",
+                        12 => "cost",
+                        13 => "nice",
+                        14 => "swim",
+                        15 => "pj",
+                        _ => "disco",
+                    };
+                    var ageCode = isChild ? "c" : "afit";
+                    var variant = Math.Clamp((int)person[PersonData.CostumeTrunkOffsetHouseParty], 0, isChild ? 1 : 9) + 1;
+                    if (!ApplyBody($"ct-{style}-$g{ageCode}-{variant:D2}", $"ct-{style}-$g{ageCode}$c-{variant:D2}") && variant != 1)
+                        ApplyBody($"ct-{style}-$g{ageCode}-01", $"ct-{style}-$g{ageCode}$c-01");
+                    break;
+                }
                 case 17:
                     if (ResolveCategorySuit(values, 33, 'w') is { } winter && winter.Length > 0)
                         body = ParseSuitSpecification(winter);
@@ -992,31 +1218,174 @@ internal sealed class AvatarSceneGeometry
                     if (ResolveCategorySuit(values, 34, 'h') is { } highFashion && highFashion.Length > 0)
                         body = ParseSuitSpecification(highFashion);
                     break;
+                case 55:
+                case 56:
+                {
+                    var stage = currentOutfit == 56 ? (int)person[PersonData.CostumeTrunkOffsetHouseParty] : 0;
+                    var stageMesh = stage switch
+                    {
+                        1 => "MagicMAFit_MummyTorso",
+                        2 => "MagicMAFit_MummyLegs",
+                        3 => "MagicMAFit_MummyArms",
+                        _ => "MagicMAFit_MummyFull",
+                    };
+                    if (!ApplyBody(stageMesh, "MagicMAFit_Mummy") && stage != 0)
+                        ApplyBody("MagicMAFit_MummyFull", "MagicMAFit_Mummy");
+                    ApplyHands("HUA$h_Mummy");
+                    ApplyHead("CMagicMA_Mummy", "CMagicMA_Mummy");
+                    break;
+                }
+                default:
+                    if (ResolveSpecialOutfitTemplate(currentOutfit) is { } spec)
+                    {
+                        if (spec.BodyMesh is not null &&
+                            !ApplyBody(spec.BodyMesh, spec.BodyTex ?? spec.BodyMesh) &&
+                            spec.FallbackBodyMesh is not null)
+                            ApplyBody(spec.FallbackBodyMesh, spec.FallbackBodyTex ?? spec.FallbackBodyMesh);
+                        if (spec.HeadMesh is not null &&
+                            !ApplyHead(spec.HeadMesh, spec.HeadTex ?? spec.HeadMesh) &&
+                            spec.FallbackHeadMesh is not null)
+                            ApplyHead(spec.FallbackHeadMesh, spec.FallbackHeadTex ?? spec.FallbackHeadMesh);
+                        if (spec.HandTex is not null)
+                            ApplyHands(spec.HandTex, spec.FallbackHandTex);
+                    }
+                    break;
             }
         }
 
-        leftHand = (int)person[PersonData.HandGestureLeft] switch
+        if (IsUnsetPart(body.Item1))
         {
-            1 => ResolveGesturePart(values, 19, leftHand),
-            2 => ResolveGesturePart(values, 21, leftHand),
-            3 => ("NONE", ""),
-            4 => ResolveGesturePart(values, 25, leftHand),
-            _ => leftHand,
-        };
-        rightHand = (int)person[PersonData.HandGestureRight] switch
-        {
-            1 => ResolveGesturePart(values, 20, rightHand),
-            2 => ResolveGesturePart(values, 22, rightHand),
-            3 => ("NONE", ""),
-            4 => ResolveGesturePart(values, 26, rightHand),
-            _ => rightHand,
-        };
+            var fallbackBody = BodyString(values, 1);
+            if (fallbackBody.Length > 0 && !fallbackBody.Equals("ADDED", StringComparison.OrdinalIgnoreCase))
+                body = ParseSuitSpecification(fallbackBody);
+        }
+
         return (body, leftHand, rightHand, head);
+
+        bool ApplyBody(string meshTemplate, string texTemplate)
+        {
+            var apr = ResolveSuitAppearance(meshTemplate);
+            if (apr is null) return false;
+            var tex = ResolveSuitTexture(texTemplate) ?? ResolveSuitTexture(meshTemplate);
+            body = (apr, tex is not null ? "BODY=" + tex : "");
+            return true;
+        }
+
+        bool ApplyHead(string meshTemplate, string texTemplate)
+        {
+            var apr = ResolveSuitAppearance(meshTemplate);
+            if (apr is null) return false;
+            var tex = ResolveSuitTexture(texTemplate) ?? ResolveSuitTexture(meshTemplate);
+            head = (apr, tex is not null ? "HEAD=" + tex : "");
+            return true;
+        }
+
+        void ApplyHands(string template, string? fallbackTemplate = null)
+        {
+            leftHand = ApplyHandTemplate(leftHand, leftGesture, leftHiddenByGesture3, template, fallbackTemplate);
+            rightHand = ApplyHandTemplate(rightHand, rightGesture, rightHiddenByGesture3, template, fallbackTemplate);
+        }
+
+        (string, string) ApplyHandTemplate((string, string) handPair, int gesture, bool hiddenByGesture3,
+            string template, string? fallbackTemplate)
+        {
+            if (hiddenByGesture3 || IsUnsetPart(handPair.Item1)) return handPair;
+            var pose = ResolveHandPoseChar(gesture, handPair.Item1);
+            var tex = ResolveSuitTexture(ExpandSuitTemplate(template, isFemale, isChild, bodyFit, skin, pose));
+            if (tex is null && fallbackTemplate is not null)
+                tex = ResolveSuitTexture(ExpandSuitTemplate(fallbackTemplate, isFemale, isChild, bodyFit, skin, pose));
+            return tex is not null ? (handPair.Item1, "HAND=" + tex) : handPair;
+        }
+
+        string? ResolveSuitAppearance(string template)
+        {
+            var expanded = ExpandSuitTemplate(template, isFemale, isChild, bodyFit, skin, 'O');
+            var normalized = NormalizeAppearance(expanded);
+            if (appearances.ContainsKey(normalized))
+                return normalized.EndsWith(".apr", StringComparison.OrdinalIgnoreCase) ? normalized : normalized + ".apr";
+            var stemQuery = expanded.EndsWith(".apr", StringComparison.OrdinalIgnoreCase) ? expanded[..^4] : expanded;
+            if (stemQuery.Length == 0) return null;
+            foreach (var key in appearances.Keys)
+            {
+                if (key.Contains(stemQuery, StringComparison.OrdinalIgnoreCase))
+                {
+                    var matched = NormalizeAppearance(key);
+                    return matched.EndsWith(".apr", StringComparison.OrdinalIgnoreCase) ? matched : matched + ".apr";
+                }
+            }
+            return null;
+        }
+
+        string? ResolveSuitTexture(string template)
+        {
+            var expanded = ExpandSuitTemplate(template, isFemale, isChild, bodyFit, skin, 'O');
+            if (expanded.EndsWith(".bmp", StringComparison.OrdinalIgnoreCase)) expanded = expanded[..^4];
+            textureStemByLower ??= BuildTextureStemMap();
+            if (textureStemByLower.TryGetValue(expanded.ToLowerInvariant(), out var resolved))
+                return resolved;
+            if (expanded.Length == 0) return null;
+            foreach (var stem in textureStemByLower.Values)
+            {
+                if (stem.Contains(expanded, StringComparison.OrdinalIgnoreCase))
+                    return stem;
+            }
+            return null;
+        }
+
+        static char ResolveHandPoseChar(int gesture, string appearanceName)
+        {
+            if (gesture == 1) return 'P';
+            if (gesture == 2) return 'C';
+            var normalized = NormalizeAppearance(appearanceName);
+            if (normalized.EndsWith(".apr", StringComparison.Ordinal)) normalized = normalized[..^4];
+            if (normalized.Length > 0)
+            {
+                var last = char.ToUpperInvariant(normalized[^1]);
+                if (last is 'O' or 'P' or 'C') return last;
+            }
+            return 'O';
+        }
+
+        static string InferBodyFit(string source)
+        {
+            var comma = source.IndexOf(',');
+            var stem = (comma >= 0 ? source[..comma] : source).Trim();
+            var underscore = stem.IndexOf('_');
+            if (underscore >= 0) stem = stem[..underscore];
+            if (stem.EndsWith("fat", StringComparison.OrdinalIgnoreCase)) return "fat";
+            if (stem.EndsWith("skn", StringComparison.OrdinalIgnoreCase)) return "skn";
+            return "fit";
+        }
+
+        static string ExpandSuitTemplate(string template, bool female, bool child, string fit, string simSkin, char handPose)
+        {
+            if (!template.Contains('$')) return template;
+            var g = female ? "f" : "m";
+            var a = child ? "c" : "a";
+            var h = handPose.ToString();
+            var sb = new System.Text.StringBuilder(template.Length + 8);
+            for (var i = 0; i < template.Length; i++)
+            {
+                if (template[i] == '$' && i + 1 < template.Length)
+                {
+                    switch (char.ToLowerInvariant(template[i + 1]))
+                    {
+                        case 'g': sb.Append(g); i++; continue;
+                        case 'a': sb.Append(a); i++; continue;
+                        case 'b': sb.Append(fit); i++; continue;
+                        case 'c': sb.Append(simSkin); i++; continue;
+                        case 'h': sb.Append(h); i++; continue;
+                    }
+                }
+                sb.Append(template[i]);
+            }
+            return sb.ToString();
+        }
 
         static bool IsUnsetPart(string name) =>
             string.IsNullOrWhiteSpace(name) || name.Trim().Equals("NONE", StringComparison.OrdinalIgnoreCase);
 
-        // FUN_00455edc (00455edc.c:27-30) strips inline ';' comments before splitting ',' and '='.
+        // Strips inline semicolon comments before parsing comma- and equals-separated body string entries.
         static string BodyString(IReadOnlyList<string>? table, int index)
         {
             if (table is null || table.Count <= index) return "";
@@ -1043,6 +1412,17 @@ internal sealed class AvatarSceneGeometry
         }
     }
 
+    private Dictionary<string, string> BuildTextureStemMap()
+    {
+        var map = new Dictionary<string, string>(textures.Files.Count, StringComparer.OrdinalIgnoreCase);
+        foreach (var file in textures.Files)
+        {
+            var stem = Path.GetFileNameWithoutExtension(file.Name);
+            if (stem.Length > 0) map.TryAdd(stem.ToLowerInvariant(), stem);
+        }
+        return map;
+    }
+
     internal Vector3? HeadPosition(XPerson person) => headPositions.TryGetValue(person.Id, out var position) ? position : null;
 
     internal Vector3? HeadAttachmentPosition(XPerson person) =>
@@ -1056,9 +1436,8 @@ internal sealed class AvatarSceneGeometry
     internal Vector3? PelvisPosition(XPerson person) =>
         pelvisPositions.TryGetValue(person.Id, out var position) ? position : null;
 
-    /// <summary>Maps cXPerson's hierarchy slots to VitaBoy registrations per cXPerson::Draw (00459f0f.c:25-177),
-    /// SAnimator::GetRegistration (005928fd.c), and SAnimator::Tick child-animator attachment (0058dc76.c:149-209):
-    /// slots 1 and 5 -> R_HAND Palm, slot 2 -> HEAD bone, slot 3 -> PELVIS, slot 4 -> HEAD Top.</summary>
+    /// <summary>Maps avatar hierarchy slots to skeleton bones: slots 1 and 5 to the right hand palm, slot 2
+    /// to the head, slot 3 to the pelvis, and slot 4 to the top of the head.</summary>
     internal Vector3? SlotAttachmentPosition(XPerson person, int hierarchySlot) => hierarchySlot switch
     {
         1 or 5 => HandPosition(person),
@@ -1098,10 +1477,8 @@ internal sealed class AvatarSceneGeometry
         person.AnimatorHeadSeekRegistrationsAvailable = false;
     }
 
-    /// <summary>Builds the two registrations consumed by SAnimator::UpdateHeadDirection. SetupRegistrations uses
-    /// Body Strings entries 4/5 for +0x13c, and entry 4 with the authored HeadFake suffix for +0x144
-    /// (Mac SAnimator.s 0x1034B2F0–0x1034B45C). A missing body-strings resource leaves the registration absent,
-    /// matching FindRegistration returning null for a missing bone.</summary>
+    /// <summary>Caches head look-at registration points defined in body strings entries 4 and 5, using the
+    /// primary and fake head bones for gaze targeting.</summary>
     private void CacheHeadSeekRegistrations(XPerson person, IReadOnlyList<BonePose> pose, SkeletonInfo skeletonInfo,
         IReadOnlyList<string>? values, Matrix4x4 rootTransform)
     {
@@ -1124,9 +1501,8 @@ internal sealed class AvatarSceneGeometry
         }
     }
 
-    /// <summary>Collects facing-free posed head meshes for the source <c>MakeSpeakingIcon</c> fallback without
-    /// disturbing the scene build: <c>Build</c> refreshes the per-Sim head/root caches, which the scene path retains
-    /// for placement and attachment resolution, so the prior entries are restored afterwards.</summary>
+    /// <summary>Extracts facing-independent posed head meshes for dialog icon generation while preserving
+    /// cached scene placement transforms.</summary>
     internal List<PosedHeadMesh> BuildHeadMeshes(XPerson person, int level, int cameraOrientation,
         Func<float, float, float> elevation, LotCamera camera)
     {
@@ -1199,8 +1575,8 @@ internal sealed class AvatarSceneGeometry
         }
     }
 
-    /// <summary>Computes the two cached SAnimator strides from the active skill's marker bones on the same skeleton
-    /// selected for this Sim's body appearance. StartVitaBoy evaluates these at the authored marker frames.</summary>
+    /// <summary>Computes locomotion stride distances from marker bones in the active animation at authored
+    /// marker keyframes.</summary>
     internal (float MarkerOneStride, float MarkerTwoStride)? LocomotionStrides(XPerson person, string animationName)
     {
         if ((person.PresentationCharacter ?? person.SavedCharacter) is not { Parts.Count: 5 } character ||
@@ -1235,14 +1611,12 @@ internal sealed class AvatarSceneGeometry
             if (markerOne is not { Bone.Length: > 0 } || markerTwo is not { Bone.Length: > 0 }) return null;
             var frameCount = animationSource.Animation.PlaybackFrameCount;
             if (frameCount <= 0) return null;
-            // Character bones and CFP channels are evaluated in their authored Sims.exe coordinate space.
             return Pose.LocomotionStrides(gameSkeleton, animationSource.Animation, animationSource.Curves,
                 markerOne.Value.NormalizedTime * frameCount, markerOne.Value.Bone,
                 markerTwo.Value.NormalizedTime * frameCount, markerTwo.Value.Bone);
         }
         catch (InvalidDataException)
         {
-            // The selected skeleton may omit a marker track/bone. StartVitaBoy cannot derive its source stride then.
             return null;
         }
 
@@ -1334,8 +1708,8 @@ internal sealed class AvatarSceneGeometry
 
     private Skeleton SelectSkeleton(AppearanceSource body, HashSet<string> requiredBones, XPerson person)
     {
-        // SAnimator::StartVitaBoy (00588351.c:20-36) reads the skeleton name from BodyStrings 1-based entry 1
-        // (0-based index 0: "adult", "child", "dog", "cat") and overrides it to "child" when 0 < PersonAge < 18.
+        // Reads the skeleton name from the first body string entry and overrides it to "child" when age is
+        // between 1 and 17.
         var bodyAppearanceCategory = Category(body.Appearance.Name);
         var isChildAppearance = bodyAppearanceCategory is "mc" or "fc" or "uc" ||
             body.Appearance.Name.Contains("Chd_", StringComparison.OrdinalIgnoreCase);
@@ -1442,10 +1816,8 @@ internal sealed class AvatarSceneGeometry
         return result;
     }
 
-    /// <summary>Computes the Plumbob diffuse RGB color from the parent Sim's truncated integer Mood motive
-    /// matching VitaBoy::Draw (0058da16.c:98, 0058dc76.c:203-205, 00585fbd.c:90-162).
-    /// Kind 1 is head-arrow (selected Sim), kind 2 is head-arrow-date (Hot Date companion, swaps G and B),
-    /// and kind 3 is head-star (Superstar non-selected celebrity, solid gold).</summary>
+    /// <summary>Computes plumbob indicator color from avatar mood: green-to-red for selected Sims,
+    /// blue-accented for date companions, and solid gold for celebrities.</summary>
     internal static (byte R, byte G, byte B) PlumbobColor(int indicatorKind, int mood)
     {
         var r = 1.0f;
@@ -1510,8 +1882,7 @@ internal sealed class AvatarSceneGeometry
         var textureBytes = plumbobTex.Bytes;
         var textureHash = plumbobTex.Hash;
 
-        // VitaBoy::Draw (00585fbd.c:163-179) sets the synthetic "root" skeleton's single ROOT bone to
-        // translation (0, 3.0, 0) and Euler rotation (PI/2, 0, 2*PI * elapsedMs * 0.001 * 0.5).
+        // Rotates the plumbob around the vertical axis at one half-revolution per second.
         var elapsedMs = person.AnimatorMilliseconds + subTickAlpha * 42f;
         var spinAngle = (MathF.PI + MathF.PI) * elapsedMs * 0.001f * 0.5f;
         var sx = MathF.Sin(MathF.PI * 0.25f);
@@ -1523,8 +1894,8 @@ internal sealed class AvatarSceneGeometry
         var boneMatrix = Matrix4x4.CreateFromQuaternion(Pose.BoneMatrixRotation(worldRotation));
         boneMatrix.M42 = 3.0f;
 
-        // SAnimator::Tick (0058da16.c:83-94, 0058dc76.c:189-202) places the indicator animator at the parent
-        // Sim's HEAD bone world position with the parent's root heading and the indicator's 1/3 VitaBoy scale.
+        // Positions the indicator mesh at the avatar head bone with the parent heading and one-third actor
+        // scale.
         var headRoot = Vector3.Transform(head.WorldTranslation, parentRootTransform);
         var indicatorRootTransform = facingMatrix * Matrix4x4.CreateScale(1f / 3f) *
                                      Matrix4x4.CreateTranslation(headRoot);
@@ -1561,10 +1932,8 @@ internal sealed class AvatarSceneGeometry
         }
     }
 
-    /// <summary>Builds the source skate blades using named ankle-grip CRES frames. The accessory CRES roots are
-    /// identity, and the Person SLOT names link those frames to the skeleton. Convert the complete source slot-to-foot
-    /// transform into the native actor basis and apply it to this Sim's animated foot. The numeric BHAV IDs 20/21 remain
-    /// source interaction operands; resolving them to anatomy is not part of this renderer adapter.</summary>
+    /// <summary>Constructs skate blade meshes by binding accessory frame transforms to animated foot slot
+    /// bones.</summary>
     private void AddSkateParts(XPerson person, List<Part> parts,
         IReadOnlyDictionary<string, List<Vector3>> footPositions,
         float tileX, float tileY, float altitude, LotCamera camera)
@@ -1594,8 +1963,6 @@ internal sealed class AvatarSceneGeometry
             var sourceMinZ = mesh.Positions.Min(point => point.Z);
             var sourceMaxZ = mesh.Positions.Max(point => point.Z);
 
-            // The source export supplies a thin blade only. Fit its long axis to the actual skinned shoe
-            // bounds and put it directly below the sole; the source pack has no boot mesh to import.
             var vertices = new Vertex[mesh.Corners.Length];
             for (var index = 0; index < mesh.Corners.Length; index++)
             {
@@ -1637,9 +2004,7 @@ internal sealed class AvatarSceneGeometry
 
     private static Vector3 SourcePositionNative(Vector3 source)
     {
-        // Source GMDC positions and CRES translations are both in source meters. The native skeleton
-        // stores three internal units per meter, and the avatar projection below divides by three.
-        // Convert positions here so the blade keeps its authored physical size through that projection.
+        // Scales accessory geometry positions by three to convert from meters into internal skeleton units.
         return Vector3.Transform(source * 3, SourceAxis);
     }
 

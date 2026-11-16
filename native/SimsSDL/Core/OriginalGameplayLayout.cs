@@ -2,38 +2,23 @@ namespace SimsSDL.Core;
 
 public static partial class OriginalGameplayLayout
 {
-    /// <summary>
-    /// cWinPeople::Init (005186da.c:117-159, 237-249) allocates 8 45x45 PeopleTemplate.bmp buttons in a 4x2 grid
-    /// at (229, 55) / (229, 100) (5px top/bottom margin inside the 100px-tall PanelBack.bmp), and
-    /// cWinPeople::UpdateViewFromCPState (0051ceee.c:45-47) clamps visible household portraits to min(8, count).
-    /// </summary>
     public const int MaxHouseholdPortraits = 8;
 
-    /// <summary>Needs subpanel dark navy background RGB (PanelBack.bmp / 0050c694.c:19).</summary>
     public const uint MotiveArrowBackgroundRgb = 0x000052u;
-    /// <summary>Initial 500ms flash peak for rising motive chevrons (0050c729.c:39, 0050c3b4.c:53).</summary>
     public const uint MotiveArrowRisingFlashRgb = 0x00ff00u;
-    /// <summary>Steady green after the second 500ms ramp (0050c3b4.c:55).</summary>
     public const uint MotiveArrowRisingSteadyRgb = 0x00ca39u;
-    /// <summary>Initial 500ms flash peak for falling motive chevrons (0050c729.c:39, 0050c3b4.c:46).</summary>
     public const uint MotiveArrowFallingFlashRgb = 0xff0000u;
-    /// <summary>Steady red after the second 500ms ramp (0050c3b4.c:48).</summary>
     public const uint MotiveArrowFallingSteadyRgb = 0xd10000u;
-    /// <summary>Duration of each cColorInterp ramp in cWinMotiveArrows and cWinMotive (0050c729.c:44, 0050c3b4.c:50).</summary>
     public const uint MotiveArrowFadeDurationMs = 500u;
 
-    /// <summary>Individual chevron glyph bounds (0050c3b4.c:25-26, 0050c8d2.c:13-38).</summary>
     public static readonly CGSize MotiveArrowSize = new(3, 5);
 
-    /// <summary>Combined 5-chevron strip bounds (4 px pitch across 5 glyphs of width 3: 4 * 4 + 3 = 19 px).</summary>
+    /// <summary>Defines the bounds of a five-chevron motive arrow strip with 3px glyphs spaced at a 4px
+    /// horizontal pitch.</summary>
     public static readonly CGSize MotiveArrowStripSize = new(19, 5);
 
-    /// <summary>
-    /// cWinMotive::Init (00513322.c:55-61) passes left (DAT_006f38b8 - 20, DAT_006f38bc) = (0, 12) and right
-    /// (DAT_006f38b8 + 61, DAT_006f38bc) = (81, 12) to cWinMotiveArrows::SetPositions (0050c387.c).
-    /// cWinMotiveArrows::Draw (0050c3b4.c:22-38) steps right-pointing (&gt;) arrows from 81 by +4
-    /// (81, 85, 89, 93, 97) and left-pointing (&lt;) arrows from 0 + 16 = 16 by -4 (16, 12, 8, 4, 0).
-    /// </summary>
+    /// <summary>Calculates motive chevron positions: rising arrows step rightward from offset 81 by +4
+    /// pixels, while falling arrows step leftward from offset 16 by -4 pixels.</summary>
     public static CGPoint MotiveArrowOrigin(CGRect needRect, bool rising, int index)
     {
         int clamped = Math.Min(4, Math.Max(0, index));
@@ -48,10 +33,6 @@ public static partial class OriginalGameplayLayout
         new(rising ? needRect.MinX + 81 : needRect.MinX, needRect.MinY + 12,
             MotiveArrowStripSize.Width, MotiveArrowStripSize.Height);
 
-    /// <summary>
-    /// Exact 3x5 chevron pixel masks from FUN_0050c8d2 (0050c8d2.c:13-38).
-    /// rising == true (param_3 == 0) draws right-pointing &gt;; rising == false (param_3 != 0) draws left-pointing &lt;.
-    /// </summary>
     public static bool[][] MotiveArrowMask(bool rising) =>
         rising
             ?
@@ -79,10 +60,8 @@ public static partial class OriginalGameplayLayout
         return rising ? (x <= 2 - distanceFromMid) : (x >= distanceFromMid);
     }
 
-    /// <summary>
-    /// cRateOfChange (004cb630.c, 004cb715.c, 004cb761.c, 004cb7c0.c; x86 0x406540..0x406acd).
-    /// Constructed per household Sim per motive with capacity = 10 (+0x20) and maxRate = 5 (+0x24).
-    /// </summary>
+    /// <summary>Tracks motive rate of change using a sliding window of 10 samples and clamping maximum
+    /// delta rate to 5.</summary>
     public struct MotiveRateTracker : IEquatable<MotiveRateTracker>
     {
         private readonly int _capacity;
@@ -105,13 +84,9 @@ public static partial class OriginalGameplayLayout
             RunningSum = 0;
         }
 
-        /// <summary>
-        /// Matches FUN_004cb715 (0x406a32..0x406a54): x &lt; 0 ? cvttss2si(x - 0.5f) : cvttss2si(x + 0.5f).
-        /// </summary>
         public static int RoundHalfAwayFromZero(float value) =>
             value < 0 ? (int)(value - 0.5f) : (int)(value + 0.5f);
 
-        /// <summary>FUN_004cb715: rounded mean of the current samples window.</summary>
         public readonly int CurrentAverage
         {
             get
@@ -122,10 +97,8 @@ public static partial class OriginalGameplayLayout
             }
         }
 
-        /// <summary>
-        /// FUN_004cb761: appends a motive sample (-100...100), evicting the oldest sample &amp; average at capacity,
-        /// then records the updated rounded running average into averages.
-        /// </summary>
+        /// <summary>Appends a motive sample (-100 to 100) to the sliding window, evicting the oldest sample
+        /// at capacity and updating the running average.</summary>
         public void Record(int sample)
         {
             int cap = Capacity;
@@ -144,7 +117,8 @@ public static partial class OriginalGameplayLayout
             _averages.Add(CurrentAverage);
         }
 
-        /// <summary>FUN_004cb7c0 (0x406a60..0x406aa3): averages.last - averages.first, clamped to -maxRate...maxRate.</summary>
+        /// <summary>Calculates the motive change rate as the difference between the newest and oldest
+        /// window averages, clamped to the maximum rate.</summary>
         public readonly int Rate
         {
             get
@@ -157,7 +131,6 @@ public static partial class OriginalGameplayLayout
             }
         }
 
-        /// <summary>cRateOfChange::Clear (0x406ab0..0x406acd).</summary>
         public void Reset()
         {
             _samples?.Clear();
@@ -190,9 +163,6 @@ public static partial class OriginalGameplayLayout
         public static bool operator !=(MotiveRateTracker left, MotiveRateTracker right) => !left.Equals(right);
     }
 
-    /// <summary>
-    /// cColorInterp (0050c54c.c, 0050c626.c, 004734bd.c, 00473496.c).
-    /// </summary>
     public struct MotiveColorRamp : IEquatable<MotiveColorRamp>
     {
         public float StartR { get; private set; }
@@ -218,7 +188,6 @@ public static partial class OriginalGameplayLayout
         public static (byte X, byte Y, byte Z) UnpackRgb(uint rgb) =>
             ((byte)((rgb >> 16) & 0xff), (byte)((rgb >> 8) & 0xff), (byte)(rgb & 0xff));
 
-        /// <summary>FUN_0050c54c + FUN_004734bd: configures linear per-channel RGB interpolation over durationMs.</summary>
         public void Set(uint from, uint to, uint durationMs, ulong nowMs)
         {
             float r0 = (from >> 16) & 0xff;
@@ -238,7 +207,6 @@ public static partial class OriginalGameplayLayout
             EndTimeMs = unchecked(nowMs + durationMs);
         }
 
-        /// <summary>FUN_00473496: normalized [0, 1] ramp progress at nowMs.</summary>
         public readonly float Progress(ulong nowMs)
         {
             if (DurationMs == 0 || nowMs >= EndTimeMs)
@@ -248,7 +216,6 @@ public static partial class OriginalGameplayLayout
             return MathF.Min(1f, MathF.Max(0f, (float)(nowMs - StartTimeMs) / DurationMs));
         }
 
-        /// <summary>FUN_0050c626 (0x49e986..0x49e9ea): evaluates cvttsd2si(double(start + delta * t) + 0.5) per channel.</summary>
         public readonly uint Color(ulong nowMs)
         {
             float t = Progress(nowMs);
@@ -277,9 +244,6 @@ public static partial class OriginalGameplayLayout
         public static bool operator !=(MotiveColorRamp left, MotiveColorRamp right) => !left.Equals(right);
     }
 
-    /// <summary>
-    /// cWinMotiveArrows (0050c27b.c, 0050c3b4.c, 0050c694.c, 0050c729.c).
-    /// </summary>
     public struct MotiveArrowsState : IEquatable<MotiveArrowsState>
     {
         public readonly struct Evaluation : IEquatable<Evaluation>
@@ -346,7 +310,6 @@ public static partial class OriginalGameplayLayout
 
         private MotiveColorRamp[] EnsureRamps() => _ramps ??= CreateDefaultRamps();
 
-        /// <summary>FUN_0050c694: resets all 5 chevron slots to 0x000052 when switching Sims or clearing a tracker.</summary>
         public void Reset(bool hasTracker = true, ulong nowMs = 0)
         {
             MotiveColorRamp[] ramps = EnsureRamps();
@@ -359,7 +322,6 @@ public static partial class OriginalGameplayLayout
             }
         }
 
-        /// <summary>FUN_0050c729: updates the 5 chevron color ramps from the new -5...5 rate of change.</summary>
         public void Update(int rate, ulong nowMs, bool effectsEnabled = true)
         {
             MotiveColorRamp[] ramps = EnsureRamps();
@@ -448,10 +410,6 @@ public static partial class OriginalGameplayLayout
             }
         }
 
-        /// <summary>
-        /// FUN_0050c3b4: evaluates the 5 chevron colors at nowMs, advancing 0x00ff00 -&gt; 0x00ca39 and
-        /// 0xff0000 -&gt; 0xd10000 over 500ms upon reaching peak flash, and hiding once stopping finishes.
-        /// </summary>
         public Evaluation Evaluate(ulong nowMs)
         {
             if (!Visible)
@@ -522,9 +480,6 @@ public static partial class OriginalGameplayLayout
         public static bool operator !=(MotiveArrowsState left, MotiveArrowsState right) => !left.Equals(right);
     }
 
-    /// <summary>
-    /// cWinMotive bar color state (00513534.c:68-97, 00513917.c, 00513a51.c).
-    /// </summary>
     public struct MotiveBarState : IEquatable<MotiveBarState>
     {
         public readonly record struct Evaluation(uint GreenRgb, uint RedRgb, bool IsAnimating);
@@ -542,7 +497,6 @@ public static partial class OriginalGameplayLayout
             RedRamp = new MotiveColorRamp(MotiveColorRamp.PackRgb(steady.Red));
         }
 
-        /// <summary>FUN_00513a51: snaps both filled (green) and unfilled (red) cColorInterp channels to steady colors (0ms).</summary>
         public void Reset(int value, ulong nowMs = 0)
         {
             int clamped = Math.Min(100, Math.Max(-100, value));
@@ -558,10 +512,6 @@ public static partial class OriginalGameplayLayout
             GreenRamp = green;
         }
 
-        /// <summary>
-        /// FUN_00513917 (00513917.c:13-48, 0x49e5b0..0x49e675): updates value when changed and sets both
-        /// greenRamp and redRamp to the new steady barColors(value) with durationMs = 0.
-        /// </summary>
         public void SetValue(int value, ulong nowMs = 0)
         {
             int clamped = Math.Min(100, Math.Max(-100, value));
@@ -570,10 +520,6 @@ public static partial class OriginalGameplayLayout
             Reset(clamped, nowMs);
         }
 
-        /// <summary>
-        /// FUN_00513534 (00513534.c:68-97): evaluates redRamp and greenRamp, including the post-peak
-        /// 0xff0000 -&gt; steadyRed (0ms) and 0x00ff00 -&gt; steadyGreen (500ms) handlers.
-        /// </summary>
         public Evaluation Evaluate(ulong nowMs)
         {
             var steady = BarColors(Value);
@@ -612,8 +558,6 @@ public static partial class OriginalGameplayLayout
         public static bool operator ==(MotiveBarState left, MotiveBarState right) => left.Equals(right);
         public static bool operator !=(MotiveBarState left, MotiveBarState right) => !left.Equals(right);
     }
-
-    // MARK: - Centered Widescreen Classic Subpanel Bay
 
     public readonly record struct HorizontalSpan(double MinX, double MaxX)
     {
@@ -764,11 +708,9 @@ public static partial class OriginalGameplayLayout
         }
     }
 
-    /// <summary>
-    /// Matches Sims.exe (1024x768) and Legacy Collection widescreen layout: fixed Live subpanels (Needs, Personality,
-    /// Career, House, Fame, PetSkills, ReportCard) stay anchored at their classic left-aligned coordinates (x = 520..800)
-    /// with no extra dividers while PanelBack.bmp extends seamlessly across the full bottom width (x = 220..canvasWidth).
-    /// </summary>
+    /// <summary>Fixed Live subpanels (Needs, Personality, Career, House, Fame, PetSkills, ReportCard)
+    /// remain anchored at classic coordinates (x = 520 to 800) without extra dividers while the panel
+    /// background extends across the full bottom width.</summary>
     public static CenteredSubpanelBay CenteredBay(double canvasWidth)
     {
         _ = canvasWidth;
@@ -879,7 +821,7 @@ public static partial class OriginalGameplayLayout
                 Enumerable.Range(0, 6).Select(i => new SkillGridSlot(FameSkillLabel(i), FameSkillBar(i))).ToArray());
         }
 
-        const double contentW = 247; // classic 523..770
+        const double contentW = 247;
         double dx = framed.Bay.MinX + Math.Floor((framed.Bay.Width - contentW) / 2.0) - 523;
         return new FameSubpanelLayout(
             asian ? new CGPoint(533 + dx, 58) : new CGPoint(525 + dx, 50),
@@ -902,7 +844,7 @@ public static partial class OriginalGameplayLayout
                 Enumerable.Range(0, 3).Select(i => new SkillGridSlot(PetSkillLabel(i), PetSkillBar(i))).ToArray());
         }
 
-        const double contentW = 234; // classic 533..767
+        const double contentW = 234;
         double dx = framed.Bay.MinX + Math.Floor((framed.Bay.Width - contentW) / 2.0) - 533;
         return (
             new CGPoint(533 + dx, 58),

@@ -21,13 +21,11 @@ public sealed class ReachPutPrimitiveTests
         }
     }
 
-    // The mode, the flag and the parameter index are the shorts at bytes 0, 2 and 4. Bytes 6 and 7 are not read, so they hold a marker.
     private static byte[] Operand(int mode, int flag = 0, int parameter = 0) =>
         [(byte)mode, (byte)(mode >> 8), (byte)flag, (byte)(flag >> 8), (byte)parameter, (byte)(parameter >> 8), 0xEE, 0xEE];
 
     private static SimulationError Fails(Action action) => Assert.Throws<SimulationException>(action).Error;
 
-    // Person 100 at (10, 20) with the given parameters. Object 2 is the stack object, at (30, 40) with height 5.
     private static (TreeContext Context, XPerson Me, PrimitiveTestHost Host) World(short stackObject = 2, short[]? parameters = null)
     {
         var (context, me, host) = PrimitiveTestWorld.Create(parameters ?? [0], stackObject);
@@ -38,7 +36,6 @@ public sealed class ReachPutPrimitiveTests
 
     private static BehaviorScope NamedScope(string name, ushort id)
     {
-        // The named BHAV assigns 7 to the running person's temporary 0, providing an observable nested-run result.
         var operand = PrimitiveTestWorld.Expression(0, 7, (byte)ExpressionOperator.AssignTo);
         var body = new ChunkBuilder().U16(0x8002).S16(1).U8(0).U8(0).U8(0).U8(0).U32(0)
             .U16(2).U8(BhavInstruction.ReturnTrue).U8(BhavInstruction.ReturnFalse).Raw(operand).ToArray();
@@ -152,19 +149,16 @@ public sealed class ReachPutPrimitiveTests
         Assert.Equal(PrimitiveResult.Stop, ReachPutPrimitive.Execute(context, Operand(0)));
         Assert.Equal(new[] { "NextAvatarEvent(100)", "ReachAnimationDone(100)" }, host.Calls);
 
-        // An event whose code is not 0 does not end the wait.
         host.AvatarEvents.Enqueue(1);
         host.Calls.Clear();
         Assert.Equal(PrimitiveResult.Stop, ReachPutPrimitive.Execute(context, Operand(0)));
         Assert.Equal(1, context.Frame.WaitState);
 
-        // An event with code 0 does, and a zero flag then moves to the acted phase.
         host.AvatarEvents.Enqueue(0);
         host.Calls.Clear();
         Assert.Equal(PrimitiveResult.Stop, ReachPutPrimitive.Execute(context, Operand(0)));
         Assert.Equal(2, context.Frame.WaitState);
         Assert.True(person.ReachAnimationActive);
-        // The animation check runs after the event loop even when an event already set the flag.
         Assert.Equal(new[] { "NextAvatarEvent(100)", "NextAvatarEvent(100)", "ReachAnimationDone(100)", "GrabHolder(2)" }, host.Calls);
 
         host.ReachDoneAnswer = true;
@@ -301,7 +295,6 @@ public sealed class ReachPutPrimitiveTests
         context.Frame.WaitState = 1;
         host.ReachDoneAnswer = true;
 
-        // Mode 2 resolves to nothing but is not Grab or Put, so the primitive stops (2) without changing the phase.
         Assert.Equal(PrimitiveResult.Stop, ReachPutPrimitive.Execute(context, Operand(2, 1)));
         Assert.Equal(1, context.Frame.WaitState);
         Assert.DoesNotContain(host.Calls, call => call.StartsWith("GrabHolder"));

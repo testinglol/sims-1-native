@@ -2,9 +2,6 @@ using System.Security.Cryptography;
 
 namespace SimsSDL.Core;
 
-/// <summary>
-/// SHA-256 helpers wrapping <see cref="SHA256.HashData(byte[])"/> for pack fingerprints and object GUIDs.
-/// </summary>
 public static class SHA256Digest
 {
     public static byte[] Hash(byte[] data)

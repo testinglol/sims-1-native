@@ -43,7 +43,6 @@ public sealed class Wave7ParityRegressionTests
         Directory.CreateDirectory(tempDir);
         try
         {
-            // House 95 (Magic Town Autumn lot, terrain index 6): previously threw IndexOutOfRangeException.
             var boot95 = WorldBootstrap.Load(gameDir, house95Path!);
             var scene95Path = SceneExporter.Export(boot95.Lot, boot95.World, boot95.Registry, gameDir, tempDir, 95, 1);
             using (var doc95 = JsonDocument.Parse(File.ReadAllBytes(scene95Path)))
@@ -51,7 +50,6 @@ public sealed class Wave7ParityRegressionTests
                 Assert.True(doc95.RootElement.GetProperty("terrainVertices").GetArrayLength() > 0);
             }
 
-            // House 99 (Makin' Magic Cloud lot, terrain index 7): 0x14148c backdrop + unlit (room == null) sprites.
             var boot99 = WorldBootstrap.Load(gameDir, house99Path!);
             var scene99Path = SceneExporter.Export(boot99.Lot, boot99.World, boot99.Registry, gameDir, tempDir, 99, 2);
             using var doc99 = JsonDocument.Parse(File.ReadAllBytes(scene99Path));
@@ -123,7 +121,6 @@ public sealed class Wave7ParityRegressionTests
         Directory.CreateDirectory(tempDir);
         try
         {
-            // Verify Preview succeeds and restores CurrentOutfit even when Sim is currently in swimwear (CurrentOutfit == 2).
             bella[PersonData.CurrentOutfit] = 2;
             var previewObj = outfits.Preview(tempDir, swimContext, 0);
             var previewJson = JsonSerializer.SerializeToElement(previewObj);
@@ -131,7 +128,6 @@ public sealed class Wave7ParityRegressionTests
             Assert.Equal(2, bella[PersonData.CurrentOutfit]);
             bella[PersonData.CurrentOutfit] = 0;
 
-            // Verify hostless GenericSimsCall 0x10 (ChangeNormalOutfit) cycles everyday BodyStrings[1], updates SavedCharacter, and marks DirtyPeopleGuids.
             var beforeSuit = bella.SavedCharacter?.Parts[0];
             Assert.NotNull(beforeSuit);
             var frame = new StackFrame(bella.Id, new short[8], new short[4]);

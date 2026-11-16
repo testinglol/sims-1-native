@@ -1,8 +1,5 @@
 namespace SimsSDL;
 
-/// <summary>
-/// Convenience facade over <see cref="NeighborhoodWebExport"/> matching Swift's WebExport alias.
-/// </summary>
 public static class WebExport
 {
     public static string Export(

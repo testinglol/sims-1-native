@@ -1,8 +1,5 @@
 namespace SimsEngine.Simulation;
 
-// Generated from the label tables in Behavior.iff; each member's comment is the label as the file spells it.
-
-/// <summary>The primitive opcodes, named as Behavior.iff STR# 139 names them.</summary>
 public enum Primitive : ushort
 {
     /// <summary>"Sleep"</summary>
@@ -121,7 +118,6 @@ public enum Primitive : ushort
     UnusedInSimsOnline2 = 56,
 }
 
-/// <summary>The simulation globals, named as Behavior.iff STR# 129 ("global labels") names them.</summary>
 public enum SimulationGlobal : short
 {
     /// <summary>"Hour"</summary>
@@ -202,7 +198,6 @@ public enum SimulationGlobal : short
     FilterFlagsForTransitScreen = 37,
 }
 
-/// <summary>The fields of an object's data, named as Behavior.iff STR# 141 ("Data labels") names them.</summary>
 public enum ObjectData : short
 {
     /// <summary>"graphic"</summary>
@@ -343,7 +338,6 @@ public enum ObjectData : short
     SlotCount = 67,
 }
 
-/// <summary>The fields of a person's data, named as Behavior.iff STR# 200 ("Person Data Labels") names them.</summary>
 public enum PersonData : short
 {
     /// <summary>"Sitting?"</summary>
@@ -524,7 +518,6 @@ public enum PersonData : short
     IsPersonAtWorkSchool = 87,
 }
 
-/// <summary>The motives a person has, named as Behavior.iff STR# 134 ("motive strings") names them; the unused ones are left out.</summary>
 public enum Motive : short
 {
     /// <summary>"Mood"</summary>

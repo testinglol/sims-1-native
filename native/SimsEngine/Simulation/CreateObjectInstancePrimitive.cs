@@ -2,47 +2,11 @@ using SimsEngine.Formats;
 
 namespace SimsEngine.Simulation;
 
-/// <summary>The Create New Object Instance primitive (opcode 0x2a), after Sims.exe FUN_0044e108
-/// (analysis/full-decompilation/0044e108.c).
-/// <para>Operand: bytes 0 to 3 hold the created type's key, unless byte 5 bit 2 is set, when the key comes from
-/// +0x8 of the frame stack object's one-based lot-manager neighbor-table entry
-/// (<see cref="SimulationWorld.StackObjectCreateKey"/>, FUN_00425b48 calling FUN_0042573e; a missing entry or zero
-/// key answers false). Byte 4 is the placement mode (0 to 14; a higher
-/// value falls out of the switch and keeps the zero position, as Sims.exe does), byte 5 the flags, and byte 6 the
-/// frame local that mode 8 reads and the local whose value mode 9 steps from.</para>
-/// <para>Modes: 0 in front of the running object (the footprint offset of its direction,
-/// <see cref="LotGeometry.FootprintOffset"/>); 1 on its own tile and 2 in the running Sim's first real slot
-/// (the slot-zero request is normalized to hierarchy slot 1 by FUN_00432771);
-/// 3 in front of the stack object (its footprint offset), constrained to
-/// the stack object's room; 4 on the stack object's tile with it as the relative, in its room; 5 on the running
-/// object's own tile with no relative; 6 off the world at (-16, -16) on level 1 with no placement; 8 on the tile
-/// of the lot-table object named by the frame local (a negative index or one past the locals is error 8, an
-/// unknown table entry answers false); 9 beside the running object in the direction its own direction plus the
-/// local gives (cardinal directions only, anything else stays in place) with the facing the same sum plus 4
-/// gives; 10 and 11 on its own tile with placement methods 2 and 3; 12 to 14 on the stack object's tile with
-/// methods 2 to 4, in its room. A missing stack object answers false wherever a mode needs one, as Sims.exe does
-/// when FUN_00407498 finds nothing.</para>
-/// <para>Order: the same-type scan (byte 5 bit 1 answers false when an object of the created type already stands
-/// on the target tile, except for hand and stack-slot modes), then the empty-tile scan (bit 3) and, when placing, the lot-bounds check, then the room
-/// check (skipped without placement, for room -5, and when byte 5 bit 6 is set, which also clears the facing) and
-/// the facing check (<see cref="ISimulationHost.FacingClear"/>), then the creation
-/// (<see cref="ISimulationHost.CreateObjectInstance"/>; null answers false). The new object joins the world at the
-/// worked-out position; a person is bound to its avatar (<see cref="ISimulationHost.InitCreatedPerson"/>), takes
-/// the stack object's direction when byte 5 bit 5 is set (through
-/// <see cref="ISimulationHost.RotateCreatedObject"/> except for a person, which takes it directly), is centered
-/// on its tile for a multitile part (MasterId set) when the running object has function 8, and is placed through
-/// the check and the action (<see cref="ISimulationHost.CanPlaceCreated"/> and
-/// <see cref="ISimulationHost.PlaceCreated"/>; a refused placement discards it at once,
-/// <see cref="ISimulationHost.DiscardObject"/>). A created person with a nonzero PersonType arrives when byte 5
-/// bit 2 is set (<see cref="ISimulationHost.ArriveCreatedPerson"/>). Byte 5 bit 1 together with bit 4 is error 54
-/// (<see cref="SimulationError.MoreThanOnePassingValueSpecified"/>). The frame's stack object becomes the new
-/// object.</para>
-/// <para>Mode 7 reads parameter 0 from the current frame (FUN_004752f8) and resolves it through the running
-/// object's one-based object table (FUN_00407498). Flag 0x10 writes the running object's temporary 0 to parameter
-/// 0; flag 0x02 writes the running object's raw +0xf0 key to parameter 0 and to the first frame's stack-object field
-/// at +4 (FUN_00475115, FUN_004752f8, FUN_00453181 case 10). Inferred: the broader meaning of the neighbor-table
-/// +0x8 dword; the multitile snap (MasterId with the tile-center
-/// alignment when function 8 is present); the rotation converging to the masked direction.</para></summary>
+/// <summary>Implements the Create New Object Instance primitive (opcode 0x2a), instantiating objects by
+/// GUID or neighbor table lookup and placing them according to modes 0 through 14 (in front, on tile, in
+/// containment slots, off-world, or relative to stack/local targets). Applies tile occupancy, room
+/// constraint, and facing checks before finalizing placement and setting the new instance as the stack
+/// object.</summary>
 public static class CreateObjectInstancePrimitive
 {
     private const short NoRoomConstraint = -5;
@@ -51,13 +15,10 @@ public static class CreateObjectInstancePrimitive
     public static PrimitiveResult Execute(in TreeContext context, ReadOnlySpan<byte> operand)
     {
         var (world, me, frame) = context;
-        // A content-backed factory means the world can create and place the object itself; without one the host owns
-        // the object construction and placement virtuals.
         var host = world.Host;
         var native = world.ObjectFactory is not null || host is null;
         var mode = operand[4];
         var flags = operand[5];
-        // Modes 3, 4 and 12-14 call FUN_00407498 on the running object's +0xdc table.
         var tableStackObject = me.ObjectTableEntry(frame.StackObject);
 
         int guidKey;
@@ -71,8 +32,6 @@ public static class CreateObjectInstancePrimitive
             if (guidKey == 0) return PrimitiveResult.False;
         }
 
-        // The position, level, room, placement relative and method, and facing by mode: FUN_0044e108's switch on
-        // operand byte 4. The room defaults to -5 (no constraint) and the facing to -1 (no check).
         var position = me.Position;
         var level = position.Height;
         var room = NoRoomConstraint;
@@ -131,9 +90,6 @@ public static class CreateObjectInstancePrimitive
             case 7:
                 if (frame.Parameters.Length == 0)
                     throw new SimulationException(SimulationError.StackNumberOutOfRange);
-                // FUN_0044e108's mode-7 branch reads parameter 0 with FUN_004752F8, then indexes
-                // the running object's +0xdc table through FUN_00407498. The generic resolver has
-                // legacy fixture/id fallbacks that are not part of this Sims.exe path.
                 var parameterObject = me.ObjectTableEntry(frame.Parameters[0]);
                 if (parameterObject is null) return PrimitiveResult.False;
                 x = parameterObject.Position.X;
@@ -144,8 +100,6 @@ public static class CreateObjectInstancePrimitive
             {
                 var index = (sbyte)operand[6];
                 if (index < 0 || index >= frame.Locals.Length) throw new SimulationException(SimulationError.StackNumberOutOfRange);
-                // FUN_0044e108 case 8 reads the lot object's +0xdc table directly after the
-                // local-index bounds check; keep this lookup native like mode 7.
                 var target = me.ObjectTableEntry(frame.Locals[index]);
                 if (target is null) return PrimitiveResult.False;
                 x = target.Position.X;
@@ -232,8 +186,6 @@ public static class CreateObjectInstancePrimitive
         if (createdGroup is null)
         {
             world.Add(created);
-            // FUN_00440b6d registers/activates the created instance and sets its clock-manager bit 16 via FUN_0044582f.
-            // On the native path it also runs the object's constructor defaults and init tree (FUN_00431c90).
             if (native && created is XPerson createdPerson)
             {
                 world.InitializeCreatedPerson(createdPerson);
@@ -255,7 +207,7 @@ public static class CreateObjectInstancePrimitive
 
         if (inMyHand)
         {
-            // Hand objects face their holder, not the stack object.
+            // Hand objects face their holder rather than inheriting stack object facing.
             created[ObjectData.Direction] = (short)(me[ObjectData.Direction] & 7);
         }
         else if ((flags & 0x20) != 0 && tableStackObject is not null)
@@ -287,8 +239,6 @@ public static class CreateObjectInstancePrimitive
         if (place)
         {
             var at = new ObjectPosition(x, y, level);
-            // FUN_00432728 forwards the relative object and the method as its slot request (FUN_00432771 then
-            // adds one); FUN_00432a70 validates and FUN_004327d9 links the new object into that slot.
             var canPlace = !native ? host!.CanPlaceCreated(created, at, relativeTo, method)
                 : relativeTo is not null ? world.CanPlaceRelativeObject(created, at, relativeTo, method)
                 : world.CanPlaceCreatedObject(created, at, null, context.Stack);
@@ -365,9 +315,8 @@ public static class CreateObjectInstancePrimitive
         return PrimitiveResult.True;
     }
 
-    /// <summary>FUN_00423621 / FUN_004234de / FUN_0042350b: after placing a dynamic multi-tile object (MasterId != 0
-    /// and function 8 present), joins any cardinal-adjacent same-type multi-tile chains and runs function 8 on each
-    /// member with the 8-direction neighbor bitmask in parameter 0.</summary>
+    /// <summary>After placing a dynamic multi-tile object, connects adjacent same-type multi-tile chains
+    /// and executes function 8 on each member with an 8-direction neighbor bitmask in parameter 0.</summary>
     private static void RunDynamicMultiTileCallback(SimulationWorld world, XObject created)
     {
         var typeKey = created.TypeRecord?.Key;

@@ -9,12 +9,9 @@ public sealed class PushInteractionPrimitiveTests
 {
     private const short StackObjectId = 5;
 
-    // Operand: the interaction id, the owner's index in the frame, the priority mode, the flags and the secondary's local.
     private static byte[] Operand(byte id = 1, byte index = 0, byte mode = 3, byte flags = 0, byte secondary = 0) =>
         [id, index, mode, flags, secondary, 0, 0, 0];
 
-    // The running person 100 holds the frame, whose stack object 5 is a person; owner 2 is table entry 1 and secondary 6 is
-    // table entry 6. Owner 2 has interaction 1 in its table.
     private static (TreeContext Context, XPerson Me, PrimitiveTestHost Host) Lot(short[] parameters, short[] locals,
         bool withTable = true, int interactionIndex = 1, uint interactionFlags = 0)
     {

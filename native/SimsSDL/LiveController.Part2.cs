@@ -2,9 +2,6 @@ namespace SimsSDL;
 
 internal sealed partial class LiveController
 {
-    /// <summary>
-    /// Answers a prompt the client opened itself (confirmations, warnings) or an open host dialog with its first button, for <c>--script</c> <c>autodismiss</c>.
-    /// </summary>
     public void ScriptAnswerLocalDialog()
     {
         if (!ScriptAnswersDialogs || Ui.GameDialog is not { } dialog)
@@ -73,9 +70,6 @@ internal sealed partial class LiveController
         }
     }
 
-    // Scripted input
-
-    /// <summary>The household's Sims in Tab order, for <c>--script</c>.</summary>
     public IReadOnlyList<int> ScriptSimIDs => _simIDs;
 
     public bool ScriptSceneReady =>
@@ -84,10 +78,8 @@ internal sealed partial class LiveController
         && _pendingViewRequestID is null
         && _pendingViewSceneRevision is null;
 
-    /// <summary>Every Sim's current animation on the lot, for <c>--script</c> (<c>waitfor anim</c>).</summary>
     public IReadOnlyList<string> ScriptSimAnimations => _simAnimations;
 
-    /// <summary>The window size in pixels at the last tick, for <c>--script</c>.</summary>
     public CGSize ScriptCanvas => _canvas;
 
     public CGPoint ScriptWindowPoint(double x, double y) =>
@@ -131,10 +123,6 @@ internal sealed partial class LiveController
     private CGRect ScriptScreenRect(CGRect rect) =>
         new(rect.MinX * Scale, rect.MinY * Scale, rect.Width * Scale, rect.Height * Scale);
 
-    /// <summary>
-    /// A screen point on the object, for <c>--script</c>. An object outside the view is found from far zoom and the view
-    /// pans to centre it at the current zoom.
-    /// </summary>
     public CGPoint? ScriptPointOnObject(int id)
     {
         if (ScriptPixel(id) is { } point)
@@ -167,7 +155,6 @@ internal sealed partial class LiveController
         return null;
     }
 
-    /// <summary>The projected center of a requested lot tile, for normal scripted mouse input.</summary>
     public CGPoint? ScriptPointOnGroundCenter(int x, int y)
     {
         if (Renderer.ScreenPoint(x, y, SimdCanvas) is not { } point)
@@ -193,7 +180,6 @@ internal sealed partial class LiveController
 
     public string ScriptGroundProjectionInfo => Renderer.GroundProjectionInfo(SimdCanvas);
 
-    /// <summary>The first screen pixel (on a 4-pixel grid) that picks the object, for <c>--script</c>.</summary>
     private Vector2? ScriptPixel(int id)
     {
         int maxY = (int)_canvas.Height;
@@ -213,24 +199,23 @@ internal sealed partial class LiveController
         return null;
     }
 
-    /// <summary>Pans the view so the object is at the middle of the lot view, for <c>--script</c>; returns a screen point on it.</summary>
     public CGPoint? ScriptCentreOnObject(int id)
     {
         LotZoom zoom = Renderer.Zoom;
         Vector2 pan = Renderer.Pan;
-        Renderer.SetZoom(LotZoom.Far);
+        Renderer.SetZoom(LotZoom.Far, instant: true);
         Renderer.Pan = Vector2.Zero;
         Vector2? found = ScriptPixel(id) is { } farPixel && Renderer.SceneViewport(SimdCanvas) is { } farViewport
             ? farViewport.ScenePoint(farPixel)
             : null;
-        Renderer.SetZoom(zoom);
+        Renderer.SetZoom(zoom, instant: true);
         Renderer.Pan = pan;
         if (found is not { } scenePoint || Renderer.SceneViewport(SimdCanvas) is not { } viewport)
         {
             return null;
         }
 
-        // The pan that puts this scene point at the middle of the lot view.
+        // Adjusts camera pan offset to center the target scene point in viewport.
         Renderer.Pan += viewport.Size / 2f - (viewport.Origin + scenePoint * viewport.Scale);
         if (Renderer.SceneViewport(SimdCanvas) is not { } centred)
         {
@@ -246,7 +231,6 @@ internal sealed partial class LiveController
         return ScriptPixel(id) is { } fallback ? new CGPoint(fallback.X, fallback.Y) : null;
     }
 
-    /// <summary>Whether a buy or build catalog page has been requested and not yet arrived, for <c>--script</c> (<c>waitfor catalog</c>).</summary>
     public bool ScriptCatalogReady
     {
         get
@@ -264,10 +248,8 @@ internal sealed partial class LiveController
         }
     }
 
-    /// <summary>
-    /// The catalog thumbnails on screen, each with a key for the selection it should make and whether the household
-    /// can afford it, for <c>--script</c> (<c>sweep</c>). Wall and floor patterns are paid per tile, so they are always chosen.
-    /// </summary>
+    /// <summary>Lists visible catalog items with affordability status; wall and floor patterns are charged
+    /// per tile and are always considered selectable.</summary>
     public IReadOnlyList<(string Name, CGRect Rect, string Key, bool Affordable)> ScriptCatalogItems
     {
         get
@@ -331,7 +313,6 @@ internal sealed partial class LiveController
         }
     }
 
-    /// <summary>The key of the catalog item the player holds, matching <see cref="ScriptCatalogItems"/>.</summary>
     public string? ScriptCatalogSelection
     {
         get
@@ -350,7 +331,6 @@ internal sealed partial class LiveController
         }
     }
 
-    /// <summary>The lot objects the player can move or sell, by ID with their facing, for <c>--script</c> (<c>waitfor placed</c>).</summary>
     public IReadOnlyDictionary<int, int> ScriptEditableObjects
     {
         get
@@ -368,10 +348,8 @@ internal sealed partial class LiveController
         }
     }
 
-    /// <summary>Whether the drawn scene has this object, for <c>--script</c>.</summary>
     public bool ScriptSceneContains(int id) => Renderer.ContainsObject(id);
 
-    /// <summary>Whether the placement preview under the pointer has been answered, for <c>--script</c> (<c>waitfor placement</c>).</summary>
     public bool ScriptBuildCursorShown =>
         Renderer.ShowsBuildCursor
         && Renderer.BuildCursor is not null
@@ -379,7 +357,6 @@ internal sealed partial class LiveController
         && _pendingBuildCursor is null
         && _checkedBuildCursor == _desiredBuildCursor;
 
-    /// <summary>The pie menu's head has been rendered by the host at the orientation the pointer last asked for.</summary>
     public bool ScriptPieHeadSettled =>
         Ui.PieHeadImage is not null
         && _desiredPieHead is not null
@@ -393,7 +370,6 @@ internal sealed partial class LiveController
 
     public bool ScriptPlacementValid => ScriptPlacementChecked && Renderer.PlacementIsValid == true;
 
-    /// <summary>The labelled controls of the frontmost screen, for <c>--script</c>.</summary>
     public IReadOnlyList<(string Label, CGRect Rect)> ScriptControls
     {
         get
@@ -535,7 +511,7 @@ internal sealed partial class LiveController
                 pipControls.Add(("Picture-in-Picture", ScriptScreenRect(pipRect)));
             }
 
-            // The universal control (mode buttons, zoom, rotate) comes after the panel so a panel label matches first.
+            // Universal controls sort after panels so panel controls match first.
             CGRect reportFundsRect = OriginalGameplayOverlay.FundsRect.OffsetBy(0, LogicalCanvas.Height - 150);
             var combinedPanelAndUniversal = new List<(string Label, CGRect Rect)>();
             foreach ((string label, CGRect rect) in panel ?? Ui.Gameplay.Controls(LogicalCanvas, panelMinimized: Ui.PanelMinimized))
@@ -570,7 +546,6 @@ internal sealed partial class LiveController
 
     public int? ScriptRelationshipPopupID => Ui.Gameplay.RelationshipPopupId;
 
-    /// <summary>The name of the frontmost screen, for <c>--script</c> waits.</summary>
     public string ScriptScreen
     {
         get
@@ -588,7 +563,6 @@ internal sealed partial class LiveController
         }
     }
 
-    /// <summary>True on Create a Family once every Sim figure it shows has been answered by the host, for <c>--script</c>.</summary>
     public bool ScriptPreviewsReady
     {
         get
@@ -618,7 +592,6 @@ internal sealed partial class LiveController
         }
     }
 
-    /// <summary>The screen point of the open pie menu's entry with this label, for <c>--script</c>.</summary>
     public CGPoint? ScriptPointOnMenuEntry(string label)
     {
         if (Ui.PieMenu is not { } menu)
@@ -633,12 +606,9 @@ internal sealed partial class LiveController
     public IReadOnlyList<string> ScriptMenuLabels =>
         Ui.PieMenu is { } menu ? menu.Nodes.Select(n => n.Label).ToList() : [];
 
-    // Pointer
-
-    /// <summary>
-    /// A left press. Sets <see cref="PrimaryGesture"/> when it began a build stroke (whose drags and release follow); otherwise it was a click.
-    /// <paramref name="ctrl"/> is the original's delete modifier (walls, floors, paint); <paramref name="alt"/> stays an alias for the Mac port's Option.
-    /// </summary>
+    /// <summary>Handles a primary press, initiating a construction gesture via <see cref="PrimaryGesture"/>
+    /// or treating it as a click. <paramref name="ctrl"/> and <paramref name="alt"/> activate deletion mode
+    /// for architectural tools like walls, floors, and paint.</summary>
     public void Press(CGPoint point, CGSize canvas, bool shift, bool alt, bool ctrl = false)
     {
         _canvas = canvas;
@@ -679,7 +649,6 @@ internal sealed partial class LiveController
                 }
                 catch
                 {
-                    // Keep dialog interactive if layout preparation throws.
                 }
 
                 if (dialog.BeginButtonPress(point, OverlayScale))
@@ -830,7 +799,8 @@ internal sealed partial class LiveController
 
         if (_placementAnchor is { } anchor)
         {
-            // As the original hand: the object stays where it was put down and faces the way the pointer is dragged.
+            // Orients the placed object toward the drag direction while keeping it anchored at its
+            // placement tile.
             if (Renderer.GroundTileAt(Simd(point), SimdCanvas) is { } tile
                 && Ui.Buy.Selection.Face(tile.X - anchor.Tile.X, tile.Y - anchor.Tile.Y))
             {
@@ -846,7 +816,6 @@ internal sealed partial class LiveController
         UpdateBuildPreview(point);
     }
 
-    /// <summary>Starts putting down the held object on the lot; the object is placed when the button is released.</summary>
     private bool StartPlacementDrag(CGPoint point)
     {
         if (!Ui.ObjectEditing || Renderer.Speed != 0 || HasBlockingDialog || Ui.PieMenu is not null || Ui.PluginPanel is not null
@@ -957,8 +926,8 @@ internal sealed partial class LiveController
 
     private void Click(CGPoint point)
     {
-        // The loading screen covers a map that is about to be replaced; allow quick sub-neighborhood switches
-        // once a neighborhood map is already visible unless an edit mutation or lot load is running.
+        // Allows sub-neighborhood switches while a neighborhood map is visible, unless an edit mutation or
+        // lot load is actively running.
         if ((Ui.Loading || _openingNeighborhoodLot || _switchingLot || _exportingWebPages
                 || (_loadingNeighborhood && (Ui.Neighborhood is null || _editingNeighborhood)))
             && !HasBlockingDialog)
@@ -1046,7 +1015,6 @@ internal sealed partial class LiveController
                 return;
             }
 
-            // cWinPictureInPicture::TSOnMouseDownL (0052559f.c): scrolls/switches floor to the object and closes PiP.
             CentreView(window.ObjectID);
             ClosePictureInPicture();
             return;
@@ -1161,7 +1129,7 @@ internal sealed partial class LiveController
 
         if (Ui.PluginPanel is { } pluginPanel && !HasBlockingDialog && !Ui.SoundOptions.IsVisible)
         {
-            // Plugin panels are modal like the original option panels; clicks never fall through to the lot.
+            // Plugin panels act modally, preventing clicks from falling through to the underlying lot.
             switch (pluginPanel.HitTest(point, _canvas, Scale))
             {
                 case OriginalPluginPanelOverlay.Hit.Close:
@@ -1203,7 +1171,6 @@ internal sealed partial class LiveController
             return;
         }
 
-        // A host dialog (the help prompt, a travel answer) sits above the full-screen screens and takes the click first.
         if (!HasBlockingDialog && Ui.GameDialog?.Contains(point, OverlayScale) != true && ClickNeighborhoodScreens(point))
         {
             return;
@@ -1406,6 +1373,13 @@ internal sealed partial class LiveController
                                 _pendingViewRequestID = Send("walls", new Dictionary<string, object?>
                                 {
                                     ["mode"] = "up",
+                                    ["doorWindowTool"] = true,
+                                });
+                            }
+                            else if (isDoorWindow)
+                            {
+                                _ = Send("view", new Dictionary<string, object?>
+                                {
                                     ["doorWindowTool"] = true,
                                 });
                             }
@@ -1705,7 +1679,6 @@ internal sealed partial class LiveController
                 return;
             }
 
-            // The live panel's portraits, queue and subpanels are hidden under the Options panel, so they take no clicks there.
             if (!Ui.OptionsMode && !Ui.PanelMinimized && Ui.Gameplay.Selection(local, LogicalCanvas) is { } sim)
             {
                 DismissMenu();
@@ -2017,7 +1990,6 @@ internal sealed partial class LiveController
 
             _lastPieHighlight = highlighted;
             CGPoint local = Local(point);
-            // cWinPeople and action queue icons are hidden outside Live Mode (0053ad22.c:54 FUN_0050a8c0).
             if (suppressHover || !IsInLiveMode)
             {
                 Ui.Gameplay.HoveredPerson = null;
@@ -2125,7 +2097,8 @@ internal sealed partial class LiveController
                 && pipRect.Contains(local))
             {
                 Ui.Gameplay.HoveredPerson = null;
-                // cWinPictureInPicture::OpenForObject (00525256.c:29-34): custom STR# 0x131 text if provided, else UIText STR# 156 entry 0.
+                // Uses custom string table 305 text if provided, falling back to UI text string table 156
+                // entry 0.
                 string? customText = _pictureInPicture?.Text;
                 string tip = !string.IsNullOrEmpty(customText) ? customText : Ui.Strings.PictureInPictureTip();
                 Ui.Gameplay.HoveredPeopleTip = (tip, pipRect);
@@ -2141,7 +2114,6 @@ internal sealed partial class LiveController
                 && !sim.HideHover
                 && sim.TooltipName.Length > 0)
             {
-                // 0048ca6e.c lines 102-119 & 00492d46.c lines 20-23: hovering a Sim on the lot in Live Mode shows their name tooltip at (x + 17, y - 5).
                 Ui.Gameplay.HoveredPeopleTip = (sim.TooltipName, new CGRect(local.X + 17, local.Y - 4, 0, 0));
             }
 
@@ -2190,8 +2162,6 @@ internal sealed partial class LiveController
         _catalogPopupWasVisible = nowVisible;
     }
 
-    // Right button & cursor
-
     public bool IsBusyCursor =>
         Ui.Loading
         || _loadingNeighborhood
@@ -2215,7 +2185,6 @@ internal sealed partial class LiveController
                 return scroll;
             }
 
-            // Neighborhood map modes use the original's neighborhood cursors (slots 34-42 register MOVEIN, bulldoze, ..., Rezone2 together).
             if (Ui.Neighborhood is not null && !Ui.Loading && Ui.GameDialog is null)
             {
                 if (FamilyPlacement is not null) return "MOVEIN";
@@ -2223,7 +2192,6 @@ internal sealed partial class LiveController
                 if (_rezoneMode) return "Rezone2";
             }
 
-            // Slot 6 SimsDelete: the pointer while a build tool's delete modifier is held over the lot.
             if ((DeleteModifier || ScriptDeleteModifier)
                 && (string.Equals(HoverCursor, "Arrow", StringComparison.Ordinal) || string.Equals(HoverCursor, "SimsMove", StringComparison.Ordinal))
                 && Ui.BuildMode && Ui.Build.TerrainMode is null
@@ -2238,10 +2206,6 @@ internal sealed partial class LiveController
         }
     }
 
-    /// <summary>
-    /// The scroll arrows (slots 17-24: LEFT, RIGHT, UP, DOWN, UPRIGHT, UPLEFT, DOWNRIGHT, DOWNLEFT) while the pointer is in the
-    /// edge-scrolling margin, mirroring <see cref="Tick"/>.
-    /// </summary>
     private string? EdgeScrollCursor()
     {
         if (!Ui.OptionsPanel.PlayOptions.EdgeScrolling || HasBlockingDialog || !Ui.ShowsLot
@@ -2265,10 +2229,8 @@ internal sealed partial class LiveController
         };
     }
 
-    /// <summary>
-    /// EdgeDetectScroller::OnMouseMove regions: a 32-pixel margin (5 when full screen) around the area above the control panel
-    /// (the pointer over the panel itself scrolls nothing). Components are -1 for left/top, 1 for right/bottom.
-    /// </summary>
+    /// <summary>Determines the edge-scrolling direction from a 32-pixel margin (5 pixels in fullscreen)
+    /// around the viewport area above the control panel.</summary>
     private (int X, int Y)? EdgeScrollRegion(CGPoint pointer)
     {
         double margin = 32.0 * Scale;
@@ -2283,10 +2245,8 @@ internal sealed partial class LiveController
         return x == 0 && y == 0 ? null : (x, y);
     }
 
-    /// <summary>
-    /// EdgeDetectScroller::OnMouseMove velocity table in original pixels per second: 562.5 along an axis and twice that on the
-    /// horizontal axis in a corner, scaled up linearly over the first 1500 ms of one region and capped to a length of 562.5.
-    /// </summary>
+    /// <summary>Computes edge-scrolling velocity, ramping linearly over the first 1500 ms to a base speed
+    /// of 562.5 pixels per second (doubled horizontally in corners) and capped to 562.5.</summary>
     private (double X, double Y) EdgeScrollVelocity((int X, int Y) region, double elapsed)
     {
         double vx = -region.X * 562.5 * (region.Y == 0 ? 1.0 : 2.0);
@@ -2309,11 +2269,8 @@ internal sealed partial class LiveController
         return (vx, vy);
     }
 
-    /// <summary>
-    /// Edge scrolling, once a frame (EdgeDetectScroller::PreDraw): the held region's velocity times the frame time (capped at
-    /// 100 ms) plus 0.5, truncated, is added to the pan. Coordinates here are drawable pixels, so the velocity and the control
-    /// panel height scale with the UI scale used to render them.
-    /// </summary>
+    /// <summary>Updates edge scrolling per frame by multiplying velocity by elapsed time (capped at 100
+    /// ms), rounding by adding 0.5 before truncating, and scaling by the interface scale.</summary>
     public void Tick(CGSize canvas)
     {
         _canvas = canvas;
@@ -2363,14 +2320,12 @@ internal sealed partial class LiveController
             _pendingGenericSimsCallPoll = Send("genericSimsCallPersonPicker", parameters);
         }
 
-        // HouseViewer::SetScale reports each viewer scale to the simulator (command 0xf9, global 2).
         if (UsesNativeEngine && HasActiveLot && Ui.ShowsLot && Renderer.Zoom != _simulatorZoom
             && Send("zoom", new Dictionary<string, object?> { ["scale"] = (int)Renderer.Zoom }) is not null)
         {
             _simulatorZoom = Renderer.Zoom;
         }
 
-        // CPState::SetMode writes the interface mode to simulator global 19 (Mode) on every change.
         string interfaceMode = Ui.OptionsMode ? "options" : Ui.BuyMode ? "buy" : Ui.BuildMode ? "build" : "live";
         if (UsesNativeEngine && HasActiveLot && Ui.ShowsLot && !string.Equals(interfaceMode, _simulatorMode, StringComparison.Ordinal)
             && Send("mode", new Dictionary<string, object?> { ["mode"] = interfaceMode }) is not null)
@@ -2396,7 +2351,7 @@ internal sealed partial class LiveController
             _ = Send("tutorialPanelCheck", payload);
         }
 
-        if (_desiredCutaway is { } desired && _rightOrigin is null && _edgeScrollRegionKey is null && now - desired.Time >= 40.0)
+        if (_desiredCutaway is { } desired && _rightOrigin is null && _edgeScrollRegionKey is null && !Renderer.IsZoomInterpolating && now - desired.Time >= 40.0)
         {
             _desiredCutaway = null;
             if (string.Equals(Ui.WallMode, "cutaway", StringComparison.Ordinal)
@@ -2461,13 +2416,26 @@ internal sealed partial class LiveController
         SyncSimulatorViewScrolling(active: true);
     }
 
-    /// <summary>
-    /// HouseViewer::StartScrolling/StopScrolling drive SAnimator::Tick's root-only mode. The native viewport pans
-    /// immediately, so an unsustained pan change occupies one UI update; held right and edge scrolling remain active.
-    /// </summary>
+    internal bool AllowsContinuousArrowPan =>
+        Ui.ShowsLot
+        && !HasBlockingDialog
+        && !Ui.IsModalDialogBlocking
+        && Ui.OutfitPicker is null
+        && Ui.PluginPanel is null
+        && !Ui.Album.Visible
+        && Ui.GenericSimsCallPicker is null
+        && !(Ui.Camera.Visible && DeleteModifier)
+        && !Ui.SoundOptions.IsVisible;
+
     private void SyncSimulatorViewScrolling(bool active)
     {
-        if (!UsesNativeEngine || !HasActiveLot)
+        if (UsesNativeEngine)
+        {
+            _lastSimulatorPan = Renderer.Pan;
+            return;
+        }
+
+        if (!HasActiveLot)
         {
             _simulatorViewScrolling = null;
             _lastSimulatorPan = Renderer.Pan;
@@ -2508,7 +2476,6 @@ internal sealed partial class LiveController
             return "Arrow";
         }
 
-        // Slots 6-11 of the original cursor table: SimsDelete, SimsLevel, SimsLower, SimsRaise, SimsMove, SimsPlace.
         if (Ui.BuildMode)
         {
             return Ui.Build.TerrainMode switch
@@ -2534,7 +2501,6 @@ internal sealed partial class LiveController
 
         if (Renderer.ObjectAt(Simd(point), SimdCanvas) is not { } target)
         {
-            // 0048ca6e.c lines 71-78: LiveNothing (0x1c) when a human Sim is selected, LiveNothingPet (0x2b) when a pet (gender > 1) is selected.
             int selectedGender = _lotSims.TryGetValue(_selectedSim, out LotSimInfo? selectedSimInfo)
                 ? selectedSimInfo.Gender
                 : (Ui.Gameplay.State?.Selected?.Gender ?? 0);
@@ -2543,7 +2509,6 @@ internal sealed partial class LiveController
 
         if (_lotSims.TryGetValue(target, out LotSimInfo? sim))
         {
-            // 0048ca6e.c lines 102-123: selector +0xb6 bit 2 hides hover/cursor (0x1f); otherwise gender < 2 or NPC 0xfc697613 uses LivePerson (0x1d), pets use LivePet (0x2a).
             if (sim.HideHover)
             {
                 return "LiveObjectUnavail";
@@ -2555,7 +2520,6 @@ internal sealed partial class LiveController
         return _simIDs.Contains(target) ? "LivePerson" : "LiveObjectAvail";
     }
 
-    /// <summary>The pointer left the window.</summary>
     public void Leave()
     {
         Pointer = null;
@@ -2599,7 +2563,6 @@ internal sealed partial class LiveController
         Ui.Gameplay.ClearInventoryHover();
     }
 
-    /// <summary>Pans the lot by a number of canvas pixels (the arrow keys).</summary>
     public void Pan(Vector2 delta)
     {
         if (HasBlockingDialog || Ui.Album.Visible || _switchingLot || _openingNeighborhoodLot
@@ -2620,7 +2583,6 @@ internal sealed partial class LiveController
         Renderer.Pan += delta;
     }
 
-    /// <summary>EdgeDetectScroller::OnMouseDownR: arms the right-button scroll at the pressed point.</summary>
     public void RightDown(CGPoint point)
     {
         Ui.Gameplay.DismissTooltips();
@@ -2669,8 +2631,8 @@ internal sealed partial class LiveController
         _rightCurrent = point;
         _rightScrolling = false;
         _rightSelectedSim = false;
-        // EdgeDetectScroller::OnMouseDownR: in live mode a right press over a household person makes them the selected
-        // person (CPState::SetSelectedPerson); the release then only clears the state and does not run CenterView.
+        // In Live Mode, right-clicking a household member selects them immediately, preventing the camera
+        // from centering on release.
         if (!Ui.BuyMode && !Ui.BuildMode && !Ui.OptionsMode
             && Renderer.ObjectAt(Simd(point), SimdCanvas) is { } target
             && _simIDs.Contains(target))
@@ -2686,10 +2648,8 @@ internal sealed partial class LiveController
         }
     }
 
-    /// <summary>
-    /// OnMouseMove with the button held: moving more than 8 pixels from the press starts anchored scrolling, whose velocity
-    /// is 5 times the pointer's offset from the anchor.
-    /// </summary>
+    /// <summary>Begins anchored scrolling once the pointer moves more than 8 pixels from the press
+    /// location, scaling velocity to five times the displacement from the anchor.</summary>
     public void RightMove(CGPoint point)
     {
         if (_rightOrigin is not { } origin)
@@ -2705,7 +2665,8 @@ internal sealed partial class LiveController
         }
     }
 
-    /// <summary>OnMouseUpR: a release without anchored scrolling runs CenterView on the clicked tile (ScrollToTile).</summary>
+    /// <summary>Centers the camera on the clicked tile if the right mouse button is released without
+    /// engaging anchored scrolling.</summary>
     public void RightUp(CGPoint point)
     {
         try

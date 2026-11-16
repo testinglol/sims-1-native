@@ -3,10 +3,8 @@ using SimsEngine.Formats;
 
 namespace SimsEngine.World;
 
-/// <summary>The lot's pond/water grid (Arry 10, one byte per tile, 0xff for none). FUN_0047870b loads it into the
-/// object at lot manager +0x64 when the lot version is above 0x34; FUN_004790bc calls a ground-floor tile a water
-/// tile when its byte is not 0xff and treats every other level as having none. FUN_0047740f and FUN_0047759d maintain
-/// the 4-bit cardinal neighbour bitmask (0..15) on each water tile.</summary>
+/// <summary>Represents the ground-floor water and pond grid stored in Arry 10 as one byte per tile (0xFF
+/// for non-water). Water tiles store a 4-bit bitmask encoding connections to cardinal neighbor tiles.</summary>
 public sealed class LotWater
 {
     public const byte NoWater = 0xff;
@@ -47,11 +45,10 @@ public sealed class LotWater
         }
     }
 
-    /// <summary>FUN_004790bc: ground-floor water check.</summary>
     public bool IsWater(int x, int y, int level = 1) =>
         level == 1 && InBounds(x, y) && tiles[x * LotWalls.Size + y] != NoWater;
 
-    /// <summary>FUN_0047740f: sets a tile to water (0) and updates the 4-bit cardinal neighbour masks.</summary>
+    /// <summary>Sets a tile to water and updates cardinal connection masks for the tile and its neighbors.</summary>
     public void SetWater(int x, int y)
     {
         if (!InBounds(x, y) || this[x, y] != NoWater) return;
@@ -78,7 +75,8 @@ public sealed class LotWater
         }
     }
 
-    /// <summary>FUN_0047759d: clears water from a tile (0xff) and clears its cardinal neighbour mask bits.</summary>
+    /// <summary>Clears water from a tile to 0xFF and updates cardinal connection masks on neighboring
+    /// tiles.</summary>
     public void ClearWater(int x, int y)
     {
         if (!IsWater(x, y)) return;
@@ -91,7 +89,8 @@ public sealed class LotWater
 
     private static bool InBounds(int x, int y) => x is >= 0 and < LotWalls.Size && y is >= 0 and < LotWalls.Size;
 
-    /// <summary>Writes the Arry 10 water plane. Missing planes use the original 64x64 0xff no-water default.</summary>
+    /// <summary>Writes the Arry 10 water grid, defaulting missing grids to a 64x64 plane initialized to
+    /// 0xFF.</summary>
     public IffFile WriteTo(IffFile lot)
     {
         const int elementSize = 1;

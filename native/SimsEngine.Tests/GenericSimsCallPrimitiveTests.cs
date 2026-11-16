@@ -18,14 +18,13 @@ public sealed class GenericSimsCallPrimitiveTests
         }
     }
 
-    // FUN_00444346 (0x00444346–0x0044439b) traverses the manager's live +0x84/+0x88 vector.
     private static void SetNotificationRecipients(SimulationWorld world, params XObject[] recipients)
     {
         world.WalkOrder.Clear();
         world.WalkOrder.AddRange(recipients);
     }
 
-    // Operand: the call number is the signed short at byte 0.
+    // The generic call number is stored as a signed 16-bit integer at operand byte 0.
     private static byte[] Operand(short call) => [(byte)call, (byte)((ushort)call >> 8), 0, 0, 0, 0, 0, 0];
 
     private static SimulationError Fails(Action action) => Assert.Throws<SimulationException>(action).Error;
@@ -364,13 +363,13 @@ public sealed class GenericSimsCallPrimitiveTests
             world.NeighborWalkOrder.Add(neighbor);
         }
 
-        Add(2, 2, 8, 4, 50, 50);   // contributes
-        Add(3, 2, 100, null, 100, 100); // no +8 object
-        Add(4, 2, 100, 0xC, 100, 100); // wrong +0xb4 flag combination
-        Add(5, 0, 100, 4, 100, 100);   // no family
-        Add(6, 1, 100, 4, 100, 100);   // same family
-        Add(7, 2, 100, 4, 49, 100);    // candidate's relationship too low
-        Add(8, 2, 100, 4, 100, 49);    // subject's relationship too low
+        Add(2, 2, 8, 4, 50, 50);
+        Add(3, 2, 100, null, 100, 100);
+        Add(4, 2, 100, 0xC, 100, 100);
+        Add(5, 0, 100, 4, 100, 100);
+        Add(6, 1, 100, 4, 100, 100);
+        Add(7, 2, 100, 4, 49, 100);
+        Add(8, 2, 100, 4, 100, 49);
 
         Assert.Equal(8, world.FameFriendStarPower(0));
         Assert.False(world.MeetsFameFriendPowerGate(0, 5));
@@ -1164,8 +1163,6 @@ public sealed class GenericSimsCallPrimitiveTests
 
         Assert.Equal(PrimitiveResult.True, GenericSimsCallPrimitive.Execute(context, Operand(0x15)));
 
-        // F56D removes the first entry. The next search starts at old cursor + 1, misses the shifted
-        // second entry, and F6FD leaves its prior local triple intact, so the original repeats its write.
         Assert.Equal((short)5, item.InteractionBehaviorSavedWord);
         Assert.Equal(1, scope.Count);
         Assert.True(scope.TryGet(0, out var remaining));
@@ -2190,7 +2187,7 @@ public sealed class GenericSimsCallPrimitiveTests
         me.SetObjectTableEntry(3, entry);
         context.World.SetLotOrientation(1);
         Assert.Equal(PrimitiveResult.True, GenericSimsCallPrimitive.Execute(context, Operand(0x0c)));
-        Assert.Equal(-62, me.Temporaries[0]); // orientation 1 maps (2, 3) to (60, 2)
+        Assert.Equal(-62, me.Temporaries[0]);
         Assert.Empty(host.Calls);
     }
 
@@ -2206,7 +2203,7 @@ public sealed class GenericSimsCallPrimitiveTests
 
         Assert.Equal(PrimitiveResult.True, GenericSimsCallPrimitive.Execute(context, Operand(0x0c)));
 
-        Assert.Equal(-121, me.Temporaries[0]); // orientation 2 maps (2, 3) to (61, 60)
+        Assert.Equal(-121, me.Temporaries[0]);
     }
 
     [Fact]
@@ -2422,8 +2419,8 @@ public sealed class GenericSimsCallPrimitiveTests
         Assert.Empty(host.Calls);
     }
 
-    // Sims.exe 0x44fe16-0x44fe5d and FUN_00444346: frame stack id -> lot table,
-    // error 10 before broadcasting, table-owned recipient vector, skip the subject by pointer identity.
+    // Notification broadcasts validate the target stack object in the lot table before dispatching and
+    // exclude the subject from receiving notifications.
     [Theory]
     [InlineData(short.MinValue)]
     [InlineData(-1)]
@@ -2547,7 +2544,7 @@ public sealed class GenericSimsCallPrimitiveTests
         var sameIdDifferentObject = new XPerson(7, PrimitiveTestWorld.Definition());
         me.SetObjectTableEntry(3, subject);
         me.SetObjectTableEntry(4, first);
-        me.Temporaries[0] = 4; // The subject comes from the frame, never temporary 0.
+        me.Temporaries[0] = 4; // The subject is taken from the stack frame rather than temporary 0.
         SetNotificationRecipients(context.World, subject, first, me, subject, first, sameIdDifferentObject);
         var notified = new List<XObject>();
         host.OnPersonObjectReferenceNotification = (recipient, argument) =>
@@ -2594,7 +2591,7 @@ public sealed class GenericSimsCallPrimitiveTests
         SetNotificationRecipients(world, me);
         var context = new TreeContext(world, me, new StackFrame(3, [], []));
         Assert.Equal(PrimitiveResult.True, GenericSimsCallPrimitive.Execute(context, Operand(0x0d)));
-        Assert.Empty(host.Calls); // me is a non-person cXObject; its +0x38 callback is a source-defined no-op.
+        Assert.Empty(host.Calls);
     }
 
     [Fact]
@@ -2843,7 +2840,6 @@ public sealed class GenericSimsCallPrimitiveTests
         Assert.Same(third, context.World.NeighborTableEntry(3));
         Assert.Null(context.World.NeighborTableEntry(4));
     }
-
 
     [Fact]
     public void CallFiveReturnsFalseWithoutValuingOrChargingWhenNoTableWordMatches()

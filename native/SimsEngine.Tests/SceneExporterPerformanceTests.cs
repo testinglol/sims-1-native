@@ -91,19 +91,20 @@ public sealed class SceneExporterPerformanceTests
 
             Assert.True(File.Exists(exportedPath));
 
-            // Moving within the same enclosed indoor room keeps the cutaway mask identical (no full Export needed).
+            // Moving within the same enclosed room preserves the cutaway mask, avoiding a full scene
+            // export.
             Assert.True(SceneExporter.CutawayMaskMatches(
                 world, animState, revision, viewLevel: 1, wallMode: "cutaway",
                 cameraOrientation: 0, cutawayTile: (12, 12), cutawayRooms: null,
                 cutawaySim: (12, 12), cutawayZoom: 2));
 
-            // Moving out of the enclosed room to outdoors changes the cutaway mask (full Export required).
+            // Transitioning between an enclosed room and the outdoors alters the cutaway mask, requiring a
+            // full scene export.
             Assert.False(SceneExporter.CutawayMaskMatches(
                 world, animState, revision, viewLevel: 1, wallMode: "cutaway",
                 cameraOrientation: 0, cutawayTile: (2, 2), cutawayRooms: null,
                 cutawaySim: (2, 2), cutawayZoom: 2));
 
-            // Stale revision never matches or produces an animation frame.
             Assert.False(SceneExporter.CutawayMaskMatches(
                 world, animState, revision + 1, viewLevel: 1, wallMode: "cutaway",
                 cameraOrientation: 0, cutawayTile: (11, 11), cutawayRooms: null,
@@ -115,7 +116,6 @@ public sealed class SceneExporterPerformanceTests
                 cutawayTile: (12, 12), roofsVisible: false, cutawayRooms: null,
                 cutawaySim: (12, 12), cutawayZoom: 2));
 
-            // Matching revision produces a valid 30 FPS SceneAnimation delta without touching static architecture.
             var frame = SceneExporter.Animation(
                 lot, world, registry, gameRoot, sceneDir,
                 house: 1, revision: revision, state: animState, sequence: 1, updates: 2,
@@ -150,12 +150,12 @@ public sealed class SceneExporterPerformanceTests
         Encoding.ASCII.GetBytes("IFF FILE 2.5:TYPE FOLLOWED BY SIZE\0 JAMIE DOORNBOS & MAXIS 1").CopyTo(header, 0);
         var iff = new IffFile(header, "synthetic-lot.iff");
 
-        // Empty version-3 objt table.
         var objtStream = PersistWriter.Start(false, 3, "tjbo");
         objtStream.Int32(0);
         iff = iff.WithAddedChunk(ResourceType.Parse("objt"), 0, objtStream.ToArray());
 
-        // Arry 0: 64x64x2 flat terrain heights; Arry 8: 64x64x1 tile flags (0x10 indoor, 0x14 outdoor).
+        // Chunk Arry 0 stores 64x64x2 terrain heights, while chunk Arry 8 stores 64x64x1 tile flags with
+        // 0x10 marking indoor and 0x14 outdoor.
         iff = iff.WithAddedChunk(ResourceType.Parse("Arry"), 0, BuildLotArrayChunk(64, 64, 2, new byte[64 * 64 * 2]));
         var flagBytes = new byte[64 * 64];
         for (var x = 0; x < 64; x++)
@@ -163,9 +163,8 @@ public sealed class SceneExporterPerformanceTests
             flagBytes[x * 64 + y] = x is >= 10 and <= 13 && y is >= 10 and <= 13 ? (byte)0x10 : (byte)0x14;
         iff = iff.WithAddedChunk(ResourceType.Parse("Arry"), 8, BuildLotArrayChunk(64, 64, 1, flagBytes));
 
-        // Arry 2: 64x64x8 wall layer enclosing an indoor room at x=10..13, y=10..13.
-        // Segment 1 is on the x-min edge of tile (x, y) (towards x - 1), style at byte 2.
-        // Segment 2 is on the y-min edge of tile (x, y) (towards y - 1), style at byte 3.
+        // Chunk Arry 2 stores 64x64x8 wall data where segment bit 1 marks the west edge with style at byte
+        // 2, and segment bit 2 marks the north edge with style at byte 3.
         var wallBytes = new byte[64 * 64 * 8];
         void SetWall(int row, int col, byte segmentBit, int _)
         {
@@ -178,17 +177,17 @@ public sealed class SceneExporterPerformanceTests
 
         for (var y = 10; y <= 13; y++)
         {
-            SetWall(10, y, 1, 2); // West wall on x=10
-            SetWall(9, y, 4, 0);  // Matching east side on x=9
-            SetWall(14, y, 1, 2); // East wall on x=14 (towards x=13)
-            SetWall(13, y, 4, 0); // Matching east side on x=13
+            SetWall(10, y, 1, 2);
+            SetWall(9, y, 4, 0);
+            SetWall(14, y, 1, 2);
+            SetWall(13, y, 4, 0);
         }
         for (var x = 10; x <= 13; x++)
         {
-            SetWall(x, 10, 2, 3); // North wall on y=10
-            SetWall(x, 9, 8, 0);  // Matching south side on y=9
-            SetWall(x, 14, 2, 3); // South wall on y=14 (towards y=13)
-            SetWall(x, 13, 8, 0); // Matching south side on y=13
+            SetWall(x, 10, 2, 3);
+            SetWall(x, 9, 8, 0);
+            SetWall(x, 14, 2, 3);
+            SetWall(x, 13, 8, 0);
         }
 
         iff = iff.WithAddedChunk(ResourceType.Parse("Arry"), 2, BuildLotArrayChunk(64, 64, 8, wallBytes));

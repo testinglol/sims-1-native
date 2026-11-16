@@ -5,7 +5,6 @@ namespace SimsEngine.Tests;
 
 public sealed class UiEffectPrimitiveTests
 {
-    // Operand: effect type byte 0, owner byte 1, data word at 2, flags byte 4 (bit 0 is the flag). Bytes 5 to 7 unused.
     private static byte[] Operand(byte type, byte owner, short data, byte flags) =>
         [type, owner, (byte)data, (byte)((ushort)data >> 8), flags, 0, 0, 0];
 
@@ -34,8 +33,6 @@ public sealed class UiEffectPrimitiveTests
     [InlineData(2, "RelationshipButton(42,True)", null)]
     public void AHostlessWorldGivesTheMacTutorialFlashesToItsHook(byte type, string first, string? second)
     {
-        // Mac ObjectSim.s 0x100E75D0: type 0 is Tut_FlashButtonByImageID then Tut_FlashPersonPanelButton, type 1 the
-        // person panel button and type 2 Tut_FlashRelButton.
         var (context, _, _) = PrimitiveTestWorld.Create();
         context.World.Host = null;
         var calls = new List<string>();
@@ -48,7 +45,6 @@ public sealed class UiEffectPrimitiveTests
     public void TypeZeroSetsThenShowsTheObjectEffectOnTheVariablesObject()
     {
         var (context, _, host) = PrimitiveTestWorld.Create();
-        // Literal owner 7: the data is the value, 42.
         Assert.Equal(PrimitiveResult.True, UiEffectPrimitive.Execute(context, Operand(0, (byte)DataOwner.Literal, 42, 1)));
         Assert.Equal(new[] { "SetObjectUiEffect(42,True)", "ShowObjectUiEffect(42,True)" }, host.Calls);
     }
@@ -90,7 +86,6 @@ public sealed class UiEffectPrimitiveTests
     [Fact]
     public void OtherTypesDoNothingAndNeverReadTheVariable()
     {
-        // Owner 2 is rejected by the variable read, so a read here would raise an error; the other types never read it.
         var (context, _, host) = PrimitiveTestWorld.Create();
         Assert.Equal(PrimitiveResult.True, UiEffectPrimitive.Execute(context, Operand(3, 2, 0, 1)));
         Assert.Equal(PrimitiveResult.True, UiEffectPrimitive.Execute(context, Operand(0xFF, 2, 0, 1)));
@@ -100,7 +95,6 @@ public sealed class UiEffectPrimitiveTests
     [Fact]
     public void TheVariableIsReadBeforeTheEffect()
     {
-        // Owner 2 is rejected by the variable read, so the read happens before any effect call.
         var (context, _, host) = PrimitiveTestWorld.Create();
         Assert.Throws<SimulationException>(() => UiEffectPrimitive.Execute(context, Operand(0, 2, 0, 0)));
         Assert.Throws<SimulationException>(() => UiEffectPrimitive.Execute(context, Operand(1, 2, 0, 0)));

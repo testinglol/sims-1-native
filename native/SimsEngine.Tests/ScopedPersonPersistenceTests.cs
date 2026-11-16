@@ -13,7 +13,6 @@ public sealed class ScopedPersonPersistenceTests
     [InlineData(0x14, 3, false)]
     public void ScopedPersonCallsWithoutHostPersistAfterConsumptionEvenWhenLookupMisses(int call, int key, bool personExists)
     {
-        // FUN_0044f7e6: both lookups converge on 0x004509ae after writing temp0, then consume and persist.
         var (context, me, host) = PrimitiveTestWorld.Create();
         me.Temporaries[0] = 1;
         var item = new XPerson(300, PrimitiveTestWorld.Definition(XPerson.PersonType));

@@ -2,7 +2,6 @@ using SimsEngine.Formats;
 
 namespace SimsEngine.Tests;
 
-/// <summary>STR# formats as Sims.exe FUN_0046ffa4 reads them.</summary>
 public class StringTableTests
 {
     [Fact]

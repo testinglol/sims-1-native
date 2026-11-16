@@ -3,8 +3,8 @@ using SimsEngine.Simulation;
 
 namespace SimsEngine.World;
 
-/// <summary>The pond/water tool's rectangular add/remove operation (cWaterTool, FUN_00497d79, FUN_0049847a, FUN_00498291,
-/// FUN_00498182, FUN_0047740f, and FUN_0047759d). Ponds are a ground-floor-only operation stored in Arry 10.</summary>
+/// <summary>Manages rectangular pond placement and removal. Pond tiles are stored in the ground-floor Arry
+/// 10 grid.</summary>
 public sealed class WaterTool(SimulationWorld world, LotWater water, LotFloors floors, LotPool pools, LotTiles tiles,
     LotTerrain terrain, LotWalls walls, FloorCatalog catalog, IFamilyBudget budget, Func<int, bool>? isWaterObject = null)
 {
@@ -75,8 +75,8 @@ public sealed class WaterTool(SimulationWorld world, LotWater water, LotFloors f
             budget.ReadFamilyBudget());
     }
 
-    /// <summary>FUN_0049847a lines 108 to 138: a tile with wall data is refused for a diagonal wall (0x30), or for a
-    /// cardinal wall edge when the neighbour across that edge is inside the rectangle or is already water.</summary>
+    /// <summary>Determines if walls block pond creation, refusing diagonal walls (0x30) or cardinal edges
+    /// where the adjacent tile is inside the selection rectangle or already water.</summary>
     private bool WallBlocks(int x, int y, int left, int top, int right, int bottom)
     {
         if ((walls[x, y][0] & 0x30) != 0) return true;

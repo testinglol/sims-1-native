@@ -5,7 +5,6 @@ using Xunit;
 
 namespace SimsEngine.Tests;
 
-/// <summary>Unit tests for A15 sound event queue priority ordering, simultaneous event processing, and sound bank fallback.</summary>
 public class SoundEventQueueTests
 {
     private static byte[] Operand(short eventId, byte flags = 0xFF) =>
@@ -40,33 +39,30 @@ public class SoundEventQueueTests
             }
         });
 
-        // Fill with 32 loop voices (priority over oneshots)
         for (short i = 1; i <= 32; i++)
         {
             var played = audio.PlayForSimulationObject($"ambient_fountain_loop_{i}", i, false, false);
             Assert.True(played);
         }
 
-        // Fill with 32 oneshot voices
         for (short i = 33; i <= 64; i++)
         {
             var played = audio.PlayForSimulationObject($"object_impact_hit_{i}", i, false, false);
             Assert.True(played);
         }
 
-        Assert.Equal(HitAudioRuntime.MaxVoices, audio.ActiveVoiceCount); // 64
+        Assert.Equal(HitAudioRuntime.MaxVoices, audio.ActiveVoiceCount);
         Assert.Empty(stoppedVoices);
 
-        // Add 65th voice (oneshot). StealVoiceIfFull prioritizes stealing non-loops by earliest start time
+        // When voice capacity is exhausted, voice stealing prioritizes reclaiming non-looping voices by
+        // earliest start time.
         var ok = audio.PlayForSimulationObject("ui_click_button", 65, false, false);
         Assert.True(ok);
         Assert.Equal(HitAudioRuntime.MaxVoices, audio.ActiveVoiceCount);
 
-        // Exactly one voice was stolen
         Assert.Single(stoppedVoices);
         var stolenVoiceId = stoppedVoices[0];
 
-        // Voice ID 33 was the first oneshot voice created (voice IDs 1..32 are loops, 33..64 are oneshots)
         Assert.Equal(33L, stolenVoiceId);
 
         audio.Dispose();
@@ -89,7 +85,6 @@ public class SoundEventQueueTests
             }
         });
 
-        // Fire 20 sound events in rapid succession
         for (short i = 1; i <= 20; i++)
         {
             var played = audio.PlayForSimulationObject($"sfx_event_{i}", i, true, true);
@@ -135,7 +130,7 @@ public class SoundEventQueueTests
     [Fact]
     public void SoundBankFallback_PrefersPrivateBankOverGlobalBank()
     {
-        // Sims.exe PlaySoundEvent tries bank 0 (private object IFF) first. If found, private sound plays.
+        // Sound event playback queries the object's private resource bank (bank 0) first.
         var scope = ScopeWithFwav(
             (isPrivate: true, id: 100, name: "private_door_open"),
             (isPrivate: false, id: 100, name: "global_door_open"));
@@ -160,7 +155,8 @@ public class SoundEventQueueTests
     [Fact]
     public void SoundBankFallback_FallsBackToGlobalBankWhenPrivateMissing()
     {
-        // When bank 0 (private IFF) has no FWAV matching eventId, falls back to bank 1 (global IFF)
+        // When the private resource bank contains no matching sound event, playback falls back to the
+        // global sound bank (bank 1).
         var scope = ScopeWithFwav(
             (isPrivate: true, id: 101, name: "other_private_sound"),
             (isPrivate: false, id: 200, name: "global_phone_ring"));
@@ -185,7 +181,8 @@ public class SoundEventQueueTests
     [Fact]
     public void SoundBankFallback_FailsSilentlyWhenBothBanksReject()
     {
-        // When neither bank 0 nor bank 1 has the event, PlaySoundEventPrimitive returns True without dispatching
+        // When neither private nor global resource banks contain the sound event, playback succeeds
+        // silently without dispatching audio.
         var scope = ScopeWithFwav(
             (isPrivate: true, id: 101, name: "unrelated_private"),
             (isPrivate: false, id: 102, name: "unrelated_global"));
@@ -221,18 +218,15 @@ public class SoundEventQueueTests
             }
         });
 
-        // Owner 10 starts 3 voices
         audio.PlayForSimulationObject("stereo_music_loop", 10, false, false);
         audio.PlayForSimulationObject("stereo_bass_hit", 10, false, false);
         audio.PlayForSimulationObject("stereo_vocal", 10, false, false);
 
-        // Owner 20 starts 2 voices
         audio.PlayForSimulationObject("tv_sfx", 20, false, false);
         audio.PlayForSimulationObject("tv_talk", 20, false, false);
 
         Assert.Equal(5, audio.ActiveVoiceCount);
 
-        // Remove owner 10
         audio.RemoveOwner(10);
 
         Assert.Equal(2, audio.ActiveVoiceCount);

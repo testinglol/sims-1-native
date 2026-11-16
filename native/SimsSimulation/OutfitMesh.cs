@@ -4,19 +4,14 @@ using System.Text;
 using SimsEngine.Character;
 using SimsEngine.Formats;
 
-/// <summary>
-/// Body meshes for authored outfits. A TS1 mesh (<c>.skn</c>, plain-text BMF) stores each vertex in the space of the one bone
-/// it follows, grouped by bone, plus "blend" copies of some vertices in a second bone's space with a weight, which bend
-/// joints. Export puts the mesh in the skeleton's rest pose as a Wavefront OBJ. Import re-skins an edited OBJ: every vertex
-/// takes the bone and blend of the nearest original vertex and is converted back into those bones' spaces, so the rest pose
-/// reproduces the OBJ exactly and the new shape follows the skeleton the way the nearest part of the original did.
-/// </summary>
+/// <summary>Skeletal meshes (.skn) store vertices in the local coordinate space of their primary bone,
+/// grouped by bone, along with blended vertex duplicates in a secondary bone space to support joint
+/// weighting.</summary>
 internal static class OutfitMesh
 {
     private const int MaximumVertices = 30_000;
     private const int MaximumFaces = 60_000;
 
-    /// <summary>A mesh vertex in the rest pose: position, normal and texture coordinate, with its bones.</summary>
     private readonly record struct Skinned(Vector3 Position, Vector3 Normal, Vector2 UV, int Bone, int BlendBone, float Weight);
 
     internal static Mesh Read(byte[] data)
@@ -35,7 +30,6 @@ internal static class OutfitMesh
         return mesh;
     }
 
-    /// <summary>The mesh's bone names, by binding.</summary>
     private static string[] Bones(Mesh mesh) => mesh.Bindings.Select(binding => mesh.Bones[binding.Bone]).ToArray();
 
     private static Matrix4x4[] BoneMatrices(string[] names, Skeleton skeleton)
@@ -55,7 +49,6 @@ internal static class OutfitMesh
             : throw new InvalidDataException($"Skeleton {skeleton.Name} has no bone {name}")).ToArray();
     }
 
-    /// <summary>Every vertex in the rest pose of <paramref name="skeleton"/>, blended the way the renderer blends it.</summary>
     private static Skinned[] RestPose(Mesh mesh, Skeleton skeleton)
     {
         var bones = BoneMatrices(Bones(mesh), skeleton);
@@ -96,7 +89,8 @@ internal static class OutfitMesh
         return result;
     }
 
-    /// <summary>The mesh as a Wavefront OBJ in the rest pose. Texture V is flipped to OBJ's bottom-up convention.</summary>
+    /// <summary>Exports the mesh in rest pose to Wavefront OBJ format, flipping the vertical texture
+    /// coordinate to match bottom-up UV conventions.</summary>
     internal static string ExportObj(Mesh mesh, Skeleton skeleton, string name)
     {
         var vertices = RestPose(mesh, skeleton);
@@ -125,7 +119,6 @@ internal static class OutfitMesh
 
     private static string Invariant(FormattableString value) => value.ToString(CultureInfo.InvariantCulture);
 
-    /// <summary>A parsed OBJ: one vertex per distinct position/texture/normal corner, and triangles over them.</summary>
     private sealed record Obj(Vector3[] Positions, Vector2[] UVs, Vector3[] Normals, int[] Triangles);
 
     private static Obj ParseObj(string text, string what)
@@ -196,7 +189,6 @@ internal static class OutfitMesh
                         }
                         face[corner] = vertex;
                     }
-                    // Polygons become a fan of triangles.
                     for (var corner = 1; corner + 1 < face.Length; corner++)
                     {
                         triangles.Add(face[0]); triangles.Add(face[corner]); triangles.Add(face[corner + 1]);
@@ -211,7 +203,6 @@ internal static class OutfitMesh
         }
         if (triangles.Count == 0) throw new InvalidDataException($"{what} has no faces");
 
-        // Corners without a normal take the area-weighted normal of the faces at their position.
         var smooth = new Dictionary<Vector3, Vector3>();
         for (var index = 0; index < triangles.Count; index += 3)
         {
@@ -227,10 +218,6 @@ internal static class OutfitMesh
         return new Obj(outPositions.ToArray(), outUVs.ToArray(), resolvedNormals, triangles.ToArray());
     }
 
-    /// <summary>
-    /// Builds a mesh from an edited OBJ, skinned like <paramref name="template"/>. The result binds the template's bones in the
-    /// template's order. Reports how far the farthest vertex is from the original surface it took its bones from.
-    /// </summary>
     internal static (Mesh Mesh, float Farthest) Import(string objText, string what, Mesh template, Skeleton skeleton, string skinName, string textureName)
     {
         var obj = ParseObj(objText, what);
@@ -241,7 +228,6 @@ internal static class OutfitMesh
             ? inverted
             : throw new InvalidDataException("Singular bone matrix")).ToArray();
 
-        // Nearest original vertex, preferring one with the same texture coordinate where several share a position.
         var farthest = 0f;
         var skinned = new Skinned[obj.Positions.Length];
         for (var index = 0; index < skinned.Length; index++)
@@ -258,7 +244,8 @@ internal static class OutfitMesh
             skinned[index] = new Skinned(position, obj.Normals[index], obj.UVs[index], original[best].Bone, original[best].BlendBone, original[best].Weight);
         }
 
-        // Vertices are stored grouped by bone, and blend copies grouped by their second bone.
+        // Skeletal mesh vertices are grouped sequentially by primary bone, with blend duplicates grouped by
+        // secondary bone.
         var order = Enumerable.Range(0, skinned.Length).OrderBy(index => skinned[index].Bone).ThenBy(index => index).ToArray();
         var newIndex = new int[skinned.Length];
         for (var index = 0; index < order.Length; index++) newIndex[order[index]] = index;
@@ -302,7 +289,6 @@ internal static class OutfitMesh
         return (mesh, farthest);
     }
 
-    /// <summary>Writes a mesh as TS1 plain-text BMF (<c>.skn</c>), in the order <see cref="Mesh.ReadText"/> reads it.</summary>
     internal static byte[] Write(Mesh mesh)
     {
         var text = new StringBuilder();
@@ -318,7 +304,8 @@ internal static class OutfitMesh
         Line($"{mesh.TextureCoordinates.Count}");
         foreach (var uv in mesh.TextureCoordinates) Line($"{uv.X:R} {uv.Y:R}");
         Line($"{mesh.Blends.Count}");
-        // Plain-text BMF lists the blended vertex first, then the weight in 1/32768ths.
+        // Plain-text mesh format encodes bone blend entries as a vertex index followed by a weight scaled
+        // to 1/32768.
         foreach (var blend in mesh.Blends) Line($"{blend.Vertex} {blend.Weight}");
         Line($"{mesh.Vertices.Count}");
         foreach (var vertex in mesh.Vertices)

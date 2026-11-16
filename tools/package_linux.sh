@@ -4,7 +4,7 @@
 #   tools/package_linux.sh [VERSION]
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
-version="${1:-0.1.0}"
+version="${1:-0.2.0}"
 dist="$root/dist"
 stage_root="$root/.package-staging/linux-x64"
 stage="$stage_root/The Sims Native"

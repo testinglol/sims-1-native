@@ -77,7 +77,8 @@ public sealed class AutonomyCandidateEligibilityTests
 
         var instance = Entry(ushort.MaxValue, 44, "instance.iff");
         var master = Entry(9, 3, "master.iff");
-        // FUN_00457e1c takes the table id from the master but searches this object's own file.
+        // Autonomy evaluation takes the interaction table ID from the master definition but resolves the
+        // chunk within the candidate object's own package.
         var table = new ChunkBuilder().S16(1).S16(8).U16(4100).U16(0).S32(0).U32(0)
             .S32(0).U32(0).F32(0).U32(12).S32(0);
         var instanceFile = new IffFile(ChunkBuilder.File(("OBJD", 128, new ChunkBuilder().Raw(instance.Chunk.Data.Span).ToArray()), ("TTAB", 9, table.ToArray())), "instance.iff");

@@ -5,20 +5,19 @@ namespace SimsEngine.Tests;
 
 public sealed class GrabPrimitiveTests
 {
-    // The running object is 100 at (0x40, 0x50, 1), inside the lot border; the stack object is 2.
     private static (TreeContext Context, PrimitiveTestHost Host) World(short stackObject = 2)
     {
         var (context, me, host) = PrimitiveTestWorld.Create(stackObject: stackObject);
         me.Position = new ObjectPosition(0x40, 0x50, 1);
         me.Slots.AddRange([0, 0]);
-        // FUN_00451e1a validates against the Sim's footprint slot 0 (the hand) using the held object's allowed heights.
+        // Grab validation checks the avatar's hand footprint slot (slot 0) against the held object's
+        // allowed height flags.
         me.FootprintSlots.Add(new ObjectFootprintSlot { HeightCode = 1 });
         context.World.Add(new XObject(2, PrimitiveTestWorld.Definition()))[ObjectData.AllowedHeightFlags] = 1;
         context.World.Host = null;
         return (context, host);
     }
 
-    // Grab reads no operand; a zero operand is the one the tree stores.
     private static readonly byte[] NoOperand = new byte[8];
 
     [Fact]

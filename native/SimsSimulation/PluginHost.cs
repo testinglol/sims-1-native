@@ -4,12 +4,9 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using SimsNative.Plugins;
 
-/// <summary>
-/// Loads code-bearing gameplay packs described by the content mount's <c>.pack-stack.json</c>.
-/// A plugin runs only when the data root's trust store names its pack ID, version and assembly SHA-256,
-/// and only when the mounted copy still has that hash. Each plugin gets its own collectible load context
-/// that shares the contract assembly with the host. A plugin that throws is disabled for the session.
-/// </summary>
+/// <summary>Loads gameplay plugins validated against trusted assembly SHA-256 hashes. Each plugin executes
+/// in an isolated collectible load context sharing host contracts, and is disabled for the session upon
+/// encountering unhandled exceptions.</summary>
 internal sealed class PluginHost : IDisposable
 {
     internal sealed record PluginDescriptor(string PackId, string Version, string Assembly, string Sha256, string EntryType, int ApiVersion, int StateVersion);
@@ -146,7 +143,6 @@ internal sealed class PluginHost : IDisposable
         catch (JsonException) { return []; }
     }
 
-    /// <summary>Matches Swift's <c>pluginDigest</c>: SHA-256 over "name:sha256\n" lines for each .dll/.json file, by lowercase name.</summary>
     internal static string Digest(string folder) => PluginFolderDigest(folder);
 
     private static string PluginFolderDigest(string folder)

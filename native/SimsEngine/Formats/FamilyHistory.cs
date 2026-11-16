@@ -1,7 +1,5 @@
 namespace SimsEngine.Formats;
 
-/// <summary>One 0x54-byte FAMh entry in stream order (FUN_00411484): s16s at +0x00 to +0x0e, u32s at +0x10 and +0x14,
-/// s16s at +0x18 to +0x24, u32s at +0x28 to +0x3c, u32s at +0x40 and +0x44 and s16s at +0x48 to +0x50.</summary>
 public sealed record FamilyHistoryEntry(
     IReadOnlyList<short> Values0x00,
     IReadOnlyList<int> Values0x10,
@@ -10,10 +8,9 @@ public sealed record FamilyHistoryEntry(
     IReadOnlyList<int> Values0x40,
     IReadOnlyList<short> Values0x48);
 
-/// <summary>The FAMh chunk of a neighbourhood file, as Sims.exe FUN_0041144b and FUN_0041187d read it from the
-/// resource stream: the field-coding flag, a u32 entry count, then the entries.
-/// <para>Before version 1 the values at +0x10, +0x14 and +0x28 to +0x3c are stored as s16s and widened. Inferred, not
-/// traced: that the entries are per-family history records; the tag is all this reader relies on.</para></summary>
+/// <summary>Represents the neighborhood family history (FAMh) chunk, containing a field-coding flag, an
+/// entry count, and sequential history records whose financial fields are widened to 32-bit in version 1
+/// and later.</summary>
 public sealed class FamilyHistory
 {
     public int Version { get; }

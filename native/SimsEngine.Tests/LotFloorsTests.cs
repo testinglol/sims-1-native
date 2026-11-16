@@ -36,7 +36,8 @@ public sealed class LotFloorsTests
         var index = ResourceMap.Read(saved.Find(ResourceType.Rsmp, 0)!);
         var indexed = index.Single(group => group.Type == ResourceType.Parse("Arry")).Entries.Single(entry => entry.Id == advancedId);
         Assert.Equal(advanced.Offset, indexed.Offset);
-        // Further base-floor edits must update the promoted plane rather than a shadowed legacy byte plane.
+        // Subsequent floor modifications must write to the expanded floor array rather than a legacy
+        // single-byte plane.
         loaded[9, 12] = 1;
         var edited = loaded.WriteTo(saved);
         Assert.Equal((ushort)1, LotFloors.Read(edited, level)[9, 12]);

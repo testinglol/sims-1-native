@@ -2,9 +2,8 @@ using System.Text.Json.Serialization;
 
 namespace SimsSDL.Client;
 
-/// <summary>
-/// Discovers workspaces, per-user save/data roots, and installed <em>The Sims 1</em> content folders across macOS, Windows, and Linux.
-/// </summary>
+/// <summary>Discovers workspaces, per-user save data roots, and installed game content directories across
+/// supported operating systems.</summary>
 public static class InstallLocator
 {
     private static readonly string InstallSettingsRelativePath = Path.Combine("Settings", "install.json");

@@ -2,8 +2,7 @@ using System.Buffers.Binary;
 
 namespace SimsEngine.Formats;
 
-/// <summary>Pure C# UTK / UTM0 MicroTalk speech packet decoder to 16-bit PCM WAV.
-/// Based on the standard Electronic Arts / Maxis MicroTalk linear-predictive CELP/RELP codec specification.</summary>
+/// <summary>Decodes MicroTalk (UTK/UTM0) linear-predictive speech packets into 16-bit PCM audio.</summary>
 public static class UtkAudio
 {
     private static readonly float[] RcTable =
@@ -28,7 +27,6 @@ public static class UtkAudio
 
     private static readonly byte[][] Codebooks =
     [
-        // Model 0: Normal
         [
             4,  6,  5,  9,  4,  6,  5, 13,  4,  6,  5, 10,  4,  6,  5, 17,
             4,  6,  5,  9,  4,  6,  5, 14,  4,  6,  5, 10,  4,  6,  5, 21,
@@ -47,7 +45,6 @@ public static class UtkAudio
             4,  6,  5,  9,  4,  6,  5, 13,  4,  6,  5, 10,  4,  6,  5, 18,
             4,  6,  5,  9,  4,  6,  5, 14,  4,  6,  5, 10,  4,  6,  5,  2
         ],
-        // Model 1: Large pulse
         [
             4, 11,  7, 15,  4, 12,  8, 19,  4, 11,  7, 16,  4, 12,  8, 23,
             4, 11,  7, 15,  4, 12,  8, 20,  4, 11,  7, 16,  4, 12,  8, 27,
@@ -196,14 +193,13 @@ public static class UtkAudio
 
         float[] rcData = new float[12];
         float[] synthHistory = new float[12];
-        float[] subframes = new float[324 + 432]; // [0..323] adaptCb, [324..755] samples
+        float[] subframes = new float[324 + 432]; // Indices 0..323 store the adaptive codebook; 324..755 store speech samples.
 
         int targetSamples = pcmBytes > 0 ? (int)(pcmBytes / 2) : 22050;
         var pcmSamples = new List<short>(targetSamples);
 
         while (pcmSamples.Count < targetSamples && br.HasMoreBytes)
         {
-            // Decode one frame (432 samples)
             bool useMultipulse = false;
             float[] excitation = new float[5 + 108 + 5];
             float[] rcDelta = new float[12];

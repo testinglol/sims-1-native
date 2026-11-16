@@ -3,7 +3,6 @@ using SimsEngine.Simulation;
 
 namespace SimsEngine.Tests;
 
-/// <summary>Unit tests for A14 profiling non-interference guarantee: timing and instrumentation do not mutate random streams or simulation state.</summary>
 public class ProfilingNonInterferenceTests
 {
     private static SimulationWorld CreateWorld(uint seed)
@@ -24,14 +23,12 @@ public class ProfilingNonInterferenceTests
         const int Ticks = 100;
         var control = new SimulationClockControl(1, 1, 1);
 
-        // Run 1: Standard simulation without profiling
         var unprofiledWorld = CreateWorld(Seed);
         for (int i = 0; i < Ticks; i++)
         {
             unprofiledWorld.AdvanceSimulationTick(control, 0, unprofiledWorld.Clock.Ticks);
         }
 
-        // Run 2: Profiled simulation measuring stopwatch elapsed time and tick metrics
         var profiledWorld = CreateWorld(Seed);
         var stopwatch = new Stopwatch();
         var tickTimes = new List<long>();
@@ -44,7 +41,6 @@ public class ProfilingNonInterferenceTests
             tickTimes.Add(stopwatch.ElapsedTicks);
         }
 
-        // Both random streams must be bit-for-bit identical
         Assert.Equal(unprofiledWorld.RandomState, profiledWorld.RandomState);
         Assert.Equal(unprofiledWorld.ObjectManagerRandomState, profiledWorld.ObjectManagerRandomState);
     }
@@ -59,13 +55,11 @@ public class ProfilingNonInterferenceTests
         var worldA = CreateWorld(Seed);
         var worldB = CreateWorld(Seed);
 
-        // Run A: normal
         for (int i = 0; i < Ticks; i++)
         {
             worldA.AdvanceSimulationTick(control, 0, worldA.Clock.Ticks);
         }
 
-        // Run B: with heavy timing and diagnostics
         var elapsedList = new List<double>();
         for (int i = 0; i < Ticks; i++)
         {
@@ -74,7 +68,6 @@ public class ProfilingNonInterferenceTests
             elapsedList.Add(Stopwatch.GetElapsedTime(start).TotalMilliseconds);
         }
 
-        // Verify clock, ticks, days, minutes, and random states match exactly
         Assert.Equal(worldA.Clock.Ticks, worldB.Clock.Ticks);
         Assert.Equal(worldA.Clock.Hour, worldB.Clock.Hour);
         Assert.Equal(worldA.Clock.Minute, worldB.Clock.Minute);

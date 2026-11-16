@@ -3,10 +3,6 @@ using System.Text.Json.Serialization;
 
 namespace SimsSDL.Core;
 
-/// <summary>
-/// Window-responsive lot/control-panel uiScale, PanelBack.bmp widescreen bevel-cap layout,
-/// cWinCatalogPopup dynamic X placement, and 800x600-proportional fullscreen screen overlay scaling.
-/// </summary>
 public static class OriginalUIScalingLayout
 {
     public readonly record struct PanelBackLayout(
@@ -20,10 +16,8 @@ public static class OriginalUIScalingLayout
     {
         public const double PanelOriginX = 220;
 
-        /// <summary>
-        /// PanelBack.bmp (804x100) begins its right bevel corner taper at column 794 (794..&lt;804, 10px wide);
-        /// column 793 is flat RGB(0, 0, 82) interior navy with the full RGB(24, 24, 99) top highlight bevel.
-        /// </summary>
+        /// <summary>Width of the right corner bevel taper in the control panel background bitmap, spanning
+        /// columns 794 to 803.</summary>
         public const double RightBevelCapWidth = 10;
     }
 
@@ -35,29 +29,18 @@ public static class OriginalUIScalingLayout
         float h = height;
         float fit800x600 = MathF.Min(w / 800.0f, h / 600.0f);
         float nativeDensity = MathF.Max(1.0f, pixelDensity);
-        // Use exact native display pixel density (1.0x on 1x displays, 2.0x on Retina) so lot sprites, HUD, and dialogs
-        // render at crisp 1:1 macOS points without zooming everything up, only scaling down if the window is smaller than 800x600 points.
         return MathF.Max(0.25f, MathF.Min(nativeDensity, fit800x600));
     }
 
-    /// <summary>
-    /// Per Sims.exe (cWinNeighborhood::Init 0055e843.c:161-195, cWinCreateAFamily::Init 00548897.c:28,
-    /// cWinPickFamily::Init 005635de.c:28, cWinCredits::OnPaint 0050b8d1.c, cTSAppSplashWindow 005ee47b.c),
-    /// non-lot 800x600 screens render at crisp 1:1 native pixel density (uiScale) when the window is at least 800x600
-    /// logical points, and only scale down proportionally when the window is smaller than 800x600 logical points.
-    /// </summary>
+    /// <summary>Computes the aspect-fit scale for non-lot full screens so 800x600 screens fill the
+    /// viewport across both smaller and high-resolution windows.</summary>
     public static double FullscreenOverlayScale(CGSize canvas, float uiScale = 1.0f)
     {
-        double cap = Math.Max(0.25, uiScale);
         if (canvas.Width <= 0 || canvas.Height <= 0)
-            return cap;
-        return Math.Max(0.25, Math.Min(cap, Math.Min(canvas.Width / 800.0, canvas.Height / 600.0)));
+            return Math.Max(0.25, uiScale);
+        return Math.Max(0.25, Math.Min(canvas.Width / 800.0, canvas.Height / 600.0));
     }
 
-    /// <summary>
-    /// Anchors a 559px cWinLivePopup (PersonalityPopup) horizontally centered over the hovered/clicked control's
-    /// anchorMidX, clamped cleanly inside [minX, canvasWidth - popupWidth - rightMargin].
-    /// </summary>
     public static double LivePopupOriginX(
         double anchorMidX,
         double canvasWidth,
@@ -71,11 +54,8 @@ public static class OriginalUIScalingLayout
         return Math.Min(Math.Max(effectiveMin, desired), maxOrigin);
     }
 
-    /// <summary>
-    /// Computes PanelBack.bmp (804x100 at x = 220, right bevel cap in columns 798..&lt;804, flat navy body at 797)
-    /// slices so fixed-width Live/Options/Camera subpanels cap cleanly right after their widgets while Buy/Build/Dispose
-    /// and horizontally scrolling subpanels expand across canvasWidth.
-    /// </summary>
+    /// <summary>Computes control panel background slicing so fixed-width subpanels cap cleanly after their
+    /// controls while catalog and scrolling subpanels expand across the full width.</summary>
     public static PanelBackLayout GetPanelBackLayout(
         double canvasWidth,
         bool expandsToCanvas,
@@ -103,10 +83,6 @@ public static class OriginalUIScalingLayout
             RightCapStartColumn: (int)maxBodyCols);
     }
 
-    /// <summary>
-    /// cWinCatalogPopup (FUN_005084ca lines 344-356 / FUN_0050a296) centers the 559px popup horizontally over
-    /// the active [220, canvasWidth] Buy/Build catalog subpanel rather than hardcoding 800x600's x = 241.
-    /// </summary>
     public static double CatalogPopupOriginX(
         double canvasWidth,
         double popupWidth = 559,
@@ -122,14 +98,14 @@ public static class OriginalTutorialHighlight
 {
     private static readonly int[] Frames = [0, 1, 2, 1];
 
-    /// <summary>cTSWinTutorialHighlight cycles TutHigh.bmp's three horizontal frames at six frames a second.</summary>
+    /// <summary>Cycles the three tutorial highlight animation frames at six frames per second.</summary>
     public static int Frame(double elapsed)
     {
         int ticks = Math.Max(0, (int)(elapsed * 1000.0) / 167);
         return Frames[ticks % Frames.Length];
     }
 
-    /// <summary>cTSWin::HiliteForTutorial centers the highlight on the control and leaves three pixels above it.</summary>
+    /// <summary>Centers the tutorial highlight on the control with a three-pixel offset above it.</summary>
     public static CGRect? Rect(CGRect button, int textureWidth, int textureHeight)
     {
         int width = textureWidth / 3;
@@ -174,13 +150,10 @@ public sealed record OriginalSpeedControl(
         return null;
     }
 
-    /// <summary>The button's tooltip in UIText's STR# 138 (VCtlTips), which the original hands to the panel's controls in order.</summary>
     public int TooltipIndex => Speed switch { 0 => 15, 1 => 16, 3 => 17, 10 => 18, _ => 15 };
 
-    /// <summary>The button's image id in UIGraphics/Res_CPanel.h (kPause, kSpeed1 to kSpeed3).</summary>
     public int ImageId => Speed switch { 0 => 2026, 1 => 4705, 3 => 4706, 10 => 4707, _ => 2026 };
 
-    /// <summary>The main-window speed control whose button state is set for the current simulation speed.</summary>
     public static int? SelectedImageId(int speed)
     {
         foreach (var control in All)
@@ -220,7 +193,6 @@ public sealed record OriginalUniversalControl(
 
     public bool Enabled => true;
 
-    /// <summary>The button's tooltip in UIText's STR# 138 (VCtlTips), which the original hands to the panel's controls in order.</summary>
     public int TooltipIndex => Kind switch
     {
         Action.Story1 => 0,
@@ -237,13 +209,10 @@ public sealed record OriginalUniversalControl(
         Action.Buy => 11,
         Action.Build => 12,
         Action.Options => 13,
-        // WinViewControl applies STR# 138 entry 23 to the Help button after
-        // advancing past two entries it copies into its own string fields.
         Action.Help => 23,
         _ => 0,
     };
 
-    /// <summary>The button's image id in UIGraphics/Res_CPanel.h, which the tutorial's button events compare.</summary>
     public int ImageId => Kind switch
     {
         Action.Live => 2010,
@@ -316,15 +285,14 @@ public static class OriginalBuyLayout
     public static readonly IReadOnlyList<string> RoomNames =
         ["Living", "Dining", "Bedroom", "Study", "Kitchen", "Bathroom", "Outside", "Misc"];
 
-    /// <summary>FUN_005067d2's function-sort sub-sort buttons. All and Other are the two shared final controls; Misc adds Magic and Pets.</summary>
     public static readonly IReadOnlyList<string> FunctionSubsortNames =
         ["One", "Two", "Three", "Four", "Pets", "Magic", "Other", "All"];
 
-    /// <summary>FUN_005072f5 (005072f5.c:116-135): buttons 0..3 filter subsort bits 0x01, 0x02, 0x04, 0x08; Pets = 0x20, Magic = 0x40, Other = 0x90, All = 0xff.</summary>
+    /// <summary>Bitmasks for catalog function subsort buttons, filtering bits 0x01 through 0x08 for buttons
+    /// 0 to 3, 0x20 for Pets, 0x40 for Magic, 0x90 for Other, and 0xFF for All.</summary>
     public static readonly IReadOnlyList<int> FunctionSubsortMaskByButton =
         [0x01, 0x02, 0x04, 0x08, 0x20, 0x40, 0x90, 0xff];
 
-    /// <summary>Room-mode button origins from the initializers at 0x0050447e..0x50450b, with the same 50-pixel canvas offset as positions.</summary>
     public static readonly IReadOnlyList<CGPoint> RoomPositions =
     [
         new(242, 57), new(281, 53), new(323, 57), new(361, 54),
@@ -334,24 +302,14 @@ public static class OriginalBuyLayout
     public static readonly IReadOnlyList<string> RoomSubSortNames =
         ["Seating", "Surfaces", "Decorative", "Electronics", "Appliances", "Plumbing", "Lighting", "Misc"];
 
-    /// <summary>Room sub-sort button origins from 0x0050452a..0x50458e, with the same canvas offset.</summary>
     public static readonly IReadOnlyList<CGPoint> RoomSubSortPositions =
     [
         new(251, 60), new(289, 60), new(327, 60), new(365, 60),
         new(251, 108), new(289, 108), new(327, 108), new(365, 108),
     ];
 
-    /// <summary>
-    /// The back button (+0x1cc) is placed last in FUN_005067d2 at parent-relative x -2 and centred vertically in the 100-pixel
-    /// buy panel, so (220 - 2, 50 + (100 - 26) / 2). The (404, 26) at 0x00504462 is the previous-page arrow.
-    /// </summary>
     public static readonly CGPoint RoomBackPosition = new(218, 87);
 
-    /// <summary>
-    /// FUN_005067d2 places function sub-sort controls from DAT_006f34c0, initialized at 0x0050463a.
-    /// Its eight x/y pairs equal the room sub-sort cells after adding the buy panel origin (220, 50).
-    /// The wide All/Other/Magic/Pets bitmaps use their own frame dimensions in those cells.
-    /// </summary>
     public static readonly IReadOnlyList<CGPoint> FunctionSubsortPositions = RoomSubSortPositions;
 
     public static readonly IReadOnlyList<CGPoint> Positions =
@@ -360,17 +318,10 @@ public static class OriginalBuyLayout
         new(241, 111), new(285, 109), new(322, 105), new(364, 114),
     ];
 
-    /// <summary>
-    /// Engine catalog category for each button. Buttons follow the original function-sort table at 0x005072f5
-    /// (flags 1, 2, 0x20, 8, 4, 0x10, 0x80, 0x40); the engine category is log2 of the function flag.
-    /// </summary>
+    /// <summary>Maps function-sort catalog buttons to engine category indices, representing the base-2
+    /// logarithm of each category flag.</summary>
     public static readonly IReadOnlyList<int> EngineCategories = [0, 1, 5, 3, 2, 4, 7, 6];
 
-    /// <summary>
-    /// 0x005072f5 lays 45x45 thumbnails out in 45-pixel steps from x 0x19f minus the panel offset, y 5, to
-    /// (panel width - 12, 95). The buy panel sits at (220, 50) in the control panel, so the grid starts at
-    /// absolute x 415 and is two rows tall.
-    /// </summary>
     public static int Columns(CGSize canvas)
     {
         if (!double.IsFinite(canvas.Width))
@@ -386,7 +337,6 @@ public static class OriginalBuyLayout
         return new CGRect(415 + (index % cols) * 45, canvas.Height - 95 + (index / cols) * 45, 45, 45);
     }
 
-    /// <summary>Scroll arrows are centered in the gutters between the outer scroll rect (x 0x18b = 395 to the panel edge) and the grid.</summary>
     public static CGRect Arrow(bool forward, CGSize size, CGSize canvas)
     {
         double x = forward ? canvas.Width - 12 + (12 - size.Width) / 2.0 : 395 + (20 - size.Width) / 2.0;
@@ -409,11 +359,8 @@ public static class OriginalBuildLayout
 
     public static int HistoryFrameIndex(bool enabled) => enabled ? 0 : 3;
 
-    /// <summary>
-    /// Grid origin and 45-pixel step follow 0x00500572 (grid from panel x 0x152, outer scroll rect from 0x13e).
-    /// The original grid runs to panelW - 4 with no recovered arrow slot on the right, so columns stop at
-    /// W - 14 to keep the next-page arrow from covering the last thumbnail column.
-    /// </summary>
+    /// <summary>Calculates visible catalog thumbnail columns, stopping 14 pixels before the right edge to
+    /// prevent the next-page arrow from covering the final column.</summary>
     public static int Columns(CGSize canvas)
     {
         if (!double.IsFinite(canvas.Width))
@@ -431,11 +378,11 @@ public static class OriginalBuildLayout
             .OffsetBy(0, canvas.Height - 100);
     }
 
-    /// <summary>Page arrows sit in the left gutter (546) and right of the last column (W - 14); size is one frame.</summary>
     public static CGRect Arrow(bool forward, CGSize size, CGSize canvas) =>
         new(forward ? canvas.Width - 14 : 546, canvas.Height - 74, size.Width, size.Height);
 
-    /// <summary>The opening inside ThumbTemplate.bmp's 4-pixel border (45 - 8 = 37, per FUN_004cbf52); catalog icons are scaled down to fit it.</summary>
+    /// <summary>Inner dimension of the thumbnail template opening inside its 4-pixel border (37x37), used
+    /// to scale catalog icons.</summary>
     public const double ThumbnailInner = 37;
 
     public static CGRect Thumbnail(int index, CGSize canvas)
@@ -540,10 +487,6 @@ public static class OriginalHouseholdCreationLayout
     };
 }
 
-/// <summary>
-/// Exact Sims.exe layout geometry for cWinPickFamily, cWinFamilyList, and cWinFamilyPickItem
-/// (005635de.c, 00563e55.c, 00542d15.c, 00543ad2.c).
-/// </summary>
 public static class OriginalFamilyPickerLayout
 {
     public static readonly CGPoint RowOrigin = new(41, 76);
@@ -557,11 +500,10 @@ public static class OriginalFamilyPickerLayout
     public static readonly CGRect DeleteRect = new(414, 530, 92, 62);
     public static readonly CGRect MoveInRect = new(506, 530, 164, 62);
 
-    /// <summary>cWinFamilyPickItem (00542d15.c): 8 45x45 PeopleTemplate.bmp frames at (110 + i*48, 20) inside each row.</summary>
     public static CGRect MemberFrameRect(CGPoint rowOrigin, int index) =>
         new(rowOrigin.X + 110 + index * 48, rowOrigin.Y + 20, 45, 45);
 
-    /// <summary>cWinFamilyPickItem: native 25x25 .FAM thumbnail centered inside the 45x45 PeopleTemplate.bmp frame.</summary>
+    /// <summary>Centers the 25x25 family portrait thumbnail inside the 45x45 member frame.</summary>
     public static CGRect MemberPortraitRect(CGRect frame, CGSize? portraitSize = null)
     {
         var size = portraitSize ?? new CGSize(25, 25);
@@ -572,7 +514,6 @@ public static class OriginalFamilyPickerLayout
             size.Height);
     }
 
-    /// <summary>cNghTileBtn::AutoSize (005f730f.c, 00563e55.c): cap = 45, margin = 35 -&gt; width = max(91, textWidth + 70), centered at x = 200, y = 529.</summary>
     public static CGRect CancelButtonRect(int textWidth)
     {
         double width = Math.Max(91.0, textWidth + 70);
@@ -580,9 +521,6 @@ public static class OriginalFamilyPickerLayout
     }
 }
 
-/// <summary>
-/// Exact Sims.exe cWinCredits (0050af9d.c, 0050b094.c, 0050b4f9.c) product-flag block order, tokenization, and music selection.
-/// </summary>
 public static class OriginalCreditsLayout
 {
     public const string DefaultMusic = "bkground_credits";
@@ -666,9 +604,6 @@ public static class OriginalCreditsLayout
     }
 }
 
-/// <summary>
-/// Exact Sims.exe cWinPictureInPicture (00525055.c, 00525256.c, 00419fa0.c) window sizing and bottom-right placement.
-/// </summary>
 public static class OriginalPictureInPictureLayout
 {
     public static CGSize Size(int sizeIndex)
@@ -713,16 +648,11 @@ public sealed record SimInteraction
     [JsonPropertyName("global")]
     public required bool Global { get; init; }
 
-    /// <summary>
-    /// The clicked object is the default recipient, but the original menu can also expose choices from
-    /// eligible objects sharing the clicked tile.
-    /// </summary>
+    /// <summary>The clicked object is the default recipient, but the menu can also expose choices from
+    /// eligible objects sharing the clicked tile.</summary>
     [JsonPropertyName("objectID")]
     public int? ObjectId { get; init; }
 
-    /// <summary>
-    /// Set on entries a pack plugin adds: the pack ID and the plugin's entry ID, sent back when the entry is chosen.
-    /// </summary>
     [JsonPropertyName("plugin")]
     public string? Plugin { get; init; }
 
@@ -751,7 +681,6 @@ public sealed record SimInteraction
         Entry = entry;
     }
 
-    /// <summary>The parameters of the "interact" request that chooses this entry on an object.</summary>
     public Dictionary<string, object> InteractParameters(int objectId)
     {
         var parameters = new Dictionary<string, object>(StringComparer.Ordinal)
@@ -859,8 +788,6 @@ public sealed class OriginalPieLayout
         bool submenu = false)
     {
         int spokes = sizes.Count <= 2 ? 2 : sizes.Count <= 4 ? 4 : 8;
-        // cLiveModePanel::Init (005186da.c lines 79-84, 106-111): both root (+0x84) and submenu (+0x88) pie menus use
-        // +0x180 inner radius = 35, +0x184 cardinal offset = 60 (0x3c), and +0x188 diagonal offset = 30 (0x1e).
         const double cardinal = 60;
         const double diagonal = 30;
         var rectangles = new List<CGRect>(sizes.Count);
@@ -931,7 +858,8 @@ public sealed class OriginalPieLayout
         return new CGRect(minX, minY, maxX - minX, maxY - minY);
     }
 
-    /// <summary>The spoke, 0-7 clockwise from the top, that points toward the middle of this entry.</summary>
+    /// <summary>Determines the spoke index (0 to 7 clockwise from 12 o'clock) pointing toward the center of
+    /// the menu entry.</summary>
     public static int Direction(CGRect rect, CGPoint center)
     {
         double turn = Math.Atan2(rect.MidX - center.X, center.Y - rect.MidY) / (2.0 * Math.PI);
@@ -949,7 +877,6 @@ public sealed class OriginalPieLayout
         double x = point.X - Center.X;
         double y = point.Y - Center.Y;
         double radius = double.Hypot(x, y);
-        // cLiveModePanel::Init (005186da.c lines 79-81) + cWinPieMenu::ItemAtPoint (005eb598.c lines 35-38): minRadius = 35 (0x23), maxRadius = 150 (0x96).
         if (!(radius > 35 && radius <= 150 && Rectangles.Count > 0))
             return null;
 
@@ -961,25 +888,22 @@ public sealed class OriginalPieLayout
     }
 }
 
-/// <summary>
-/// cWinTravelLoadScreen (00441311.c, 004fc4ab.c, 00525af7.c): full-screen vehicle loading screen
-/// shown while travelling to Downtown, Vacation Island, Old Town/community lots, Studio Town, or Magic Town.
-/// </summary>
+/// <summary>Full-screen destination vehicle loading screens displayed while travelling between
+/// neighborhoods and expansion areas.</summary>
 public enum OriginalTravelLoadScreen
 {
-    DowntownTaxi = 0,         // 0x1530 / 0x1531: UIGraphics/Downtown/Taxi_loadscreen_{800x600,1024x768}.bmp
-    VacationSuv = 1,          // 0x157c / 0x157d: UIGraphics/VIsland/vacation_loadscreen_{800x600,1024x768}.bmp
-    VacationCruiseShip = 2,   // 0x157e / 0x157f: UIGraphics/VIsland/vacation_loadscreen2_{800x600,1024x768}.bmp
-    OldTownTrolley = 3,       // 0x15e0 / 0x15e1: UIGraphics/Community/Bus_loadscreen_{800x600,1024x768}.bmp
-    StudioTownLimo = 4,       // 0x1614 / 0x1615: UIGraphics/Studiotown/Studiotown_loadscreen_{800x600,1024x768}.bmp
-    StudioTownFanBus = 5,     // 0x1612 / 0x1613: UIGraphics/Studiotown/Studiotown_loadscreen_fan_{800x600,1024x768}.bmp
-    MagicTownBalloon = 6,     // 0x1616 / 0x1617: UIGraphics/Magicland/magicland_loadscreen_{800x600,1024x768}.bmp
-    MagicTownHole = 7,        // 0x1618 / 0x1619: UIGraphics/Magicland/magicland_loadscreen_hole_{800x600,1024x768}.bmp
+    DowntownTaxi = 0,
+    VacationSuv = 1,
+    VacationCruiseShip = 2,
+    OldTownTrolley = 3,
+    StudioTownLimo = 4,
+    StudioTownFanBus = 5,
+    MagicTownBalloon = 6,
+    MagicTownHole = 7,
 }
 
 public static class OriginalTravelLoadScreenExtensions
 {
-    /// <summary>004fc4ab.c:55: Sims.exe chooses 1024x768 (uVar3 + 1) whenever width &gt; 800.</summary>
     public static bool PrefersHighRes(double logicalWidth) => logicalWidth > 800;
 
     public static IReadOnlyList<string> ResourcePaths(this OriginalTravelLoadScreen screen, bool highRes)
@@ -1007,10 +931,8 @@ public static class OriginalTravelLoadScreenExtensions
         };
     }
 
-    /// <summary>
-    /// Selects the exact cWinTravelLoadScreen index matching Sims.exe 00441311.c (FUN_004fc4ab),
-    /// returning null when returning home (004fc63a.c -&gt; 004f1b96.c) or travelling to a non-community residential lot.
-    /// </summary>
+    /// <summary>Selects the travel loading screen for a trip, returning null when returning home or
+    /// travelling to a residential lot.</summary>
     public static OriginalTravelLoadScreen? Select(
         int? sourceHouse,
         int destination,
@@ -1027,11 +949,9 @@ public static class OriginalTravelLoadScreenExtensions
         switch (destination)
         {
             case >= 21 and <= 30:
-                // 00441311.c:86 -> FUN_004fc4ab(0)
                 return OriginalTravelLoadScreen.DowntownTaxi;
 
             case >= 40 and <= 48:
-                // 00441311.c:274-280 -> FUN_004074bc() tests StateClass(CurrentHouse) == 1 (residential -> cruise ship 2; vacation -> SUV 1)
                 bool fromResidential;
                 if (sourceStateClass.HasValue)
                     fromResidential = sourceStateClass.Value == 1;
@@ -1042,16 +962,13 @@ public static class OriginalTravelLoadScreenExtensions
                 return fromResidential ? OriginalTravelLoadScreen.VacationCruiseShip : OriginalTravelLoadScreen.VacationSuv;
 
             case >= 81 and <= 89:
-                // 00441311.c:285-293,328 -> traveller != 0 && FameScore (+0x62c) > 0 && JobType (+0x5fc) == 0 -> fan bus (5), else limo (4)
                 bool isFanBusEligible = travellerFameScore > 0 && travellerJobType == 0;
                 return isFanBusEligible ? OriginalTravelLoadScreen.StudioTownFanBus : OriginalTravelLoadScreen.StudioTownLimo;
 
             case >= 90 and <= 98:
-                // 00441311.c:349-377 -> Globals[34] LotTransitInfo (+0x54): 0 -> MagiCo hole (7), non-zero -> blimp (6)
                 return lotTransitInfo == 0 ? OriginalTravelLoadScreen.MagicTownHole : OriginalTravelLoadScreen.MagicTownBalloon;
 
             default:
-                // 00441311.c:135-140 -> FUN_0042ba25(destination) == 2 (community zoning -> Old Town trolley 3)
                 if (destinationStateClass == 2)
                     return OriginalTravelLoadScreen.OldTownTrolley;
                 return null;
@@ -1059,12 +976,9 @@ public static class OriginalTravelLoadScreenExtensions
     }
 }
 
-/// <summary>
-/// The size of the neighborhood lot rollover and its wrapped text, as the original lays it out (0x0054fcb8): the text
-/// is as wide as its first line, kept within 150 to 320 pixels, inset 25 pixels on every side, and widened by half
-/// (at most twice) while the box would be taller than two thirds of its width. An occupied lot also lists its members as
-/// 25-pixel heads under the text: ten pixels of space, then one row of as many heads as fit the text width, or two rows.
-/// </summary>
+/// <summary>Computes neighborhood lot rollover box sizing and text wrapping. Width is clamped between 150
+/// and 320 pixels with 25-pixel margins, expanding by half up to twice if height exceeds two-thirds width,
+/// followed by member portraits in rows.</summary>
 public sealed class NeighborhoodRolloverLayout : IEquatable<NeighborhoodRolloverLayout>
 {
     public const int Inset = 25;
@@ -1076,7 +990,6 @@ public sealed class NeighborhoodRolloverLayout : IEquatable<NeighborhoodRollover
     public int Width { get; }
     public int Height { get; }
 
-    /// <summary>Where each member's head is drawn, in the box's own coordinates.</summary>
     public IReadOnlyList<Rect> Heads { get; }
 
     internal static int HeadsHeight(int members, int textWidth) =>
@@ -1120,7 +1033,6 @@ public sealed class NeighborhoodRolloverLayout : IEquatable<NeighborhoodRollover
         int height = lines.Count * lineHeight + 2 * Inset + HeadsHeight(memberCount, textWidth);
         Height = height;
 
-        // The first row holds as many heads as fit the text width; any others go in a second row along the bottom (0x0054fcb8).
         int perRow = Math.Max(1, textWidth / Head);
         bool twoRows = memberCount > perRow;
         int count = Math.Max(0, memberCount);

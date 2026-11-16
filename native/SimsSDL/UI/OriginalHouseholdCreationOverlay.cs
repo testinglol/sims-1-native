@@ -27,7 +27,6 @@ public sealed class OriginalHouseholdCreationOverlay
         public string? HeadChoice;
         public string? BodyChoice;
         public HouseholdAppearanceSelectionCache AppearanceSelections = new();
-        // A new Sim starts with all 25 personality points unspent, as in Sims.exe.
         public int[] Personality = [0, 0, 0, 0, 0];
         public int? Zodiac;
 
@@ -74,9 +73,6 @@ public sealed class OriginalHouseholdCreationOverlay
 
     private readonly record struct ButtonSheet(OriginalGameplayOverlay.Image Image, int Columns);
 
-    // Sims.exe global UI palette (cSimsApp::SetupWinCtrlMgr, 004ff397.c:22-74):
-    // DAT_006f2a44 = RGB(195, 205, 205), DAT_006f2a48 = RGB(255, 255, 255),
-    // DAT_006f2a4c = RGB(0, 255, 255), DAT_006f2a50 = RGB(64, 93, 95), DAT_006f2a68 = RGB(0, 50, 0).
     private static readonly (byte R, byte G, byte B) DefaultTextColor = (195, 205, 205);
     private static readonly (byte R, byte G, byte B) HoverTextColor = (255, 255, 255);
     private static readonly (byte R, byte G, byte B) SelectedTextColor = (0, 255, 255);
@@ -89,7 +85,6 @@ public sealed class OriginalHouseholdCreationOverlay
 
     private static readonly string[] TraitKeys = ["Neat", "Outgoing", "Active", "Playful", "Nice"];
 
-    /// <summary>Create a Sim buttons, from Sims.exe FUN_00545b04: the kDesignChar IDs at 0x66fabc and their top-left corners, set at 0x545b14. The upper arrow pair cycles heads and the lower pair bodies (STR# 130 entries 7–10).</summary>
     private static readonly SimButtonSpec[] SimButtons =
     [
         new("adult", "adult", 497, 101),
@@ -111,7 +106,6 @@ public sealed class OriginalHouseholdCreationOverlay
         "Previous Clothes", "Next Clothes", "Previous Head", "Next Head",
     ];
 
-    /// <summary>The first-name field (0x6f4fd8), the bio field (0x6f4fc0), the sign text (0x6f4fa8) and the Sim figure (0x6f5000).</summary>
     private static readonly CGRect NameRect = new(275, 52, 255, 25);
     private static readonly CGRect BioRect = new(22, 425, 761, 96);
     private static readonly CGRect ZodiacRect = new(129, 290, 120, 20);
@@ -157,13 +151,10 @@ public sealed class OriginalHouseholdCreationOverlay
 
     public void BeginSubmission() => Submitting = true;
 
-    /// <summary>Receives original UI sound event names for control feedback.</summary>
     public Action<string>? PlaySound { get; set; }
 
-    /// <summary>Asks the player whether to keep a Sim with unspent personality points; runs the action on yes.</summary>
     public Action<System.Action>? ConfirmUnspent { get; set; }
 
-    /// <summary>Clears the live Sim preview texture when leaving or resetting the Create a Sim page.</summary>
     public System.Action? ClearPreview { get; set; }
 
     public OriginalHouseholdCreationOverlay(GameContent content, UIDevice device)
@@ -187,9 +178,9 @@ public sealed class OriginalHouseholdCreationOverlay
         _font16 = loaded16;
         _tooltipFont = loadedTooltip;
 
-        // FUN_00547de6 (00547de6.c:18-21): trait labels use 14pt (DAT_006f2aac), or 12pt (DAT_006f2aa4) for French (3) / German (4).
+        // Trait labels use 12pt font instead of 14pt in French and German to accommodate longer localized
+        // text strings.
         _traitSlot = (content.Language.Code == 3 || content.Language.Code == 4) ? FontSlot.F12 : FontSlot.F14;
-        // DAT_006f2a68 = RGB(0, 50, 0) fills outer margins beyond 800x600 (00548897.c:28, 00545b04.c:58, 00546e39.c:31-38).
         _outerFill = Upload(device, 1, 1, [0, 50, 0, 255]);
 
         SimsBitmap family = new(content.Read("UIGraphics/Nbhd/DsgnFamBkg.bmp"));
@@ -231,9 +222,9 @@ public sealed class OriginalHouseholdCreationOverlay
             _buttonSheets[name] = new ButtonSheet(Upload(device, bitmap, magenta: true), columns);
         }
 
-        // PersonFinder::GetCompositeFaces (004e93e4 -> 004e71be) blits the 35×41 face at (5, 2) inside each 45×45 cell of
-        // PeopleTemplate.bmp (180×45: normal, selected cyan, hovered white, disabled). Punching out the 35×41 face window
-        // while keeping the 4 inner rounded bevel corner pixels lets LotRenderer's portrait preview show inside the frame.
+        // Composites a 35x41 face portrait at offset (5, 2) within each 45x45 template cell. Punching out
+        // the face rectangle while preserving the four inner rounded bevel corners allows previews to show
+        // through the frame.
         SimsBitmap peopleBitmap = new(content.Read("UIGraphics/cpanel/People/PeopleTemplate.bmp"));
         if (peopleBitmap.Width != 180 || peopleBitmap.Height != 45)
         {
@@ -297,8 +288,8 @@ public sealed class OriginalHouseholdCreationOverlay
 
     private static (double Left, double Top, double Factor) Transform(CGSize canvas, float uiScale = 1f)
     {
-        double cap = Math.Max(0.25, uiScale);
-        double factor = Math.Max(0.001, Math.Min(cap, Math.Min(canvas.Width / 800.0, canvas.Height / 600.0)));
+        _ = uiScale;
+        double factor = Math.Max(0.001, Math.Min(canvas.Width / 800.0, canvas.Height / 600.0));
         double left = (canvas.Width - 800.0 * factor) / 2.0;
         double top = (canvas.Height - 600.0 * factor) / 2.0;
         return (left, top, factor);
@@ -318,12 +309,8 @@ public sealed class OriginalHouseholdCreationOverlay
             new Vector4((float)frame / sheet.Columns, 0f, 1f / sheet.Columns, 1f));
     }
 
-    /// <summary>
-    /// Sims.exe (FUN_00548897, cWinTileBtn::OnPaint 005f730f.c:20 &amp; SetRect 005f7802.c:14-32) builds Done and Cancel as
-    /// 200x62 NbhdTileBtn.bmp buttons (364x62: four 91px frames — normal 0, pressed 0.25, hover 0.50, disabled 0.75)
-    /// with cap = ((364 / 4) - 1) / 2 = 45px, 12pt caption (stepping down to 10/9/8pt if wider than inner span),
-    /// and 4-state SMCtrlMgr caption colors (004ff397.c:69-74).
-    /// </summary>
+    /// <summary>Renders three-slice buttons using 45-pixel end caps across four state frames, stepping
+    /// caption text down from 12pt to 10pt, 9pt, or 8pt if it exceeds the inner span.</summary>
     private void AppendTileItems(
         List<DrawItem> items,
         string caption,
@@ -381,7 +368,6 @@ public sealed class OriginalHouseholdCreationOverlay
         }
     }
 
-    /// <summary>Done and Cancel are centred on x 200 and 600 with their tops at y 529 (positions at 0x6f5048, set at 0x548582).</summary>
     private CGRect DoneRect => new(100, 529, 200, _tileButton.Size.Height);
     private CGRect CancelRect => new(500, 529, 200, _tileButton.Size.Height);
 
@@ -422,8 +408,8 @@ public sealed class OriginalHouseholdCreationOverlay
         double panelHeight = 600.0 * factor;
         OriginalGameplayOverlay.Image background = _page == Page.Family ? _familyBackground : _simBackground;
 
-        // Keep index 0 as the 800x600 panel background so LiveUI inserts the 3D/portrait previews directly over it,
-        // then fill any outer pillarbox/letterbox margins with DAT_006f2a68 = RGB(0, 50, 0) (00548897.c:28, 0055ffd5.c:26-29).
+        // Keeps index 0 as the base panel background so portrait previews can be inserted directly above
+        // it, then fills outer pillarbox and letterbox margins with dark green RGB(0, 50, 0).
         List<DrawItem> items = [new DrawItem(background, new CGRect(left, top, panelWidth, panelHeight))];
 
         double topH = top > 0 ? Math.Ceiling(top) : 0;
@@ -488,14 +474,11 @@ public sealed class OriginalHouseholdCreationOverlay
 
         if (_page == Page.Family)
         {
-            // cWinCreateAFamily::UpdateControls (00549a98) & OnMessage (0054937c): Add requires <8 Sims and a non-whitespace last name;
-            // Delete/Edit require a selected member; Done requires >=1 Sim and a non-whitespace last name.
             int addFrame = CanAddMember ? (_pressedControl == "add" ? 1 : (_hoveredControl == "add" ? 2 : 0)) : 3;
             int deleteFrame = CanModifyMember ? (_pressedControl == "delete" ? 1 : (_hoveredControl == "delete" ? 2 : 0)) : 3;
             int editFrame = CanModifyMember ? (_pressedControl == "edit" ? 1 : (_hoveredControl == "edit" ? 2 : 0)) : 3;
 
             if (Button("add", addFrame, 593, 103, left, top, factor) is { } addBtn) items.Add(addBtn);
-            // Sims.exe orders the side buttons Add, Delete, Edit (kDesignFamilyAdd/Delete/Edit, 5023–5025).
             if (Button("delete", deleteFrame, 594, 208, left, top, factor) is { } delBtn) items.Add(delBtn);
             if (Button("edit", editFrame, 594, 311, left, top, factor) is { } editBtn) items.Add(editBtn);
 
@@ -520,14 +503,11 @@ public sealed class OriginalHouseholdCreationOverlay
                 pressed: _pressedControl == "cancel",
                 hovered: _hoveredControl == "cancel");
 
-            // 00548897.c:119-130, 301: STR# 129 index 9 ("CREATE A FAMILY") uses 16pt (DAT_006f2ab4) centered at y 6,
-            // and index 12 ("Enter Last Name:") uses 12pt (DAT_006f2aa4) right-aligned 20px left of the text box, both in RGB(195,205,205).
             Centred(_strings.Family(9, "CREATE A FAMILY"), 400, 6, FontSlot.F16, DefaultTextColor);
             Trailing(_strings.Family(12, "Enter Last Name:"), NameRect.MinX - 20, NameRect.MidY, FontSlot.F12, DefaultTextColor);
             if (_field == Field.Family || _familyName.Length > 0)
             {
                 string display = _field == Field.Family ? WithCaret(_familyName) : _familyName;
-                // 00548897.c:84-85,99: cWinTextEdit uses 10pt (DAT_006f2a9c) in white DAT_006f2a48 = RGB(255,255,255).
                 if (Label(display, FontSlot.F10, HoverTextColor) is { } image)
                 {
                     AddText(display, NameRect.MinX + 4, NameRect.MidY - image.Size.Height / 2.0, FontSlot.F10, HoverTextColor);
@@ -536,7 +516,6 @@ public sealed class OriginalHouseholdCreationOverlay
 
             for (int index = 0; index < _members.Count; index++)
             {
-                // 00549a98: 45×45 PeopleTemplate icon sits at (20, 14) inside the 85×105 slot, and wrapped centered name sits in y = 105 - (lineHeight * 2 + 2) ..< 105.
                 CGRect slot = MemberSlot(index);
                 bool memberHovered = _hoveredControl == $"member:{index}";
                 int memberFrame = index == _selectedMember ? 1 : (memberHovered ? 2 : 0);
@@ -595,7 +574,6 @@ public sealed class OriginalHouseholdCreationOverlay
                 pressed: _pressedControl == "cancel",
                 hovered: _hoveredControl == "cancel");
 
-            // 00545b04.c:199, 292-333: "CREATE A SIM" in 16pt (DAT_006f2ab4), "PERSONALITY" & "Enter First Name:" in 12pt (DAT_006f2aa4), RGB(195,205,205).
             Centred(_strings.Sim(15, "CREATE A SIM"), 400, 6, FontSlot.F16, DefaultTextColor);
             string personalityHeader = _strings.Sim(16, "PERSONALITY");
             if (Label(personalityHeader, FontSlot.F12, DefaultTextColor) is { } header)
@@ -629,7 +607,7 @@ public sealed class OriginalHouseholdCreationOverlay
                 }
             }
 
-            // FUN_00546e39 lights six pixels of the points bar at (117, 342) for each point not yet spent.
+            // Lights six pixels of the points bar for each personality point remaining to be allocated.
             if (led.Columns > 0)
             {
                 double step = led.Image.Size.Width / 10.0;
@@ -643,7 +621,8 @@ public sealed class OriginalHouseholdCreationOverlay
                 }
             }
 
-            // 00547754.c:185-225: Zodiac sign uses 12pt (DAT_006f2aa4); hidden when all 25 points are unspent, and formatted "(Sign)" once <25 remain.
+            // Hides the astrological sign label until personality points are allocated or a sign is
+            // explicitly chosen, formatting it in parentheses.
             if (RemainingPoints < 25 || _draft.Zodiac is not null)
             {
                 var personality = BuildTraitDictionary();
@@ -656,7 +635,6 @@ public sealed class OriginalHouseholdCreationOverlay
                 }
             }
 
-            // 00545b04.c:256-274 & 00547754.c:148-173: Bio label uses 10pt (DAT_006f2a9c) in RGB(195,205,205) above bioRect.
             string fullBioName = string.IsNullOrWhiteSpace(_familyName)
                 ? _draft.Name
                 : $"{_draft.Name} {_familyName}";
@@ -738,7 +716,6 @@ public sealed class OriginalHouseholdCreationOverlay
             CGRect addRect = new(593, 103, 139, 103);
             CGRect deleteRect = new(594, 208, 149, 99);
             CGRect editRect = new(594, 311, 137, 99);
-            // 00548897.c:215-221 assigns STR# 129 entries 0..2 as rollover tooltips on Add, Delete, Edit.
             if (addRect.Contains(logical))
             {
                 _hoveredControl = CanAddMember ? "add" : null;
@@ -789,14 +766,12 @@ public sealed class OriginalHouseholdCreationOverlay
             if (matchedButtonIndex >= 0)
             {
                 _hoveredControl = SimButtons[matchedButtonIndex].Key;
-                // 00545b04.c:136-145 assigns STR# 130 entries 0..10 in exact Self.simButtons order.
                 nextTipText = _strings.Sim(matchedButtonIndex, SimButtonFallbacks[matchedButtonIndex]);
                 nextTipAnchor = LogicalTopCenter(matchedRect);
             }
             else if (ZodiacRect.Contains(logical))
             {
                 _hoveredControl = (RemainingPoints < 25 || _draft.Zodiac is not null) ? "zodiac" : null;
-                // 00545b04.c:497-500 sets STR# 130 entry 27 (1-based 0x1c) on the Zodiac button.
                 nextTipText = _strings.Sim(27, "");
                 nextTipAnchor = LogicalTopCenter(ZodiacRect);
             }
@@ -961,14 +936,9 @@ public sealed class OriginalHouseholdCreationOverlay
         return _strings.Control(key);
     }
 
-    /// <summary>
-    /// Sims.exe (FUN_00548897) lays out eight 85×105 member buttons with FUN_004ebf01 from (111, 121), 120 pixels
-    /// apart and four to a row (the 440×360 area at 0x6f5018), rows 140 pixels apart.
-    /// </summary>
     public static CGRect MemberSlot(int index) =>
         new(111 + (index % 4) * 120, 121 + (index / 4) * 140, 85, 105);
 
-    /// <summary>FUN_00547de6 stacks the five trait bars 32 pixels apart from (228, 131); each is the 59×25 LED strip of ten lights.</summary>
     private static CGRect PersonalityRow(int index) =>
         new(228, 131 + index * 32, 59, 25);
 
@@ -996,7 +966,6 @@ public sealed class OriginalHouseholdCreationOverlay
         return new CGRect(control.X, control.Y, sheet.Image.Size.Width / sheet.Columns, sheet.Image.Size.Height);
     }
 
-    /// <summary>Sheet frames are normal, depressed/selected, highlighted/hover and disabled (005e3a26).</summary>
     private int SimButtonFrame(string key)
     {
         int baseFrame = key switch
@@ -1021,7 +990,8 @@ public sealed class OriginalHouseholdCreationOverlay
         return baseFrame;
     }
 
-    /// <summary>Where the renderer draws the edited Sim and household portraits: 0 is the full Sim, 1–8 are 35×41 faces at (5, 2) inside each 45×45 PeopleTemplate frame at (20, 14) of the 85×105 slot.</summary>
+    /// <summary>Defines render bounds for character previews: index 0 represents the full-body Sim, while
+    /// indices 1 through 8 map to household member portrait slots.</summary>
     public IReadOnlyDictionary<int, CGRect> PreviewRects(CGSize canvas, float uiScale = 1f)
     {
         (double left, double top, double factor) = Transform(canvas, uiScale);
@@ -1049,7 +1019,6 @@ public sealed class OriginalHouseholdCreationOverlay
         return rects;
     }
 
-    /// <summary>The appearance used to generate each member portrait (key as in PreviewRects).</summary>
     public IReadOnlyDictionary<int, (string Gender, string Age, string Skin, string HeadChoice, string BodyChoice)> MemberPreviewSelections()
     {
         var result = new Dictionary<int, (string Gender, string Age, string Skin, string HeadChoice, string BodyChoice)>();
@@ -1324,9 +1293,9 @@ public sealed class OriginalHouseholdCreationOverlay
                     continue;
                 }
 
-                // The Mac widget chooses raise/lower from the pointer's side of the current bar end, then changes exactly
-                // one point on mouse down (WinPersonalityWidget::TSOnMouseMove/TSOnMouseDownL). It does not jump to the
-                // light under the pointer.
+                // Increments or decrements a personality trait by exactly one point per click depending on
+                // which side of the current level the pointer falls, rather than jumping directly to the
+                // clicked pip.
                 int current = _draft.Personality[index] / 100;
                 double currentEnd = row.MinX + row.Width * current / 10.0;
                 bool raising = logical.X > currentEnd;
@@ -1337,9 +1306,8 @@ public sealed class OriginalHouseholdCreationOverlay
                 }
 
                 _draft.Personality = next;
-                // WinDesignCharacter recomputes and stores the sign whenever a personality
-                // widget changes (ComputeZodiacSign__FPCs at 0x102C4150). A sign selected
-                // directly is therefore only retained until the next trait edit.
+                // Clears manually selected astrological signs when modifying personality traits, as traits
+                // automatically recompute the matching sign on edit.
                 _draft.Zodiac = null;
                 PlaySound?.Invoke("ui_cac_personpts");
                 return;
@@ -1387,7 +1355,6 @@ public sealed class OriginalHouseholdCreationOverlay
                     }
                 }
 
-                // Sims.exe asks "More Personality!" (STR# 130 entries 13 and 14) before keeping unspent points.
                 if (RemainingPoints > 0 && ConfirmUnspent is not null)
                 {
                     ConfirmUnspent(Finish);
@@ -1469,7 +1436,6 @@ public sealed class OriginalHouseholdCreationOverlay
                 return true;
             }
 
-            // Enter presses Done on the Create a Sim page; the family page's Done goes through the caller's confirmation.
             if (_page == Page.Sim)
             {
                 Click(new CGPoint(DoneRect.MidX, DoneRect.MidY), new CGSize(800, 600), 1f, _ => { });
@@ -1722,7 +1688,6 @@ public sealed class OriginalHouseholdCreationOverlay
         RememberCurrentAppearance();
     }
 
-    /// <summary>FUN_005476c3: saves the current (headIndex, bodyIndex) in the 4-entry (gender, age) cache.</summary>
     private void RememberCurrentAppearance()
     {
         string gender = _draft.Female ? "f" : "m";
@@ -1756,7 +1721,6 @@ public sealed class OriginalHouseholdCreationOverlay
             age);
     }
 
-    /// <summary>FUN_005476fc: restores the cached (headIndex, bodyIndex) for the newly selected (gender, age) slot.</summary>
     private void RestoreCachedAppearanceIndices()
     {
         string gender = _draft.Female ? "f" : "m";

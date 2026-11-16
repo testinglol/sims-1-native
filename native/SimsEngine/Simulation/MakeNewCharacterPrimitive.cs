@@ -4,17 +4,8 @@ using SimsEngine.Formats;
 
 namespace SimsEngine.Simulation;
 
-/// <summary>The Make New Character primitive (opcode 0x13), after Sims.exe 0x44ae48. Partly ported: the operand, the
-/// character creation and the stack object are; the appearance and the name are not.
-/// <para>Operand: byte 0 is the local that holds the skin (A), byte 1 the local that holds the gender (C), byte 2 the local
-/// B and byte 3 the mode, which picks the character folder. Each local index at or above the locals' count raises "Stack
-/// number out of range." (8). The three locals are checked in the order A, B, C.</para>
-/// <para>Order: the locals are checked, then the character is created (<see cref="ISimulationHost.CreateCharacter"/>, which
-/// is FUN_0042612b). A creation that fails answers false, as Sims.exe does when FUN_0042612b answers nonzero or gives no
-/// record.</para>
-/// <para>Not ported: the skin string lookup (error "Invalid skin color." (59)), the random head and body picks and the
-/// "No childname" name. The engine holds no appearance data, so they belong to the host that renders the character. Without
-/// a <see cref="SimulationWorld.Host"/> the character comes from the world's object factory.</para></summary>
+/// <summary>Executes the Make New Character primitive (opcode 0x13) to create and register a new Sim or pet
+/// from skin, gender, and mode locals.</summary>
 public static class MakeNewCharacterPrimitive
 {
     public static PrimitiveResult Execute(in TreeContext context, ReadOnlySpan<byte> operand)
@@ -37,7 +28,7 @@ public static class MakeNewCharacterPrimitive
             var neighborId = CreateNeighborFromTemplate(context, world, registry, me, frame,
                 operand[3], frame.Locals[operand[0]], frame.Locals[operand[1]], frame.Locals[operand[2]]);
             if (neighborId == 0) return PrimitiveResult.False;
-            // 0044ae48.c lines 137, 267, 321 write the newly registered cNeighbor's NeighborId (+0) to frame.StackObject (+4).
+            // Stores the newly registered character's neighbor ID in the frame stack object.
             frame.StackObject = neighborId;
             return PrimitiveResult.True;
         }
@@ -63,8 +54,8 @@ public static class MakeNewCharacterPrimitive
         var templateEntry = registry.Find(templateGuid);
         if (templateEntry is null) return 0;
 
-        // FUN_0044ae48 lines 146-170: when age >= 0, validate the 0-based skin color index against semi-global STR# 0x2000
-        // (PersonGlobals/DogGlobals/CatGlobals: 0="unknown", 1="lgt", 2="drk", 3="med") before creating the character.
+        // Validates the zero-based skin color index against semi-global string table 0x2000 (0=unknown,
+        // 1=lgt, 2=drk, 3=med) when age is non-negative.
         var skin = "lgt";
         if (age >= 0)
         {
@@ -118,7 +109,7 @@ public static class MakeNewCharacterPrimitive
 
         if (age < 0)
         {
-            // FUN_0044ae48 lines 79-143: negative age copies age, skin, gender, everyday body, and head from `me`.
+            // A negative age argument copies age, skin, gender, everyday body, and head from the caller.
             if (me is XPerson sourcePerson)
             {
                 var sourceScope = InteractionBehaviorScope.Initialize();
@@ -139,7 +130,6 @@ public static class MakeNewCharacterPrimitive
         }
         else
         {
-            // FUN_0044ae48 lines 171-303: populate age, skin, gender, and choose random child/adult head+body or pet breed.
             var isChild = mode == 0 && age < 18;
             targetContext.SetString(0x0e, isChild ? "9" : "27");
             targetContext.SetString(0x01, mode switch
@@ -177,7 +167,7 @@ public static class MakeNewCharacterPrimitive
                 else
                 {
                     if (bodyCount == 0) return 0;
-                    // FUN_0044ae48 lines 282-295: consume Dialog[0x100] (selected pet breed from Dialog Kind 9) and reset to -1.
+                    // Consumes the selected pet breed from dialog register 0x100 and resets it to -1.
                     var selectedBreed = world.Dialog[0x100];
                     world.Dialog[0x100] = -1;
                     var breedIdx = selectedBreed >= 0 && selectedBreed < bodyCount
@@ -190,7 +180,7 @@ public static class MakeNewCharacterPrimitive
             clonedFile = WardrobeSuitService.CommitContextToFile(registry, clonedFile, bodyStringsId, world.Language, targetContext);
         }
 
-        // FUN_0044ae48 lines 259-264 / 315-320: write character name to CTSS entry 1 (0-based 0) when present.
+        // Writes the character name to catalog strings (CTSS) entry 0 when present.
         var ctssId = templateEntry.Definition[ObjdField.CatalogStringsId];
         if (ctssId != 0 && clonedFile.Find(ResourceType.Ctss, ctssId) is { } ctssChunk)
         {
@@ -243,8 +233,8 @@ public static class MakeNewCharacterPrimitive
         return neighborId;
     }
 
-    /// <summary>FUN_0042612b without a host: mode 1 builds from template 0x4a70df92, mode 2 from 0x7bea0977 and any other mode
-    /// from 0x7fd96b54; a template that cannot be built answers null, as the original answers -1.</summary>
+    /// <summary>Builds a character from template GUID 0x4a70df92 for mode 1, 0x7bea0977 for mode 2, or
+    /// 0x7fd96b54 for default Sims.</summary>
     private static XObject? CreateFromTemplate(SimulationWorld world, int mode) =>
         world.ObjectFactory?.Invoke(mode switch { 1 => 0x4a70df92, 2 => 0x7bea0977, _ => 0x7fd96b54 });
 

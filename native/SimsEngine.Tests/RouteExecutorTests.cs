@@ -81,8 +81,6 @@ public sealed class RouteExecutorTests
     [Fact]
     public void AskPeopleOnRouteToMoveRequiresSittingZeroAndUsesRequesterPriority()
     {
-        // FUN_0045bb94 (0045bb94.c:41) requires PersonData.Sitting == 0, and FUN_0045c09a (0045c09a.c:180-181)
-        // passes the routing Sim's priority when queueing MoveOutOfWay.
         var (context, _, _) = PrimitiveTestWorld.Create(stackObject: 2);
         var world = context.World;
         world.Host = null;
@@ -117,18 +115,15 @@ public sealed class RouteExecutorTests
             new RouteExecutor.RouteWaypoint(8, 5, 8 * 16 + 8, 5 * 16 + 8, 8 * 16 + 8, 5 * 16 + 8, true),
         };
 
-        // Seated blocker is skipped.
         blocker[PersonData.Sitting] = 1;
         RouteExecutor.AskPeopleOnRouteToMove(world, mover, anchor, path);
         Assert.Equal(blocker.ActionQueueCurrent, blocker.ActionQueueEnd);
 
-        // Seated requester is also skipped.
         blocker[PersonData.Sitting] = 0;
         mover[PersonData.Sitting] = 1;
         RouteExecutor.AskPeopleOnRouteToMove(world, mover, anchor, path);
         Assert.Equal(blocker.ActionQueueCurrent, blocker.ActionQueueEnd);
 
-        // Standing Sims queue MoveOutOfWay with the requester's priority.
         mover[PersonData.Sitting] = 0;
         RouteExecutor.AskPeopleOnRouteToMove(world, mover, anchor, path);
         Assert.NotEqual(blocker.ActionQueueCurrent, blocker.ActionQueueEnd);
@@ -141,8 +136,6 @@ public sealed class RouteExecutorTests
     [Fact]
     public void MoveOutOfWaySkipsBlockerWithExistingActiveOrQueuedGoHereActionAtThresholdThree()
     {
-        // FUN_0045c02d (0045c02d.c:9-21) & FUN_0045c06f return true when the blocker already has an active
-        // or queued interaction on GUID 0x7c4 with threshold/index 3, preventing duplicate MoveOutOfWay pushes.
         var world = new SimulationWorld();
         world.LotRoomMaps[1] = OpenRoom();
         short nextDynamicId = 600;
@@ -159,7 +152,6 @@ public sealed class RouteExecutorTests
         terrainDef[(int)ObjdField.Guid2] = 0;
         var existingGoHere = world.Add(new XObject(50, terrainDef));
 
-        // Active action with GUID 0x7c4 and Threshold == 3 blocks duplicate MoveOutOfWay.
         blocker.CurrentActionRecord = new ActionQueueSlot
         {
             Owner = existingGoHere,
@@ -168,7 +160,6 @@ public sealed class RouteExecutorTests
         Assert.False(RouteExecutor.MoveOutOfWay(world, blocker, 20));
         Assert.Equal((short)600, nextDynamicId);
 
-        // Queued action with GUID 0x7c4 and Threshold == 3 also blocks duplicate MoveOutOfWay.
         blocker.CurrentActionRecord = null;
         blocker.ActionQueue[0] = new ActionQueueSlot
         {
@@ -184,8 +175,6 @@ public sealed class RouteExecutorTests
     [Fact]
     public void LocomotionRouteEmitsBeginRouteAndEndRouteSoundEvents()
     {
-        // FUN_0045aecf (0045aecf.c:283, 286) emits "begin_route" when entering state 0x0c (BeginFollow)
-        // and "end_route" when EndFollow completes in states 9/10/11.
         var (context, _, _) = PrimitiveTestWorld.Create(stackObject: 2);
         var world = context.World;
         world.Host = null;
@@ -230,9 +219,9 @@ public sealed class RouteExecutorTests
     [Fact]
     public void RouteFailureSetsPersonDataRouteResultAndOptionallyPushesRouteFailureFeedbackTree()
     {
-        // FUN_0045aecf (0045aecf.c:377-406, 495-506) records the route failure reason in PersonData.RouteResult
-        // (1 = blocked/no path, 2 = portal failure, 4 = interrupted) and, when slot flag 0x4000 is set,
-        // pushes the "Route failure feedback" tree with parameters [failureReason, blockerId, 0, 0].
+        // Records route failure reasons in <c>PersonData.RouteResult</c> (1 = blocked/no path, 2 = portal
+        // failure, 4 = interrupted). When slot flag 0x4000 is set, pushes the route failure feedback tree
+        // with parameters for failure reason and blocker ID.
         var (context, _, _) = PrimitiveTestWorld.Create(stackObject: 2);
         var world = context.World;
         world.Host = null;
@@ -251,13 +240,11 @@ public sealed class RouteExecutorTests
         {
             TypeRecord = new TypeRecord(2) { BehaviorScope = feedbackScope },
         });
-        // Place target out of bounds for candidate selection when testing no-candidate failure:
         world.SetObjectPosition(target, new ObjectPosition(3 * 16 + 8, 5 * 16 + 8, 1));
 
         var stack = new RouteTestStack();
         stack.Frames.Add(context.Frame);
 
-        // 1. Without 0x4000 flag, failing destination selection sets RouteResult = 1 and returns False directly.
         var impossibleSlot = new RoutingSlotRequest
         {
             Flags = 0x0001,
@@ -270,8 +257,6 @@ public sealed class RouteExecutorTests
         Assert.Equal((short)1, person[PersonData.RouteResult]);
         Assert.Single(stack.Frames);
 
-        // 2. With 0x4000 flag, failing destination selection pushes "Route failure feedback" with [1, blockerId, 0, 0]
-        // and returns Again; once the feedback frame pops, Continue returns False with RouteResult = 1.
         person[PersonData.RouteResult] = 0;
         person[ObjectData.PrimitiveResultId] = 77;
         var feedbackSlot = new RoutingSlotRequest
@@ -289,23 +274,19 @@ public sealed class RouteExecutorTests
         Assert.Equal((short)4100, pushedFrame.TreeId);
         Assert.Equal(new short[] { 1, 77, 0, 0 }, pushedFrame.Parameters);
 
-        // While feedback frame is still on stack, Continue returns Stop.
         Assert.Equal(PrimitiveResult.Stop, RouteExecutor.Continue(world, person, context.Frame, stack));
 
-        // Pop feedback frame; Continue completes state 0x11 -> state 7 and returns False.
         stack.Frames.RemoveAt(stack.Frames.Count - 1);
         Assert.Equal(PrimitiveResult.False, RouteExecutor.Continue(world, person, context.Frame, stack));
         Assert.Equal((short)1, person[PersonData.RouteResult]);
         Assert.Null(person.NativeRoute);
 
-        // 3. Interrupted route before start sets RouteResult = 4.
         person.ActiveActionCancelRequested = true;
         Assert.Equal(PrimitiveResult.False,
             RouteExecutor.Start(world, person, context.Frame, target, new RoutingSlotRequest(), stack));
         Assert.Equal((short)4, person[PersonData.RouteResult]);
         person.ActiveActionCancelRequested = false;
 
-        // 4. Cross-room route with no connecting portal sets RouteResult = 2 (portal failure).
         target[ObjectData.Flags] |= 0x10;
         person.RoomWord84 = 1;
         target.RoomWord84 = 2;

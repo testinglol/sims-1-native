@@ -1,20 +1,16 @@
 using System.Globalization;
 using SimsEngine.Formats;
 
-/// <summary>
-/// The destination pickers' remembered filter: STR# 6 of the neighborhood's LotLocations, one string per picker. Mac
-/// cWinDowntown uses string 1, cWinVacation 2, cWinNeighborhoodUL 3, cWinStudiotown 4 and cWinMagicland 5 (the same
-/// numbers as Sims.exe FUN_0054db45, FUN_0056c9f8, FUN_0055e143, FUN_00568306 and FUN_00555dd4).
-/// </summary>
+/// <summary>Stores destination picker filter selections in STR# 6 of the neighborhood LotLocations file,
+/// with string indices corresponding to each destination picker.</summary>
 internal static class TravelFilter
 {
-    /// <summary>cWinNeighborhoodUL's string, used by the Unleashed (Old Town) destination picker.</summary>
     internal const int Unleashed = 3;
 
     private static readonly ResourceType Strings = ResourceType.Parse("STR#");
 
-    /// <summary>LoadCurrentFilter: <paramref name="fallback"/> (2, or 0x400 for Studio Town and Makin' Magic) when the
-    /// file or STR# 6 cannot be read; otherwise the string read as a C integer (atoi), so a missing string gives 0.</summary>
+    /// <summary>Loads the saved travel filter from STR# 6, falling back to 2 (or 0x400 for Studio Town and
+    /// Magic Town) if missing or unreadable.</summary>
     internal static int Load(string userData, int number, byte language, int fallback = 2)
     {
         var path = Path.Combine(userData, "LotLocations.iff");
@@ -25,8 +21,8 @@ internal static class TravelFilter
         return number <= strings.Count ? Atoi(strings[number - 1]) : 0;
     }
 
-    /// <summary>SaveCurrentFilter, run when the picker shuts down: nothing for filter 0 or when STR# 6 cannot be
-    /// read; otherwise the string becomes the filter formatted with "%d" and the table is saved.</summary>
+    /// <summary>Saves the active travel filter formatted as a decimal string into STR# 6 upon picker
+    /// shutdown, skipping filter 0.</summary>
     internal static void Save(string userData, int number, int filter, byte language)
     {
         if (filter == 0) return;

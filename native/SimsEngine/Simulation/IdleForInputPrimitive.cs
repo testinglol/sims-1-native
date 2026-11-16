@@ -1,33 +1,12 @@
 namespace SimsEngine.Simulation;
 
-/// <summary>The Idle For Input primitive (opcode 0x11), after Sims.exe FUN_0045dd00 (labelled "Idle For Input" in Behavior.iff
-/// STR# 139). Sims.exe reaches it through the person dispatcher FUN_0045cd1f, so the running object is a person.
-/// <para>Operand: the parameter index at bytes 0 and 1 (a short), the flag at bytes 2 and 3 (a short). Bytes 4 to 7 are not
-/// read. An index outside the frame's parameters raises error 8 (<see cref="SimulationError.StackNumberOutOfRange"/>), after
-/// the idle predicate has run (it has no effects on the lot).</para>
-/// <para>The idle predicate, FUN_0045d92c (<see cref="IsIdle"/>), picks the branch. When the person is not idle, the parameter
-/// is a countdown: a nonzero value is decremented and the answer is stop (2); at zero the person's input flag
-/// (<see cref="XPerson.InputFlags"/>, bit <see cref="XPerson.IdleForInputFlag"/>) is cleared and the answer is true.</para>
-/// <para>When the person is idle, the flag bit is set. A zero flag operand answers true. Otherwise a queued action starts when
-/// the action queue is not empty and either the frame is not waiting or the queue's current slot has flag bit 1. The start is
-/// <see cref="ISimulationHost.StartQueuedAction"/>: no object (or a refusal) answers stop (2). An accepted action clears the
-/// parameter, makes the frame waiting (<see cref="StackFrame.WaitState"/> 1) with the action's object as the stack object, and
-/// answers again (3). Without a queued action to start, the answer is true.</para>
-/// <para>The predicate (<see cref="IsIdle"/>) answers false when the person is non-interruptible (person data 71). Otherwise it
-/// answers true when the queue's current slot interrupts (its threshold is above the person's Priority, or its flag bit 1 is
-/// set). Failing that, it answers false unless the person's +0x24 state value is class 1 (`FUN_004074bc` via
-/// `FUN_0042ba25`) and the person type (person data 32) is below 2. Then it answers false when the floats at +0x7a8 and +0x7b0 are both at least -99 and either
-/// the float at +0x7a0 is at least -99 or the gender (person data 65) is above 1; otherwise true.</para>
-/// <para>The native runner rechecks the queued action, pushes its action BHAV onto this person's stack in the target's
-/// behavior scope (FUN_00452bd8/FUN_004749b7), and tracks the target-use request until the matching frame pop
-/// (FUN_0045e707/FUN_0045e769). When called without a runner stack, the legacy host callback remains available to
-/// focused primitive harnesses.</para></summary>
+/// <summary>Suspends execution while waiting for user input or queued actions, decrementing the idle
+/// counter or yielding execution to higher-priority interruptible actions.</summary>
 public static class IdleForInputPrimitive
 {
     private const int QueueMask = 7;
     private const int BusyFlag = 2;
 
-    // FUN_0045d92c compares the three floats with DAT_00667428.
     private const float Floor = -99f;
 
     public static PrimitiveResult Execute(in TreeContext context, ReadOnlySpan<byte> operand)
@@ -106,7 +85,6 @@ public static class IdleForInputPrimitive
         return PrimitiveResult.Stop;
     }
 
-    // FUN_0045d92c: shared by Idle For Input and SAnimator::TryAnimate's early completion gate.
     internal static bool ShouldInterrupt(SimulationWorld world, XPerson me)
     {
         if (me[PersonData.NonInterruptible] != 0) return false;
@@ -121,28 +99,26 @@ public static class IdleForInputPrimitive
         return true;
     }
 
-    // The queue is not empty and its current slot's threshold is above the person's Priority, or the slot has flag bit 1.
+    // An action interrupts if slot priority exceeds Sim priority or has bit 1 set.
     private static bool QueueInterrupts(XPerson me)
     {
         var slot = me.ActionQueue[me.ActionQueueCurrent & QueueMask];
         return me[PersonData.Priority] < slot.Threshold || (slot.Flags & BusyFlag) != 0;
     }
 
-    // The nested block's test in FUN_0045dd00: the queue is not empty, and the frame is not waiting or the slot's flag bit 1 is set.
     private static bool QueueHasAction(XPerson me, StackFrame frame)
     {
         if (me.ActionQueueEnd == me.ActionQueueCurrent) return false;
         return frame.WaitState != 1 || (me.ActionQueue[me.ActionQueueCurrent & QueueMask].Flags & BusyFlag) != 0;
     }
 
-    // Routing guarantees a person (FUN_0045cd1f runs only for the person class).
     private static XPerson Person(in TreeContext context) =>
         context.Me as XPerson ?? throw new InvalidOperationException($"Object {context.Me.Id} is not a person; FUN_0045cd1f runs for persons only.");
 
     private static void TraceQueuedStart(SimulationWorld world, XPerson person, XObject? target, ActionQueueSlot action,
         bool targetScopeFound, bool passed, bool pushed)
     {
-        var interaction = target?.TypeRecord?.Interactions?.Interactions.FirstOrDefault(entry => entry.TtaIndex == action.RawDword10);
+        var interaction = world.EffectiveInteractions(target)?.Interactions.FirstOrDefault(entry => entry.TtaIndex == action.RawDword10);
         world.QueuedInteractionStartTrace.Add(new QueuedInteractionStartTrace(person.Id, target?.Id,
             unchecked((short)action.ActionTree), targetScopeFound, passed, pushed, interaction?.GuardTree ?? 0,
             person.SelectionWord5CC, person[PersonData.PersonAge], person[PersonData.Gender],

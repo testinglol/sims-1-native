@@ -2,11 +2,10 @@ using SimsEngine.Formats;
 
 namespace SimsEngine.Tests;
 
-/// <summary>TTAB on hand-built chunks: the plain layouts of FUN_004761b4 and FUN_004760ae and the version 9 field
-/// encoding.</summary>
 public class InteractionTableTests
 {
-    /// <summary>Writes the field encoding: one bit for nonzero, two bits choosing a width, then the value.</summary>
+    /// <summary>Encodes table fields using a presence bit, a two-bit byte width selector, and the
+    /// variable-length value.</summary>
     private sealed class BitWriter
     {
         private readonly List<byte> _bytes = [];
@@ -80,7 +79,8 @@ public class InteractionTableTests
     [Fact]
     public void Version5AlignsItsIntegersAndConvertsMaximaToDeltas()
     {
-        // Count and version (4 bytes), then action, guard and motive count end at offset 10: two padding bytes follow.
+        // Interaction table entry headers include two padding bytes after the action, guard, and motive
+        // count fields.
         var chunk = new ChunkBuilder().S16(1).S16(5).U16(4100).U16(4101).S16(2).U16(0xFFFF)
             .U32(1).S32(7).F32(0.25f).U32(30).S32(-1).S16(40).S16(-10);
         var (file, iff) = chunk.InFile("TTAB");

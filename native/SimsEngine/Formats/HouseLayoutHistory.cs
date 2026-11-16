@@ -1,8 +1,7 @@
 namespace SimsEngine.Formats;
 
-/// <summary>The six layout-history pairs persisted in the HOUS #1 resource. Sims.exe's FUN_0041655e stores an
-/// auxiliary string from version 19, then five history pairs and the current pair from version 38. The first five
-/// pairs are initialized by FUN_004165e9 with FCNS 2 "fill value for layout history"; the current pair starts at zero.</summary>
+/// <summary>Represents the six layout history pairs stored in the HOUS resource, tracking five historical
+/// value pairs initialized from tuning fill values and one active current pair.</summary>
 public sealed class HouseLayoutHistory
 {
     private readonly int[] _values;
@@ -15,8 +14,8 @@ public sealed class HouseLayoutHistory
 
     public int Version { get; }
 
-    /// <summary>FUN_00416618 sums the first item of each pair into A and the second into B, then evaluates
-    /// clamp((A - 2*B) / max(A, 1), 0, 1) * 100 via x87 and __ftol.</summary>
+    /// <summary>Calculates the layout history score by summing the first values into A and second values
+    /// into B, yielding <c>clamp((A - 2 * B) / max(A, 1), 0, 1) * 100</c>.</summary>
     public int Score
     {
         get
@@ -36,8 +35,8 @@ public sealed class HouseLayoutHistory
         }
     }
 
-    /// <summary>Reads the original House history stream (HOUS resource id 1). A lot predating version 38 has no
-    /// persisted pairs, so FUN_0041655e restores the same five configured fill pairs and zero current pair.</summary>
+    /// <summary>Reads the layout history stream from HOUS resource 1, populating lots older than version 38
+    /// with five default fill pairs and a zeroed active pair.</summary>
     public static HouseLayoutHistory? Read(IffFile lot, int fillValue)
     {
         ArgumentNullException.ThrowIfNull(lot);
@@ -45,7 +44,7 @@ public sealed class HouseLayoutHistory
         if (chunk is null) return null;
 
         var reader = new PersistReader(lot, chunk);
-        if (reader.Version > 0x12) _ = reader.String(); // FUN_00464c84 serializes the state string at +0x28.
+        if (reader.Version > 0x12) _ = reader.String();
 
         var values = new int[12];
         if (reader.Version >= 0x26)

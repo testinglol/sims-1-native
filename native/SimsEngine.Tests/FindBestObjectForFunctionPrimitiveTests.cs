@@ -11,18 +11,17 @@ public sealed class FindBestObjectForFunctionPrimitiveTests
     private const short Function11 = 0x1c;
     private const short FunctionSit = 0x1a;
 
-    // Operand: the selector (word 0), the owner's data (word 2), the owner's scope (word 4) and the flags (byte 6).
+    // The operand layout consists of the function selector at word 0, owner data at word 2, owner scope at
+    // word 4, and flags at byte 6.
     private static byte[] Operand(short selector, byte flags = 0, short data = 0, short owner = 0) =>
         [(byte)selector, (byte)(selector >> 8), (byte)data, (byte)(data >> 8), (byte)owner, (byte)(owner >> 8), flags, 0];
 
-    /// <summary>A stack whose only primitive is the check tree's: it answers the given result for every opcode.</summary>
     private sealed class CheckStack(bool answer) : TreeStack
     {
         protected override PrimitiveResult RunPrimitive(StackFrame frame, BhavInstruction instruction) =>
             answer ? PrimitiveResult.True : PrimitiveResult.False;
     }
 
-    /// <summary>The running person 100 (no room yet) on the lot, with a frame whose stack object is 0.</summary>
     private static (TreeContext Context, XPerson Me, PrimitiveTestHost Host, SimulationWorld World) Lot(bool checkAnswer = true)
     {
         var host = new PrimitiveTestHost();
@@ -32,8 +31,6 @@ public sealed class FindBestObjectForFunctionPrimitiveTests
         return (context, me, host, world);
     }
 
-    /// <summary>A candidate with <paramref name="points"/> in data field <paramref name="field"/>, at X <paramref name="x"/>,
-    /// with a function entry for <paramref name="function"/> that has no check tree.</summary>
     private static XObject Candidate(SimulationWorld world, short id, short field, short points, int x, short function = Function0)
     {
         var item = world.Add(new XObject(id, PrimitiveTestWorld.Definition()));
@@ -80,7 +77,6 @@ public sealed class FindBestObjectForFunctionPrimitiveTests
     public void TheDistanceTakesThreeTimesEachTileFromThePoints()
     {
         var (context, _, host, world) = Lot();
-        // Candidate 2 is 16 units away (distance 1) with 50 points: 47. Candidate 3 is beside the running person: 45.
         Candidate(world, 2, 31, 50, 16);
         Candidate(world, 3, 31, 45, 0);
         FindBestObjectForFunctionPrimitive.Execute(context, Operand(0));
@@ -91,7 +87,6 @@ public sealed class FindBestObjectForFunctionPrimitiveTests
     public void SelectorElevenHalvesTheDistanceAboveOne()
     {
         var (context, _, host, world) = Lot();
-        // Candidate 2 is 4 tiles away with 40 points: halved to 2, so 34. Candidate 3 scores 30 beside the person.
         Candidate(world, 2, 39, 40, 64, Function11);
         Candidate(world, 3, 39, 30, 0, Function11);
         FindBestObjectForFunctionPrimitive.Execute(context, Operand(11));
@@ -187,7 +182,6 @@ public sealed class FindBestObjectForFunctionPrimitiveTests
         owner[ObjectData.Room] = 5;
         matching[ObjectData.Room] = 4;
         nonmatching[ObjectData.Room] = 5;
-        // The owner is the Literal owner (7) with the value 7, in room 5; flag 4 then matches room 5, not the person's 4.
         Assert.Equal(PrimitiveResult.True, FindBestObjectForFunctionPrimitive.Execute(context, Operand(0, flags: 12, data: 7, owner: 7)));
         Assert.Equal(3, context.Frame.StackObject);
     }

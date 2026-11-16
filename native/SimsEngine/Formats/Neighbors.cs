@@ -2,8 +2,6 @@ using System.Buffers.Binary;
 
 namespace SimsEngine.Formats;
 
-/// <summary>One neighbour: a person the neighbourhood remembers, with the relationship values it keeps toward others.
-/// <see cref="Slot"/> is its position in the stored list (empty slots are skipped).</summary>
 public sealed record Neighbor(
     int Slot,
     int RecordVersion,
@@ -16,34 +14,19 @@ public sealed record Neighbor(
     int StoredFormat = 0,
     short PersonDataTrailingWord = 0);
 
-/// <summary>The neighbour list (NBRS), as Sims.exe FUN_00430b85 reads it: a u32 slot count, and per slot a u32 that is
-/// nonzero when the slot holds a neighbour, followed by the neighbour (FUN_00423e3b):
-/// <list type="bullet">
-/// <item>a record version: from chunk version 73, format 10 is followed by the person-record version, while format 4
-/// is used directly; from 31 through 72 the version is 4; before 31 it is 0;</item>
-/// <item>from record version 2 the name string and a u32;</item>
-/// <item>from record version 1 a u32 that is nonzero when person data follows: 64 s16s and one discarded s16 before
-/// record version 3, 80 s16s before 8, 256 from 8;</item>
-/// <item>the neighbour id (s16) and the person's GUID (u32);</item>
-/// <item>the relationships (FUN_004651dc): an s32 that, when negative, is followed by a u32 slot count and per slot a
-/// u32 presence flag, and otherwise is the entry count. Each entry is a key (u32, from chunk version 1; inferred to be the other
-/// neighbour's id), a u32 value count and that many s32 values.</item>
-/// </list>
-/// Sims.exe writes the slot form (-1). In version-73 files both record formats occur in the same chunk; format 10's
-/// nested person-record version and format 4's direct version are observed in the supplied saved neighborhood.</summary>
+/// <summary>Represents the neighborhood roster (NBRS) resource. Stores an array of neighbor slots
+/// containing versioned person records (allocating 64, 80, or 256 person data words by version) and
+/// relationship arrays stored either as dense entry lists or sparse slot vectors.</summary>
 public sealed class Neighbors
 {
     public int Version { get; }
     public int SlotCount { get; }
-    /// <summary>True when every serialized slot was decoded. A recovered prefix must never replace the source chunk.</summary>
     public bool IsComplete { get; }
-    /// <summary>Slots before this index were fully decoded; later slots are unknown, not empty.</summary>
     public int CompleteSlotPrefix { get; }
     public IReadOnlyList<Neighbor> Entries { get; }
 
     public Neighbors(int version, int slotCount, IReadOnlyList<Neighbor> entries, bool isComplete = true, int? completeSlotPrefix = null)
     {
-
         Version = version;
         SlotCount = slotCount;
         IsComplete = isComplete;
@@ -53,8 +36,8 @@ public sealed class Neighbors
 
     public static Neighbors Read(IffFile file, IffChunk chunk) => Read(file, chunk, recoverSupportedPrefix: false);
 
-    /// <summary>Reads the known-good prefix of a version-73 roster if a later slot has an unsupported record marker.
-    /// Other malformed data remains a hard parse error. The caller must preserve the original chunk on save.</summary>
+    /// <summary>Parses supported entries from a version-73 roster up to the first unrecognized record
+    /// marker, preserving valid prefix data.</summary>
     public static Neighbors ReadRecoveringSupportedPrefix(IffFile file, IffChunk chunk) =>
         Read(file, chunk, recoverSupportedPrefix: true);
 
@@ -113,7 +96,6 @@ public sealed class Neighbors
 
     public Neighbors WithEntries(IReadOnlyList<Neighbor> entries) => new(Version, SlotCount, entries, IsComplete, CompleteSlotPrefix);
 
-    /// <summary>Writes the slot-form NBRS stream Sims.exe uses when saving a neighborhood.</summary>
     public byte[] WriteChunkData(bool swap)
     {
         var writer = PersistWriter.Start(swap, Version, "SRBN");
@@ -155,7 +137,7 @@ public sealed class Neighbors
             writer.Int16(entry.NeighborId);
             writer.UInt32(entry.Guid);
 
-            // The original writer stores relationship records as a vector with a presence word per slot.
+            // A negative entry count indicates a sparse slot vector with presence flags.
             writer.Int32(-1);
             writer.Int32(entry.Relationships.Count);
             foreach (var (target, values) in entry.Relationships)
@@ -188,29 +170,26 @@ public sealed class Neighbors
     }
 }
 
-/// <summary>The neighborhood record (NGBH), as Sims.exe FUN_00425540 reads it: one s16 before version 20, then 16
-/// s16s of neighborhood data. Version 64 adds a vector of SimInventory records; later versions add further flags.
-/// The meaning of the neighborhood data values and later flags is not traced.</summary>
+/// <summary>Represents the neighborhood data (NGBH) chunk, containing 16 global neighborhood variables and,
+/// from version 64 (0x40), a vector of Sim inventory records.</summary>
 public sealed class NeighborhoodData
 {
     public int Version { get; }
     public IReadOnlyList<short> Data { get; }
     public bool HasUnparsedExtendedFields => Version >= 0x42;
-    // Kept for callers that used the earlier name; this is the post-inventory NGBH extension area.
     public bool HasUnparsedExtendedObjectList => HasUnparsedExtendedFields;
 
-    /// <summary>One 12-byte inventory record (type, GUID, count), the entries the Live panel's inventory strip lists.</summary>
+    /// <summary>Represents a 12-byte Sim inventory entry consisting of an item type, object GUID, and stack
+    /// count.</summary>
     public readonly record struct InventoryItem(int Type, uint GUID, ushort Count)
     {
         public uint Guid => GUID;
     }
 
-    /// <summary>The neighbors' inventories keyed by neighbor id: the SimInventory pointer vector added by
-    /// Neighborhood::DoStream at version 0x40. Each vector slot has a presence flag, then (when present) a SimInventory
-    /// record containing its neighbor id and 12-byte token records. Later NGBH fields are left unread.</summary>
+    /// <summary>Maps neighbor IDs to their persistent inventories, decoded from the sparse inventory vector
+    /// introduced in format version 0x40.</summary>
     public IReadOnlyDictionary<short, IReadOnlyList<InventoryItem>> Inventories { get; }
 
-    /// <summary>Any version-gated extension bytes following the SimInventory vector in the source NGBH stream.</summary>
     public ReadOnlyMemory<byte> TrailingBytes { get; }
 
     public NeighborhoodData(
@@ -230,8 +209,6 @@ public sealed class NeighborhoodData
         var stream = new PersistReader(file, chunk);
         var data = stream.Int16s(stream.Version < 0x14 ? 1 : 16);
         var inventories = new Dictionary<short, IReadOnlyList<InventoryItem>>();
-        // Neighborhood::DoStream (Mac, FUN_100AC350) adds the SimInventory pointer vector only at 0x40.
-        // Earlier versions may have other versioned fields after the sixteen neighborhood variables.
         if (stream.Version >= 0x40)
         {
             var entries = stream.Count(4);
@@ -269,7 +246,6 @@ public sealed class NeighborhoodData
     public NeighborhoodData WithInventories(IReadOnlyDictionary<short, IReadOnlyList<InventoryItem>> inventories) =>
         new(Version, Data, inventories, TrailingBytes);
 
-    /// <summary>Writes the NGBH resource stream as Sims.exe FUN_00425540 / FUN_00425316 serializes it.</summary>
     public byte[] Write(bool swap = false) =>
         Write(Data, Inventories, Version, swap, TrailingBytes.Span);
 
@@ -324,7 +300,6 @@ public sealed class NeighborhoodData
         }
         else
         {
-            // Sims.exe FUN_00425540 (00425540.c:17-58) version-gated neighborhood flags.
             if (version >= 0x42)
             {
                 writer.Byte(0);
@@ -371,9 +346,8 @@ public sealed class NeighborhoodData
         return new IffFile(bytes, chunk.Type.ToString());
     }
 
-    /// <summary>Returns the sixteen one-based neighborhood variable slots consumed by the VM. Sims.exe
-    /// FUN_00425540 reads one stored value for NGBH versions before 20, leaving the remaining slots at their
-    /// zero-initialized values; versions 20 through 63 store all sixteen.</summary>
+    /// <summary>Returns the sixteen neighborhood variable slots, populating one variable for formats prior
+    /// to version 20 and all sixteen for version 20 and later.</summary>
     public short[] ToVariables()
     {
         var values = new short[16];

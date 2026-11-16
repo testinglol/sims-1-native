@@ -7,7 +7,8 @@ namespace SimsEngine.Tests;
 
 public sealed class GoToRelativePositionPrimitiveTests
 {
-    // Byte 2 is the direction and byte 3 the facing (both signed); byte 6 holds the flags. The other bytes are not read.
+    // GoToRelativePosition operand encodes the signed direction at byte 2, signed facing at byte 3, and
+    // route flags at byte 6.
     private static byte[] Operand(sbyte direction, sbyte facing, byte flags = 0) =>
         [0xEE, 0xEE, (byte)direction, (byte)facing, 0xEE, 0xEE, flags, 0xEE];
 
@@ -63,7 +64,8 @@ public sealed class GoToRelativePositionPrimitiveTests
     public void MinusTwoDirectionClearsTheDirectionBits()
     {
         var (context, host) = World();
-        // Byte 6 bit 2 sets flag 0x8000 and bit 1 clear sets 0x4000; the direction bits are cleared.
+        // Operand byte 6 maps bit 2 to route flag 0x8000 and an unset bit 1 to route flag 0x4000 while
+        // clearing direction bits.
         GoToRelativePositionPrimitive.Execute(context, Operand(-2, 0, flags: 4));
         Assert.Equal(0xC000u, host.Routes[0]!.Flags);
     }
@@ -86,7 +88,8 @@ public sealed class GoToRelativePositionPrimitiveTests
     public void FlagBitsOfByteSixSetTheTwoRouteFlags(byte flags, uint expected)
     {
         var (context, host) = World();
-        // Direction -2 clears the direction bits, so only the two flags remain.
+        // Specifying direction -2 clears directional bits from the route flags, leaving only mode flags
+        // intact.
         GoToRelativePositionPrimitive.Execute(context, Operand(-2, 0, flags));
         Assert.Equal(expected, host.Routes[0]!.Flags);
     }
@@ -143,7 +146,7 @@ public sealed class GoToRelativePositionPrimitiveTests
         anchor.RoutingSlots.Add(new RoutingSlotRequest { X = 32, Standing = 1 });
 
         var result = GoToRelativePositionPrimitive.Execute(context, Operand(2, 3));
-        // The object callback and SAnimator tick are separate passes in the native scheduler.
+        // Object callbacks and animation updates execute in separate scheduler passes.
         for (var tick = 0; tick < 1024 && result is not (PrimitiveResult.True or PrimitiveResult.False); tick++)
         {
             if (result == PrimitiveResult.Stop) context.World.TickAvatarAnimations(person);
@@ -221,7 +224,8 @@ public sealed class GoToRelativePositionPrimitiveTests
         Assert.Equal(4097, stack.Frames[^1].TreeId);
         Assert.Equal(person[PersonData.RouteEntryFlags], stack.Frames[^1].Parameters[0]);
 
-        // Direct position route also pushes Stand with parameter 0 and clears RouteEntryFlags to 0
+        // Routing directly to a position pushes the Stand interaction with parameter 0 and clears route
+        // entry flags to 0.
         person.NativeRoute = null;
         context.Frame.Waiting = false;
         stack.Frames.RemoveAt(stack.Frames.Count - 1);

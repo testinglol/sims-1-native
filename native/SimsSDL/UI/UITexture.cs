@@ -1,17 +1,13 @@
 namespace SimsSDL.UI;
 
-/// <summary>
-/// A CPU-side UI image: premultiplied sRGB RGBA pixels that the SDL renderer uploads on first draw.
-/// </summary>
+/// <summary>A CPU-side UI image holding premultiplied sRGB RGBA pixels that are uploaded to the GPU on
+/// first draw.</summary>
 public sealed class UITexture
 {
     public int Width { get; }
     public int Height { get; }
     public byte[] Pixels { get; }
 
-    /// <summary>
-    /// Bumped on every pixel change so the renderer knows to upload again.
-    /// </summary>
     public int Version { get; private set; }
 
     public UITexture(int width, int height, byte[]? pixels = null)
@@ -149,9 +145,6 @@ public sealed class UITextureDescriptor
     }
 }
 
-/// <summary>
-/// Stands in for <c>MTLDevice</c> in the overlays; textures live in CPU memory until drawn.
-/// </summary>
 public readonly struct UIDevice
 {
     public UITexture? MakeTexture(UITextureDescriptor descriptor)

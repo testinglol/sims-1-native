@@ -1,7 +1,6 @@
 namespace SimsEngine.Formats;
 
-/// <summary>One routing or container slot of an object (a SLOT entry), as Sims.exe FUN_0046e1fa stores it. The
-/// field names follow the in-memory structure; <see cref="Reserved14"/>'s use is unknown.</summary>
+/// <summary>Represents a single routing or container slot definition from a SLOT resource.</summary>
 public sealed record Slot(
     ushort Type,
     float X,
@@ -22,14 +21,8 @@ public sealed record Slot(
     int Facing,
     int Resolution);
 
-/// <summary>An object's slot table (SLOT): a u32 zero, a u32 version, the tag "TOLS" and a u32 count, then the
-/// entries, read by Sims.exe FUN_0046e708 and FUN_0046e1fa. Every field starts from the defaults of FUN_0046e184 and
-/// FUN_0046de64, and a version only adds fields: 4 adds the snap target slot, 5 the three proximities, the maximum
-/// size and a value at structure offset 0x14, 7 the gradient, 8 the height, 9 the facing, 10 the resolution.
-/// <para>Before version 9 the facing comes from flag 0x200 (-3) or 0x400 (-1), which is then cleared; otherwise it
-/// stays at the default -2. Before version 10 the three proximities are multiplied by 16 and the gradient by 1/16
-/// (the constant at 0x667278), defaults included. Versions below 3 never occur in the game files and are not
-/// read.</para></summary>
+/// <summary>Parses an object slot table (SLOT). Handles format evolution from version 3 through 10,
+/// including legacy facing flags and pre-version-10 proximity and gradient coordinate scaling.</summary>
 public sealed class SlotTable
 {
     public int Version { get; }
@@ -49,7 +42,7 @@ public sealed class SlotTable
         if (!reader.Bytes(4).SequenceEqual("TOLS"u8)) throw reader.Error("missing the TOLS tag");
         if (version < 3) throw reader.Error($"version {version} is not read");
         var count = reader.S32();
-        // A version 3 entry, the smallest, is 30 bytes.
+        // A version 3 entry, the smallest format variant, is 30 bytes.
         if (count < 0 || count > reader.Remaining / 30) throw reader.Error($"{count} slots do not fit the chunk");
         var slots = new Slot[count];
         for (var index = 0; index < count; index++) slots[index] = ReadSlot(ref reader, version);

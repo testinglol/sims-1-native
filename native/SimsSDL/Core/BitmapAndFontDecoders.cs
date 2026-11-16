@@ -1,8 +1,5 @@
 namespace SimsSDL.Core;
 
-/// <summary>
-/// Decodes 8-bit (uncompressed or RLE8), 24-bit, and 32-bit Windows BMP images into top-down RGBA8888 pixels.
-/// </summary>
 public sealed class SimsBitmap
 {
     public int Width { get; }
@@ -183,9 +180,6 @@ public sealed class SimsBitmap
     }
 }
 
-/// <summary>
-/// Decodes uncompressed and RLE-compressed TGA images (colormapped, truecolor, grayscale) to top-down RGBA8888.
-/// </summary>
 public sealed class SimsTarga
 {
     public int Width { get; }
@@ -333,9 +327,6 @@ public sealed class SimsTarga
     }
 }
 
-/// <summary>
-/// Sprite pixel post-processing: chroma keying, sRGB-correct premultiplication, and silhouette fringe decontamination.
-/// </summary>
 public static class SpritePixels
 {
     private static readonly float[] SrgbToLinear = CreateSrgbToLinear();
@@ -446,7 +437,7 @@ public static class SpritePixels
             Buffer.BlockCopy(output, 0, source, 0, output.Length);
             byte[] fringeTag = new byte[pixelCount];
 
-            // Pass A: semi-transparent pixels bordering transparent exterior (or tight-cropped sprite bounds).
+            // Pass A: cleans semi-transparent pixels bordering transparent exterior.
             for (int y = 0; y < height; y++)
             {
                 int rowOffset = y * width;
@@ -482,7 +473,7 @@ public static class SpritePixels
                 }
             }
 
-            // Pass B: second-ring silhouette fringe (without crossing opaque window/object frames).
+            // Pass B: cleans second-ring silhouette fringe without crossing opaque pixels.
             for (int y = 0; y < height; y++)
             {
                 int rowOffset = y * width;
@@ -594,11 +585,50 @@ public static class SpritePixels
 
         return output;
     }
+
+    internal static byte[] DownsamplePremultipliedSrgbBox(ReadOnlySpan<byte> src, int srcWidth, int srcHeight)
+    {
+        int dstWidth = Math.Max(1, srcWidth >> 1);
+        int dstHeight = Math.Max(1, srcHeight >> 1);
+        byte[] dst = new byte[dstWidth * dstHeight * 4];
+        float[] linear = SrgbToLinear;
+
+        for (int y = 0; y < dstHeight; y++)
+        {
+            int sy0 = Math.Min(y * 2, srcHeight - 1);
+            int sy1 = Math.Min(sy0 + 1, srcHeight - 1);
+            int row0 = sy0 * srcWidth;
+            int row1 = sy1 * srcWidth;
+            int dstRow = y * dstWidth;
+
+            for (int x = 0; x < dstWidth; x++)
+            {
+                int sx0 = Math.Min(x * 2, srcWidth - 1);
+                int sx1 = Math.Min(sx0 + 1, srcWidth - 1);
+
+                int p00 = (row0 + sx0) * 4;
+                int p10 = (row0 + sx1) * 4;
+                int p01 = (row1 + sx0) * 4;
+                int p11 = (row1 + sx1) * 4;
+
+                float r = (linear[src[p00]] + linear[src[p10]] + linear[src[p01]] + linear[src[p11]]) * 0.25f;
+                float g = (linear[src[p00 + 1]] + linear[src[p10 + 1]] + linear[src[p01 + 1]] + linear[src[p11 + 1]]) * 0.25f;
+                float b = (linear[src[p00 + 2]] + linear[src[p10 + 2]] + linear[src[p01 + 2]] + linear[src[p11 + 2]]) * 0.25f;
+                int a = (src[p00 + 3] + src[p10 + 3] + src[p01 + 3] + src[p11 + 3] + 2) >> 2;
+
+                int outIdx = (dstRow + x) * 4;
+                dst[outIdx] = EncodeSrgb(r);
+                dst[outIdx + 1] = EncodeSrgb(g);
+                dst[outIdx + 2] = EncodeSrgb(b);
+                dst[outIdx + 3] = (byte)a;
+            }
+        }
+
+        return dst;
+    }
 }
 
-/// <summary>
-/// Decodes Sims FFN bitmap fonts (FNTF v101) and measures, wraps, and rasterizes labels.
-/// </summary>
+/// <summary>Decodes FFN bitmap fonts (<c>FNTF</c> version 101) and measures, wraps, and rasterizes text.</summary>
 public sealed class SimsBitmapFont
 {
     public readonly record struct Glyph(

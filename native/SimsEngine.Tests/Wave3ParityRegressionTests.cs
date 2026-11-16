@@ -99,7 +99,7 @@ public sealed class Wave3ParityRegressionTests
         });
         puddle.Slots.Add(0);
         puddle[ObjectData.AllowedHeightFlags] = 1;
-        puddle[ObjectData.Flags] = 4; // Non-solid floor object / puddle
+        puddle[ObjectData.Flags] = 4;
         world.PlaceObject(puddle, new ObjectPosition(6 * 16 + 8, 5 * 16 + 8, 1));
 
         Assert.Equal(puddle.ClockManagerIndex, world.TileValueAt(6, 5, 1));
@@ -159,7 +159,6 @@ public sealed class Wave3ParityRegressionTests
         Assert.Equal(puddle.ClockManagerIndex, world.TileValueAt(6, 5, 1));
         Assert.Equal([puddle], world.ObjectsAtTile(6, 5, 1).ToArray());
 
-        // Arriving on target's tile (8, 5, 1) chains target into personA.Slots[0]; stepping onto an empty tile clears it.
         Assert.Equal(target.ClockManagerIndex, personA.Slots[0]);
         world.PlaceObject(personA, new ObjectPosition(8 * 16 + 8, 6 * 16 + 8, 1));
         Assert.Equal((short)0, personA.Slots[0]);
@@ -181,7 +180,6 @@ public sealed class Wave3ParityRegressionTests
         var bella = Assert.IsType<XPerson>(world.ObjectById(18));
         var mortimer = Assert.IsType<XPerson>(world.ObjectById(21));
 
-        // Create a shipped puddle ("Flood - tile", GUID 0x3E7470F6) and verify stepping onto/off it on House05.
         const uint floodTileGuid = 0x3E7470F6;
         var mortimerStart = mortimer.Position;
         var mortimerStartTile = (X: mortimerStart.X >> 4, Y: mortimerStart.Y >> 4, Level: (int)mortimerStart.Height);
@@ -224,7 +222,6 @@ public sealed class Wave3ParityRegressionTests
         Assert.Equal(socialPuddle.ClockManagerIndex, world.TileValueAt(puddleTileX, puddleTileY, puddleLevel));
         Assert.Equal([socialPuddle], world.ObjectsAtTile(puddleTileX, puddleTileY, puddleLevel).ToArray());
 
-        // Place a second puddle near the House05 bathroom sink so autonomous sink routing crosses/touches a puddle tile.
         var sink = world.WalkOrder.FirstOrDefault(item =>
             (item.TypeRecord?.Name?.Contains("sink", StringComparison.OrdinalIgnoreCase) ?? false) ||
             (item.TypeRecord?.CatalogName?.Contains("sink", StringComparison.OrdinalIgnoreCase) ?? false));
@@ -251,7 +248,6 @@ public sealed class Wave3ParityRegressionTests
             world.Remove(candidate.Id);
         }
 
-        // Configure comfortable motives for Bella/Mortimer to execute Gossip, and low Hygiene for Cassandra's autonomy.
         foreach (var sim in new[] { bella, mortimer })
         {
             foreach (var motive in new[] { Motive.Hunger, Motive.Comfort, Motive.Energy, Motive.Hygiene, Motive.Bladder, Motive.Fun })
@@ -306,7 +302,6 @@ public sealed class Wave3ParityRegressionTests
         person[ObjectData.PlacementFlags] = 0x0801;
         world.PlaceObject(person, new ObjectPosition(2 * 16 + 8, 5 * 16 + 8, 1));
 
-        // Surround goal (10, 5) on 7 of its 8 neighbor tiles (including diagonals) so (9, 5) is the sole passage.
         var ringOffsets = new[] { (-1, -1), (0, -1), (1, -1), (1, 0), (1, 1), (0, 1), (-1, 1) };
         for (var i = 0; i < ringOffsets.Length; i++)
         {
@@ -338,10 +333,9 @@ public sealed class Wave3ParityRegressionTests
         rug.Slots.AddRange([0, 0]);
         rug.FootprintSlots.Add(new ObjectFootprintSlot { HeightCode = 2 });
         rug[ObjectData.AllowedHeightFlags] = 1;
-        rug[ObjectData.Flags] = 4; // Non-solid passable surface
+        rug[ObjectData.Flags] = 4;
         world.PlaceObject(rug, new ObjectPosition(9 * 16 + 8, 5 * 16 + 8, 1));
 
-        // 1. An object enclosed in an authored slot (SlotHierNumber == 1) resolves a parent container and is skipped.
         var containedProp = world.Add(new XObject(21, PrimitiveTestWorld.Definition(0))
         {
             TypeRecord = new TypeRecord(21),
@@ -365,8 +359,6 @@ public sealed class Wave3ParityRegressionTests
         world.Remove(containedProp.Id);
         world.Remove(rug.Id);
 
-        // 2. A solid floor obstacle (RoutePenalty == 0) displaced into Slots[0] (SlotHierNumber == 0) by another
-        // object or distant Sim on (9, 5) has ResolveParentContainer == null and MUST still block routing!
         var solidFloorObstacle = world.Add(new XObject(22, PrimitiveTestWorld.Definition(0))
         {
             TypeRecord = new TypeRecord(22),
@@ -384,7 +376,6 @@ public sealed class Wave3ParityRegressionTests
         distantSim.Slots.Add(0);
         distantSim[ObjectData.AllowedHeightFlags] = 1;
         distantSim[ObjectData.PlacementFlags] = 0x0801;
-        // Place distantSim onto (9, 5, 1) (distance 7.0 > 3.0 from person at (2, 5, 1)), displacing solidFloorObstacle into Slots[0].
         distantSim.Position = new ObjectPosition(9 * 16 + 8, 5 * 16 + 8, 1);
         distantSim.RoomWord84 = solidFloorObstacle.RoomWord84;
         distantSim.Slots[0] = solidFloorObstacle.ClockManagerIndex;

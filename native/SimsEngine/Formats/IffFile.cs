@@ -1,9 +1,9 @@
+using System.Buffers;
 using System.Buffers.Binary;
 
 namespace SimsEngine.Formats;
 
-/// <summary>A resource type code such as BHAV or STR#. Sims.exe passes these as the four characters read as a
-/// big-endian integer (BHAV is 0x42484156 in its chunk lookups).</summary>
+/// <summary>Represents a four-character IFF resource type code stored as a big-endian 32-bit integer.</summary>
 public readonly record struct ResourceType(uint Code)
 {
     public static readonly ResourceType Bhav = Parse("BHAV");
@@ -21,11 +21,11 @@ public readonly record struct ResourceType(uint Code)
     public static readonly ResourceType Rsmp = Parse("rsmp");
     public static readonly ResourceType Spr1 = Parse("SPR#");
     public static readonly ResourceType Spr2 = Parse("SPR2");
+    public static readonly ResourceType Bmp = Parse("BMP_");
     public static readonly ResourceType Palt = Parse("PALT");
     public static readonly ResourceType Dgrp = Parse("DGRP");
     public static readonly ResourceType Fcns = Parse("FCNS");
     public static readonly ResourceType Fwav = Parse("FWAV");
-    /// <summary>Repository-private native interaction capability chunk; never a Sims/SimAntics resource.</summary>
     public static readonly ResourceType NativeLifecycleCapability = Parse("NLCF");
 
     public static ResourceType Parse(string text)
@@ -37,32 +37,144 @@ public readonly record struct ResourceType(uint Code)
     public override string ToString() => string.Concat((char)(Code >> 24), (char)(Code >> 16 & 0xff), (char)(Code >> 8 & 0xff), (char)(Code & 0xff));
 }
 
-/// <summary>One chunk of an IFF file. <see cref="Data"/> is the chunk body without its 76-byte header.</summary>
-public sealed record IffChunk(ResourceType Type, ushort Id, ushort Flags, string Label, int Offset, ReadOnlyMemory<byte> Data)
+/// <summary>Represents a single IFF resource chunk, storing its body data excluding the 76-byte header.</summary>
+public sealed record IffChunk
 {
+    private readonly ReadOnlyMemory<byte> _data;
+    private readonly FarArchive? _lazyArchive;
+    private readonly int _lazyOffset;
+    private readonly int _lazyLength;
+    private WeakReference<byte[]>? _weakData;
+
+    public IffChunk(ResourceType type, ushort id, ushort flags, string label, int offset, ReadOnlyMemory<byte> data)
+    {
+        Type = type;
+        Id = id;
+        Flags = flags;
+        Label = label;
+        Offset = offset;
+        _data = data;
+    }
+
+    internal IffChunk(ResourceType type, ushort id, ushort flags, string label, int offset, FarArchive lazyArchive, int lazyOffset, int lazyLength)
+    {
+        Type = type;
+        Id = id;
+        Flags = flags;
+        Label = label;
+        Offset = offset;
+        _lazyArchive = lazyArchive;
+        _lazyOffset = lazyOffset;
+        _lazyLength = lazyLength;
+    }
+
+    public ResourceType Type { get; init; }
+    public ushort Id { get; init; }
+    public ushort Flags { get; init; }
+    public string Label { get; init; }
+    public int Offset { get; init; }
+
+    public ReadOnlyMemory<byte> Data
+    {
+        get
+        {
+            if (_lazyArchive is not { } archive)
+                return _data;
+            var weak = Volatile.Read(ref _weakData);
+            if (weak is not null && weak.TryGetTarget(out var cached))
+                return cached;
+            var bytes = archive.ReadSliceBytes(_lazyOffset, _lazyLength);
+            Volatile.Write(ref _weakData, new WeakReference<byte[]>(bytes));
+            return bytes;
+        }
+        init
+        {
+            _data = value;
+            _lazyArchive = null;
+            _lazyOffset = 0;
+            _lazyLength = 0;
+            _weakData = null;
+        }
+    }
+
+    public bool Equals(IffChunk? other)
+    {
+        if (ReferenceEquals(this, other)) return true;
+        if (other is null) return false;
+        return Type == other.Type &&
+               Id == other.Id &&
+               Flags == other.Flags &&
+               string.Equals(Label, other.Label, StringComparison.Ordinal) &&
+               Offset == other.Offset &&
+               (_lazyArchive is not null || other._lazyArchive is not null
+                   ? ReferenceEquals(_lazyArchive, other._lazyArchive) &&
+                     _lazyOffset == other._lazyOffset &&
+                     _lazyLength == other._lazyLength
+                   : _data.Equals(other._data));
+    }
+
+    public override int GetHashCode() =>
+        HashCode.Combine(Type, Id, Flags, Label, Offset, _lazyArchive, _lazyOffset, _lazyLength);
+
     public override string ToString() => $"{Type} #{Id}";
 }
 
-/// <summary>An IFF resource file ("IFF FILE 2.0" or "2.5:TYPE FOLLOWED BY SIZE"): a 60-byte signature, a
-/// big-endian u32 offset of the rsmp index, then chunks from byte 64. Each chunk header is 76 bytes, all
-/// big-endian: type, total size including the header, id, flags and a 64-byte zero-padded label. Chunk bodies are
-/// little-endian. The rsmp chunk is an index of the others and is kept as an ordinary chunk.</summary>
+/// <summary>Represents an IFF resource archive ("IFF FILE 2.0" or "2.5"). The file begins with a 64-byte
+/// header containing a signature and a big-endian offset to the resource map (rsmp), followed by chunks
+/// with 76-byte headers and little-endian payloads.</summary>
 public sealed class IffFile
 {
     public const int HeaderSize = 64;
     public const int ChunkHeaderSize = 76;
+    private const int LazyChunkThresholdBytes = 4096;
+
+    private readonly FarArchive? _lazyArchive;
+    private readonly FarArchive.Entry? _lazyEntry;
+    private ReadOnlyMemory<byte> _bytes;
+    private Dictionary<ulong, IffChunk>? _chunksByTypeAndId;
 
     public string Source { get; }
-    /// <summary>The complete original IFF bytes, including its header and resource-map chunk.</summary>
-    public ReadOnlyMemory<byte> Bytes { get; }
+    public ReadOnlyMemory<byte> Bytes => _lazyArchive is not null && _lazyEntry is not null && _bytes.IsEmpty && _lazyEntry.Size > 0
+        ? (_bytes = _lazyArchive.Read(_lazyEntry))
+        : _bytes;
     public IReadOnlyList<IffChunk> Chunks { get; }
-    private Dictionary<ulong, IffChunk>? _chunksByTypeAndId;
 
     public IffFile(ReadOnlyMemory<byte> data, string source)
     {
-        Bytes = data;
+        _bytes = data;
         Source = source;
-        var span = data.Span;
+        Chunks = ParseChunks(data.Span, data, null, 0, source);
+    }
+
+    private IffFile(FarArchive lazyArchive, FarArchive.Entry lazyEntry, string source, List<IffChunk> chunks)
+    {
+        _lazyArchive = lazyArchive;
+        _lazyEntry = lazyEntry;
+        Source = source;
+        Chunks = chunks;
+    }
+
+    internal static IffFile FromFarEntry(FarArchive archive, FarArchive.Entry entry, string source)
+    {
+        if (entry.Size == 0)
+            throw new ResourceFormatException(source, null, 0, "not an IFF file");
+
+        var rented = ArrayPool<byte>.Shared.Rent(entry.Size);
+        try
+        {
+            var span = rented.AsSpan(0, entry.Size);
+            archive.ReadSpan(entry.Offset, span);
+            var chunks = ParseChunks(span, ReadOnlyMemory<byte>.Empty, archive, entry.Offset, source);
+            return new IffFile(archive, entry, source, chunks);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rented);
+        }
+    }
+
+    private static List<IffChunk> ParseChunks(ReadOnlySpan<byte> span, ReadOnlyMemory<byte> backingMemory, FarArchive? lazyArchive, int archiveEntryOffset, string source)
+    {
         if (span.Length < HeaderSize || !span[..8].SequenceEqual("IFF FILE"u8))
             throw new ResourceFormatException(source, null, 0, "not an IFF file");
         var chunks = new List<IffChunk>();
@@ -79,17 +191,40 @@ public sealed class IffFile
             var labelBytes = header.Slice(12, 64);
             var end = labelBytes.IndexOf((byte)0);
             var label = end == 0 ? "" : ResourceReader.Latin1(end < 0 ? labelBytes : labelBytes[..end]);
-            chunks.Add(new IffChunk(type, id, flags, label, offset, data.Slice(offset + ChunkHeaderSize, (int)size - ChunkHeaderSize)));
+            var bodyLength = (int)size - ChunkHeaderSize;
+            if (lazyArchive is null)
+            {
+                chunks.Add(new IffChunk(type, id, flags, label, offset, backingMemory.Slice(offset + ChunkHeaderSize, bodyLength)));
+            }
+            else if (ShouldKeepLazy(type, bodyLength))
+            {
+                chunks.Add(new IffChunk(type, id, flags, label, offset, lazyArchive, archiveEntryOffset + offset + ChunkHeaderSize, bodyLength));
+            }
+            else
+            {
+                var copy = bodyLength == 0
+                    ? ReadOnlyMemory<byte>.Empty
+                    : span.Slice(offset + ChunkHeaderSize, bodyLength).ToArray();
+                chunks.Add(new IffChunk(type, id, flags, label, offset, copy));
+            }
             offset += (int)size;
         }
-        Chunks = chunks;
+        return chunks;
     }
+
+    private static bool ShouldKeepLazy(ResourceType type, int bodyLength) =>
+        bodyLength > LazyChunkThresholdBytes ||
+        type == ResourceType.Spr2 ||
+        type == ResourceType.Spr1 ||
+        type == ResourceType.Bmp ||
+        type == ResourceType.Dgrp ||
+        type == ResourceType.Fwav ||
+        type == ResourceType.Rsmp;
 
     public static IffFile Open(string path) => new(File.ReadAllBytes(path), path);
 
     public IEnumerable<IffChunk> OfType(ResourceType type) => Chunks.Where(chunk => chunk.Type == type);
 
-    /// <summary>The first chunk of this type and id, as Sims.exe's lookup by type and id returns one chunk.</summary>
     public IffChunk? Find(ResourceType type, ushort id)
     {
         var index = _chunksByTypeAndId;
@@ -108,7 +243,6 @@ public sealed class IffFile
 
     public ResourceReader Reader(IffChunk chunk) => new(chunk.Data.Span, Source, chunk.ToString());
 
-    /// <summary>Replaces a chunk body and rebuilds sequential offsets and the resource-map index.</summary>
     public IffFile WithChunkDataResized(ResourceType type, ushort id, ReadOnlyMemory<byte> replacement)
     {
         var chunks = Chunks.ToList();
@@ -118,23 +252,19 @@ public sealed class IffFile
         return Rebuild(chunks);
     }
 
-    /// <summary>Adds a previously absent resource, rebuilding the resource-map index and its offsets.</summary>
     public IffFile WithAddedChunk(ResourceType type, ushort id, ReadOnlyMemory<byte> data, ushort flags = 0, string label = "")
     {
         if (Find(type, id) is not null) throw new ArgumentException($"{Source}: {type} chunk #{id} already exists.", nameof(id));
         return Rebuild([.. Chunks, new IffChunk(type, id, flags, label, 0, data)]);
     }
 
-    /// <summary>Adds or replaces a resource, rebuilding the resource-map index and its offsets.</summary>
     public IffFile WithAddedOrReplacedChunk(ResourceType type, ushort id, ReadOnlyMemory<byte> data, ushort flags = 0, string label = "") =>
         Find(type, id) is not null
             ? WithChunkDataResized(type, id, data)
             : WithAddedChunk(type, id, data, flags, label);
 
-    /// <summary>Removes all chunks matching <paramref name="type"/> and <paramref name="id"/>, rebuilding the resource-map index.</summary>
     public IffFile WithoutChunk(ResourceType type, ushort id) =>
         Rebuild(Chunks.Where(chunk => !(chunk.Type == type && chunk.Id == id)).ToList());
-
 
     private IffFile Rebuild(IReadOnlyList<IffChunk> chunks)
     {

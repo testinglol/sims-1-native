@@ -120,7 +120,6 @@ public sealed class AnimateSimPrimitiveTests
 
         playback.Tick(animatorMils: 42);
         var heldFrame = playback.Frame;
-        // Root-only VitaBoy ticks do not call Practice::Apply; Animator::GetMils continues to advance.
         playback.Tick(animatorMils: 210);
 
         Assert.Equal(4.2f, heldFrame, precision: 4);
@@ -274,7 +273,7 @@ public sealed class AnimateSimPrimitiveTests
     {
         var (context, person, _) = PrimitiveTestWorld.Create();
         person[PersonData.PersonAge] = 18;
-        person[PersonData.Gender] = 0; // Deliberately hold gender constant; Mac tests animator +0x60e.
+        person[PersonData.Gender] = 0;
         person.AnimatorBodyStringMode = (short)bodyStringMode;
         person[PersonData.Sitting] = 1;
         context.World.StandardWalkFallbackAnimationTable[(152, 1)] = new AvatarAnimationClip("sit-a", 4, []);
@@ -576,7 +575,7 @@ public sealed class AnimateSimPrimitiveTests
         person.TypeRecord = new TypeRecord(1) { BehaviorScope = scope };
         var stack = TreeRunner.CreateTransientStack(context.World, person);
         context = context with { Stack = stack };
-        byte[] operand = [58, 0, 0, 0, 3, 1, 0, 0]; // Missing global animation 58, background mode.
+        byte[] operand = [58, 0, 0, 0, 3, 1, 0, 0];
 
         var error = Assert.Throws<SimulationException>(() => AnimateSimPrimitive.Execute(context, operand));
 
@@ -597,7 +596,7 @@ public sealed class AnimateSimPrimitiveTests
         person.TypeRecord = new TypeRecord(1) { BehaviorScope = scope };
         context.World.StandardWalkFallbackAnimationTable[(152, 0x25)] = new AvatarAnimationClip("fallback", 4, []);
         context = context with { Stack = TreeRunner.CreateTransientStack(context.World, person) };
-        byte[] operand = [58, 0, 0, 0, 3, 0, 0, 0]; // Missing global animation 58, primary mode.
+        byte[] operand = [58, 0, 0, 0, 3, 0, 0, 0];
 
         var result = AnimateSimPrimitive.Execute(context, operand);
 
@@ -613,7 +612,7 @@ public sealed class AnimateSimPrimitiveTests
         person[PersonData.PersonAge] = 18;
         context.World.AvatarAnimationTable[(3, false, 58)] = new AvatarAnimationClip("toilet", 4,
             [new AvatarAnimationEvent(0, 0), new AvatarAnimationEvent(33, 1)]);
-        byte[] operand = [58, 0, 0, 0, 3, 8, 2, 0]; // ID 58, Misc scope, primary play-and-wait, expect two XEVTs
+        byte[] operand = [58, 0, 0, 0, 3, 8, 2, 0];
 
         Assert.Equal(PrimitiveResult.Stop, AnimateSimPrimitive.Execute(context, operand));
         var playback = Assert.IsType<AvatarAnimationPlayback>(person.AnimationPlayback);
@@ -651,7 +650,7 @@ public sealed class AnimateSimPrimitiveTests
         context.World.AvatarAnimationTable[(3, false, 58)] = new AvatarAnimationClip("snowman-build", 4,
             [new AvatarAnimationEvent(0, 201), new AvatarAnimationEvent(33, 202), new AvatarAnimationEvent(67, 999)]);
         context.Frame.Locals[0] = -1;
-        byte[] operand = [58, 0, 0, 0, 3, 0x28, 0, 0]; // Misc scope, wait, store XEVT in Local[0]
+        byte[] operand = [58, 0, 0, 0, 3, 0x28, 0, 0];
 
         Assert.Equal(PrimitiveResult.Stop, AnimateSimPrimitive.Execute(context, operand));
         var playback = Assert.IsType<AvatarAnimationPlayback>(person.AnimationPlayback);
@@ -738,12 +737,12 @@ public sealed class AnimateSimPrimitiveTests
         var stop = new AvatarAnimationSoundEvent(110, "local.testpack", "", "ambient-loop", false, true);
         var playback = new AvatarAnimationPlayback(new AvatarAnimationClip("ambient-interaction", 5, [], [start, stop]), false, false);
 
-        playback.Tick(); // 40ms
+        playback.Tick();
         Assert.Empty(playback.SoundEventQueue);
-        playback.Tick(); // 80ms
+        playback.Tick();
         Assert.Equal([start], playback.SoundEventQueue);
         playback.SoundEventQueue.Clear();
-        playback.Tick(); // 120ms
+        playback.Tick();
         Assert.Equal([stop], playback.SoundEventQueue);
     }
 
@@ -772,7 +771,7 @@ public sealed class AnimateSimPrimitiveTests
         var (context, person, _) = PrimitiveTestWorld.Create(parameters: [0]);
         person[PersonData.PersonAge] = 18;
         context.World.AvatarAnimationTable[(3, false, 58)] = new AvatarAnimationClip("toilet", 1, []);
-        byte[] operand = [58, 0, 0, 0, 3, 0x0a, 2, 0]; // Primary play-and-wait, backwards, expect two XEVTs.
+        byte[] operand = [58, 0, 0, 0, 3, 0x0a, 2, 0];
 
         Assert.Equal(PrimitiveResult.Stop, AnimateSimPrimitive.Execute(context, operand));
         var playback = Assert.IsType<AvatarAnimationPlayback>(person.AnimationPlayback);
@@ -791,7 +790,7 @@ public sealed class AnimateSimPrimitiveTests
         var (context, person, _) = PrimitiveTestWorld.Create(parameters: [0]);
         person[PersonData.PersonAge] = 18;
         context.World.AvatarAnimationTable[(3, false, 58)] = new AvatarAnimationClip("toilet", 1, []);
-        byte[] operand = [58, 0, 0, 0, 3, 8, 0xff, 0]; // Signed expected-event count -1 generates no substitutes.
+        byte[] operand = [58, 0, 0, 0, 3, 8, 0xff, 0]; // An expected event count of -1 generates no synthetic substitute events.
 
         Assert.Equal(PrimitiveResult.Stop, AnimateSimPrimitive.Execute(context, operand));
         var playback = Assert.IsType<AvatarAnimationPlayback>(person.AnimationPlayback);
@@ -1000,7 +999,6 @@ public sealed class AnimateSimPrimitiveTests
         person.CarryPracticeMode = 6;
         person.AnimatorControlState = controlState;
 
-        // Mac checks +0x188 before reading the operand or applying a mode-2 clear.
         Assert.Equal(PrimitiveResult.Stop, AnimateSimPrimitive.Execute(context, [0, 0, 0, 0, 3, 0x10, 0, 0]));
         Assert.Same(primary, person.AnimationPlayback);
         Assert.Same(carry, person.CarryAnimationPlayback);
@@ -1034,7 +1032,7 @@ public sealed class AnimateSimPrimitiveTests
         var context = new TreeContext(baseContext.World, person, new StackFrame(0, [], []) { Table = scope });
         var clip = new AvatarAnimationClip("fridge-close", 2, []);
         context.World.ObjectAvatarAnimationTable[(77, 129, 4)] = clip;
-        byte[] operand = [4, 0, 0, 0, 0, 0x11, 0, 0]; // Object scope; mode 3 is primary play-and-wait plus carry reset.
+        byte[] operand = [4, 0, 0, 0, 0, 0x11, 0, 0];
 
         Assert.Equal(PrimitiveResult.Stop, AnimateSimPrimitive.Execute(context, operand));
         var playback = Assert.IsType<AvatarAnimationPlayback>(person.AnimationPlayback);
@@ -1105,7 +1103,7 @@ public sealed class AnimateSimPrimitiveTests
         person.AnimationPlayback = primary;
         var carry = new AvatarAnimationClip("suit-book101", 30, [new AvatarAnimationEvent(100, 4)]);
         context.World.AvatarAnimationTable[(3, false, 78)] = carry;
-        byte[] start = [78, 0, 0, 0, 3, 0x10, 0, 0]; // Misc scope, carry channel
+        byte[] start = [78, 0, 0, 0, 3, 0x10, 0, 0];
 
         Assert.Equal(PrimitiveResult.True, AnimateSimPrimitive.Execute(context, start));
         Assert.Same(primary, person.AnimationPlayback);
@@ -1265,7 +1263,7 @@ public sealed class AnimateSimPrimitiveTests
 
         Assert.Same(childClip, RouteExecutor.ResolveWalkAnimation(context.World, person, 20));
 
-        person.AnimatorPoolTile = true; // cXPerson::ForceLocation wrote +0x60c.
+        person.AnimatorPoolTile = true;
         Assert.Same(poolClip, RouteExecutor.ResolveWalkAnimation(context.World, person, 20));
     }
 
@@ -1333,7 +1331,7 @@ public sealed class AnimateSimPrimitiveTests
         var context = new TreeContext(baseContext.World, person, frame);
         var clip = new AvatarAnimationClip("object-use", 4, []);
         context.World.ObjectAvatarAnimationTable[(77, 129, 58)] = clip;
-        byte[] operand = [58, 0, 0, 0, 0, 8, 0, 0]; // Object scope, primary play-and-wait
+        byte[] operand = [58, 0, 0, 0, 0, 8, 0, 0];
 
         Assert.Equal(PrimitiveResult.Stop, AnimateSimPrimitive.Execute(context, operand));
         Assert.Same(clip, person.AnimationPlayback!.Clip);
@@ -1357,7 +1355,7 @@ public sealed class AnimateSimPrimitiveTests
         var stackObjectClip = new AvatarAnimationClip("stack-object", 4, []);
         context.World.ObjectAvatarAnimationTable[(77, 129, 58)] = codeOwnerClip;
         context.World.ObjectAvatarAnimationTable[(88, 129, 58)] = stackObjectClip;
-        byte[] operand = [0, 0, 0, 0, 0, 12, 0, 0]; // ID from parameter, Object scope redirects to Stack Object
+        byte[] operand = [0, 0, 0, 0, 0, 12, 0, 0];
 
         Assert.Equal(PrimitiveResult.Stop, AnimateSimPrimitive.Execute(context, operand));
         Assert.Same(stackObjectClip, person.AnimationPlayback!.Clip);
@@ -1438,7 +1436,7 @@ public sealed class AnimateSimPrimitiveTests
         person[PersonData.PersonAge] = 18;
         person[PersonData.Gender] = 0;
         context.World.StandardWalkFallbackAnimationTable[(152, 0x25)] = new AvatarAnimationClip("fallback", 4, []);
-        byte[] operand = [0, 0, 0, 0, 3, 0x04, 0, 0]; // Parameter[0] == -1, Misc scope, primary mode
+        byte[] operand = [0, 0, 0, 0, 3, 0x04, 0, 0];
 
         var result = AnimateSimPrimitive.Execute(context, operand);
 
@@ -1450,7 +1448,7 @@ public sealed class AnimateSimPrimitiveTests
     public void ParameterizedObjectScopeWithoutStackObjectThrowsCouldNotFindObjectReference()
     {
         var (context, _, _) = PrimitiveTestWorld.Create(stackObject: 0, parameters: [1]);
-        byte[] operand = [0, 0, 0, 0, 0, 0x04, 0, 0]; // Parameter[0], Object scope, StackObject == 0
+        byte[] operand = [0, 0, 0, 0, 0, 0x04, 0, 0];
 
         var error = Assert.Throws<SimulationException>(() => AnimateSimPrimitive.Execute(context, operand));
 
@@ -1500,19 +1498,21 @@ public sealed class AnimateSimPrimitiveTests
         Assert.Equal(1, person.CarryPracticeMode);
         Assert.Equal(0, person.CarryPracticeCachedState);
 
-        byte[] operand = [58, 0, 0, 0, 3, 0x11, 0, 0]; // Misc scope, mode 3 (flags 0 | 4)
+        byte[] operand = [58, 0, 0, 0, 3, 0x11, 0, 0];
         Assert.Equal(PrimitiveResult.Stop, AnimateSimPrimitive.Execute(context, operand));
         Assert.Null(person.CarryAnimationPlayback);
         Assert.Equal(-1, person.CarryPracticeCachedState);
         Assert.True(person.ReachAnimationActive);
 
-        // Mid-playback ticks must keep automatic carry suppressed (005903a7.c sets desiredState = -1 while +0x69 != 0).
+        // Automatic carry animation playback remains suppressed while a primary animation is actively
+        // playing.
         context.World.TickAvatarAnimations(person);
         Assert.Null(person.CarryAnimationPlayback);
         Assert.Equal(-1, person.CarryPracticeCachedState);
         Assert.Equal(PrimitiveResult.Stop, AnimateSimPrimitive.Execute(context, operand));
 
-        // Finishing the primary animation clears +0x69 and restores automatic carry on the next tick.
+        // Completion of the primary animation restores automatic carry animation playback on the following
+        // tick.
         context.World.TickAvatarAnimations(person);
         Assert.True(person.AnimationPlayback!.EndReached);
         Assert.Equal(PrimitiveResult.True, AnimateSimPrimitive.Execute(context, operand));

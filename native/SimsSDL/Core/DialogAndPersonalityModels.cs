@@ -88,9 +88,6 @@ public sealed record GameDialog
     [JsonPropertyName("caller")]
     public required int Caller { get; init; }
 
-    /// <summary>
-    /// True when Mac ObjectDialog::SetParams found its caller was the current tutorial object.
-    /// </summary>
     [JsonPropertyName("tutorial")]
     public bool? Tutorial { get; init; }
 
@@ -133,10 +130,8 @@ public sealed record GameDialog
     [JsonPropertyName("hideBookItem4")]
     public bool? HideBookItem4 { get; init; }
 
-    /// <summary>
-    /// Kinds 12 and 15 also appear in generic object-created message records.
-    /// The engine sets bookMode only for the Spellbook and Cookbook screens.
-    /// </summary>
+    /// <summary>Identifies Spellbook (12) and Cookbook (15) screens, which are distinguished from generic
+    /// dialogs by active book mode settings.</summary>
     [JsonIgnore]
     public bool IsBookScreen => (Kind == 12 || Kind == 15) && BookMode is not null;
 
@@ -144,20 +139,16 @@ public sealed record GameDialog
     public IReadOnlyList<Button> Buttons => Kind switch
     {
         3 => [new Button(Yes ?? "OK", 0)],
-        // Mac ObjectDialog::SetupDialog / Sims.exe cWinObjectDialog adds the OK button only for blocking dialogs;
-        // non-blocking ones get just the MinimizeBox close box.
         0 or 4 => Blocking ? [new Button(Yes ?? "OK", 0)] : [],
         1 => [new Button(Yes ?? "Yes", 0), new Button(No ?? "No", 1)],
         2 => [new Button(Yes ?? "Yes", 0), new Button(No ?? "No", 1), new Button(Cancel ?? "Cancel", 2)],
         10 => [new Button(Yes ?? "Call", 1), new Button(No ?? "Cancel", 0)],
-        // Wardrobe (6) and pet choice (9) are handled by OriginalOutfitPickerOverlay. These button labels are the
-        // original cancel path used if the picker cannot load any choices.
+        // Fallback cancel button for wardrobe (6) and pet selection (9) dialogs.
         6 or 9 => [new Button(Cancel ?? No ?? "Cancel", 0)],
-        // Transform Me (14) is a yes/no choice: code 0 accepts (the script creates the transform), code 1 declines (Charms.iff branches false).
+        // Transform dialog (14) returns code 0 to accept or code 1 to decline.
         14 => [new Button(Yes ?? "Yes", 0), new Button(No ?? "No", 1)],
-        // Spellbook (12) and Cookbook (15) browse their own screen and return code 0 when closed.
+        // Spellbook (12) and Cookbook (15) screens return code 0 when closed.
         12 or 15 => (IsBookScreen || Blocking) ? [new Button(Yes ?? "OK", 0)] : [],
-        // cXObject::ObjectDialog (00436af7.c:44) defaults out-of-range kinds (> 15) to single-button OK when blocking.
         >= 16 => Blocking ? [new Button(Yes ?? "OK", 0)] : [],
         _ => []
     };
@@ -283,15 +274,10 @@ public sealed record GameDialog
     }
 }
 
-/// <summary>
-/// Text selection in Mac cWinPersonality::UpdateClient. The two Live.iff tables use the same seven-entry layout
-/// for each trait: label, three names and three descriptions, after the panel title.
-/// </summary>
+/// <summary>In <c>Live.iff</c>, each personality trait uses a seven-entry string layout containing a label,
+/// three rating names, and three tier descriptions following the panel title.</summary>
 public static class PersonalityPopup
 {
-    /// <summary>
-    /// cWinPeople::TSOnCommand toggles the current popup client off, or switches to the newly clicked client.
-    /// </summary>
     public static int? Selection(int? current, int clicked)
     {
         if (clicked is < 0 or >= 5)
@@ -299,9 +285,6 @@ public static class PersonalityPopup
         return current == clicked ? null : clicked;
     }
 
-    /// <summary>
-    /// Initial pane geometry from cWinLivePopup::RebuildBuffer and Init, before text-driven height expansion.
-    /// </summary>
     public const int Width = 559;
     public const int MinimumHeight = 127;
     public static readonly CGRect PortraitPane = new(0, 0, 168, 127);

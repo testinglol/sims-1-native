@@ -32,7 +32,6 @@ public sealed class FindBestInteractionPrimitiveTests
     [Fact]
     public void TtabIndexIsTheFoundActionKeyRatherThanTheActionTreeOrAutonomyThreshold()
     {
-        // FUN_004760ae reads TtaIndex at +0x18; FUN_0045a9c5 matches that key in the person's table.
         var source = new Interaction(0x4567, 0x2345, 0x100, 9, 1, 0, 0x1234, 0, [], null);
 
         var record = InteractionRecord.FromTtab(source, passed: true, new MotiveAdvertisement[16]);
@@ -54,7 +53,6 @@ public sealed class FindBestInteractionPrimitiveTests
         Assert.All(record.Advertisement.Skip(1), motive => Assert.Equal(default, motive));
     }
 
-    // A candidate with an interaction table (definition field 7) at the origin.
     private static XObject Candidate(short id, short type = 0)
     {
         var definition = PrimitiveTestWorld.Definition(type);
@@ -62,7 +60,6 @@ public sealed class FindBestInteractionPrimitiveTests
         return new XObject(id, definition);
     }
 
-    // Give each source-selected motive the same fixture entry so the nine-row mean preserves the focused test score.
     private static MotiveAdvertisement[] Advertisement(short baseValue, short kind = 0, short scale = 0)
     {
         var table = new MotiveAdvertisement[16];
@@ -71,11 +68,9 @@ public sealed class FindBestInteractionPrimitiveTests
         return table;
     }
 
-    // A passed record: the default family attenuation code 1 is none, so the weight is 1 unless a test changes the code.
     private static InteractionRecord Record(short action, short baseValue = 300, bool autoFirst = false, short code = 1, short kind = 0, short scale = 0) =>
         new(autoFirst, true, code, 0, Advertisement(baseValue, kind, scale), action);
 
-    // The person (id 100) and the candidates, in table order from 1. The lot is forced, so the gate is the body's.
     private static (TreeContext Context, XPerson Me, PrimitiveTestHost Host) Setup(params XObject[] candidates)
     {
         var (context, me, host) = PrimitiveTestWorld.Create();
@@ -138,8 +133,6 @@ public sealed class FindBestInteractionPrimitiveTests
         {
             var fixture = fixtures[index];
             var treeId = unchecked((ushort)(0x7000 + index));
-            // These fixtures represent the already-passed action records used by the score tests. Set the TTAB
-            // descriptor permissions needed for visitors, children, pets and female sims; guard outcomes remain explicit.
             builder.U16(unchecked((ushort)(4100 + index))).U16(treeId).S32(16)
                 .U32(0x1 | 0x10 | 0x200 | 0x400 | (fixture.AutoFirst ? 0x100u : 0u)).S32(fixture.Action)
                 .S32(fixture.AttenuationCode).F32(fixture.CustomAttenuation)
@@ -170,7 +163,6 @@ public sealed class FindBestInteractionPrimitiveTests
             Interactions = NativeTable(4100),
             BehaviorScope = new TreeTable((4100, guard)),
         };
-        // The host deliberately disagrees; its legacy record must not decide a hydrated native TTAB candidate.
         host.Records[5] = [Record(action: 99, baseValue: 900, code: 1) with { Passed = !guardPasses }];
 
         Assert.Equal(chosen ? PrimitiveResult.True : PrimitiveResult.False, Run(context));
@@ -194,7 +186,6 @@ public sealed class FindBestInteractionPrimitiveTests
     [Fact]
     public void FindBestInteractionWritesTheSelectedRecordKeyToThePersonWord()
     {
-        // FUN_0045dea5 stores the TTAB row's +0x18 word; FUN_0045a9c5 later uses that key to find the person's row.
         var (context, me, host) = Setup(Candidate(5));
         host.Records[5] = [Record(action: 0x1234, baseValue: 500)];
 
@@ -234,8 +225,6 @@ public sealed class FindBestInteractionPrimitiveTests
     [Fact]
     public void TheBaselineOfTheMotiveCurveIsSubtractedFromTheAdvertisedMean()
     {
-        // The person's motive 5 is 0.2. A base of 100 advertises 0.1 more to 0.3, so the score is 0.1 (below 0.2). A base of 300
-        // advertises 0.3 more to 0.5, so the score is 0.3.
         var (context, me, host) = Setup(Candidate(5));
         me.Motives[5] = 0.2f;
         host.Records[5] = [Record(action: 7, baseValue: 100)];
@@ -249,7 +238,6 @@ public sealed class FindBestInteractionPrimitiveTests
     [Fact]
     public void TheRandomPickIsTheGameRandomModuloTheCandidatesInScoreOrder()
     {
-        // Scores 0.5 (6), 0.4 (7) and 0.3 (5): seed 2 produces 0x838c, and 0x838c % 3 is 1.
         var (context, me, host) = Setup(Candidate(5), Candidate(6), Candidate(7));
         host.Records[5] = [Record(action: 1, baseValue: 300)];
         host.Records[6] = [Record(action: 2, baseValue: 500)];
@@ -264,7 +252,6 @@ public sealed class FindBestInteractionPrimitiveTests
     [Fact]
     public void TheLogicSkillReducesThePoolOfTheRandomChoice()
     {
-        // The pool is 10 - 16000 / 2000 = 2, so the source draw from seed 1 selects the best (6).
         var (context, me, host) = Setup(Candidate(5), Candidate(6), Candidate(7));
         me[PersonData.LogicSkill] = 16000;
         host.Records[5] = [Record(action: 1, baseValue: 300)];
@@ -278,7 +265,6 @@ public sealed class FindBestInteractionPrimitiveTests
     [Fact]
     public void AnAutoFirstTopCandidateOfAFamilyIsTakenWithoutTheRandomSource()
     {
-        // A nonzero state is classified through the manager table. Class 1 makes the family's top entry (AutoFirst) non-random.
         var (context, me, host) = Setup(Candidate(5), Candidate(6), Candidate(7));
         me.StateValue = 10;
         context.World.StateClasses.Add(new StateClassEntry(10, 1));
@@ -300,7 +286,6 @@ public sealed class FindBestInteractionPrimitiveTests
         context.World.StateClasses.Add(new StateClassEntry(10, 1));
         host.Records[5] = [Record(action: 7, baseValue: 100)];
 
-        // 0.1 is above the visitor minimum (0.05) and below the family one (0.2).
         Assert.Equal(PrimitiveResult.True, Run(context));
         Assert.Equal(5, context.Frame.StackObject);
         Assert.Equal(0, host.RandomCalls);
@@ -313,7 +298,6 @@ public sealed class FindBestInteractionPrimitiveTests
         context.World.SimulatorTuning = new FindBestInteractionTuning { FamilyMinimum = 0.05f };
         host.Records[5] = [Record(action: 7, baseValue: 100)];
 
-        // Not sitting: 0.1 is accepted above the family minimum. Sitting: 0.1 is below the sitting minimum (0.2).
         Assert.Equal(PrimitiveResult.True, Run(context));
         context.Frame.StackObject = 0;
         me[PersonData.Sitting] = 1;
@@ -328,8 +312,6 @@ public sealed class FindBestInteractionPrimitiveTests
     [Fact]
     public void AttenuationWeightsTheScoreByTheDistanceUnlessTheCandidateIsTypeSeven()
     {
-        // A candidate 16 tiles away (256 units along Y) has a distance of 16. Family low attenuation 0.002 gives a weight of
-        // 1 / 1.032, so 0.3 becomes 0.2907, below the 0.295 minimum. Code 1 (none) keeps 0.3. A definition of type 7 is at distance 0.
         var far = Candidate(5);
         far.Position = new ObjectPosition(0, 256, 0);
         var (context, me, host) = Setup(far);
@@ -355,7 +337,6 @@ public sealed class FindBestInteractionPrimitiveTests
     [Fact]
     public void PersonalityKindsScaleTheChangeByTheInvertedFieldOnTheEvenKinds()
     {
-        // Personality 2 is 300; kind 1 reads 300 (change 30, score 0.03) and kind 2 reads 1000 - 300 = 700 (change 70, score 0.07).
         var (context, me, host) = Setup(Candidate(5));
         context.World.SimulatorTuning = new FindBestInteractionTuning { FamilyMinimum = 0.065f };
         me[(PersonData)2] = 300;
@@ -407,14 +388,11 @@ public sealed class FindBestInteractionPrimitiveTests
     [Fact]
     public void FacingModeTwoKeepsCandidatesWithAnEvenRawStackObjectKey()
     {
-        // The rotation 2 plus the person's id 100 is 102, and 102 & 3 is mode 2: only even +0xf0 keys pass.
         var oddId = Candidate(5);
         oddId.RequestKey = 8;
         var evenId = Candidate(6);
         evenId.RequestKey = 9;
         var (context, me, host) = Setup(oddId, evenId);
-        // State 0 is special-cased by FUN_0042ba25 as class 1, which forces facing 0.
-        // Use a nonzero state with no manager entry to exercise the rotation-derived facing.
         me.StateValue = 10;
         host.Lot = host.Lot with { Rotation = 2 };
         host.Records[5] = [Record(action: 1, baseValue: 300)];
@@ -428,14 +406,12 @@ public sealed class FindBestInteractionPrimitiveTests
     [Fact]
     public void FacingModeOneRejectsCandidatesBeyondSevenUnits()
     {
-        // Rotation 1 plus person id 100 selects mode 1. FUN_0045dea5 compares the original distance against
-        // DAT_00666a50 (the shipped value is 7), before scoring any interaction records.
         var tooFar = Candidate(5);
-        tooFar.Position = new ObjectPosition(0, 128, 0); // 8 units: 128 / 16
+        tooFar.Position = new ObjectPosition(0, 128, 0);
         var withinRange = Candidate(6);
-        withinRange.Position = new ObjectPosition(0, 112, 0); // 7 units
+        withinRange.Position = new ObjectPosition(0, 112, 0);
         var (context, me, host) = Setup(tooFar, withinRange);
-        me.StateValue = 10; // class 0; a nonzero state with no class row leaves the facing mode active.
+        me.StateValue = 10;
         host.Lot = host.Lot with { Rotation = 1 };
         host.Records[5] = [Record(action: 1, baseValue: 500)];
         host.Records[6] = [Record(action: 2, baseValue: 300)];
@@ -448,7 +424,6 @@ public sealed class FindBestInteractionPrimitiveTests
     [Fact]
     public void FacingModeThreeKeepsOnlyOddRawStackObjectKeys()
     {
-        // Rotation 3 plus person id 100 selects mode 3; the source tests bit 0 of the candidate's +0xf0 id.
         var evenId = Candidate(6);
         evenId.RequestKey = 8;
         var oddId = Candidate(7);
@@ -548,9 +523,6 @@ public sealed class FindBestInteractionPrimitiveTests
     [Fact]
     public void WhileAClassFortySixObjectIsOnTheLotOnlyRoomlessOrOtherClassCandidatesAreConsidered()
     {
-        // Sims.exe reads categories from cXObject +0xc0 (Behavior.iff Object Data field 59), not from a host class lookup.
-        // The state is in the range 0x28 to 0x31, the family number (0) differs from the lot id (6), and category 0x2e exists.
-        // Candidate 5 (category 5, a room that exists and is inside) is not considered; candidate 6 (category 1) is.
         var (context, me, host) = Setup(Candidate(5), Candidate(6), Candidate(7));
         me.StateValue = 0x28;
         host.Lot = host.Lot with { LotId = 6 };
@@ -566,7 +538,6 @@ public sealed class FindBestInteractionPrimitiveTests
         Assert.Equal(PrimitiveResult.True, Run(context));
         Assert.Equal(6, context.Frame.StackObject);
 
-        // Without the class-46 object, candidate 5 is considered again and has the better score.
         var (without, withoutMe, withoutHost) = Setup(Candidate(5), Candidate(6));
         withoutMe.StateValue = 0x28;
         withoutHost.Lot = withoutHost.Lot with { LotId = 6 };
@@ -694,7 +665,6 @@ public sealed class FindBestInteractionPrimitiveTests
         me.StateValue = 0x28;
         me.SelectionWord5CC = 1;
         me[PersonData.AutonomyLevel] = 1;
-        // AutonomyThreshold = 50 (> AutonomyLevel 1), debug flag 0x80 set, visitor flags 0x01/0x20 clear:
         var builder = new ChunkBuilder().S16(1).S16(6).U16(0x4567).U16(0).S32(16)
             .U32(0x80u).S32(9).S32(1).F32(0).S32(50).S32(-1);
         foreach (var motive in Advertisement(500))
@@ -706,10 +676,8 @@ public sealed class FindBestInteractionPrimitiveTests
             BehaviorScope = new TreeTable(),
         };
 
-        // Without visitor inventory token, rejected even in transit range:
         Assert.Equal(PrimitiveResult.False, Run(context));
 
-        // With visitor inventory token, allowed in transit range despite AutonomyLevel < 50, 0x80 set, and 0x01/0x20 clear:
         const int key = 0x1234;
         var scope = new InteractionScopeTable([new InteractionScopeEntry(0, key, 1)]);
         scope.AvatarObjects.Add(new TypeRecord(99) { ObjectType = 13, AnimationKey = key });

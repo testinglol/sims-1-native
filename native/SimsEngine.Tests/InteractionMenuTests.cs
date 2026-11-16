@@ -99,7 +99,8 @@ public sealed class InteractionMenuTests
         person.Temporaries[1] = 7;
         bookcase.Data[9] = 11;
 
-        // Only spellings in the Sims.exe literal table (0x6c4044-0x6c4100) and the Mac ObjectSim.s table expand.
+        // Interaction menu titles expand recognized format tokens including $Me, $Object, $Local, $Attrib,
+        // and $TimeLocal.
         context.Add("$Me: Study $Object ($Local:1/$Attrib:9/$TimeLocal:0:1/$$Local:1)", bookcase.Id, frame);
 
         Assert.Equal("Bella: Study Bookcase (5/11/1:05pm/$5)", Assert.Single(context.Choices).ActionText);
@@ -142,7 +143,7 @@ public sealed class InteractionMenuTests
             Current = new ActionQueueSlot { Person = person, Owner = target },
         };
 
-        // FUN_0044bf5a copies a command it cannot match unchanged; spellings absent from Sims.exe are not expanded.
+        // Unrecognized string formatting tokens are left unexpanded in the resulting interaction menu text.
         context.Add("Study $Unknown:2 $DynamicObjectName", target.Id, new StackFrame(target.Id, [], []));
 
         Assert.Equal("Study $Unknown:2 $DynamicObjectName", Assert.Single(context.Choices).ActionText);
@@ -224,5 +225,37 @@ public sealed class InteractionMenuTests
 
         Assert.Equal("The Goth home", context.Expand("The $Family home", person, new StackFrame(1, [], [])));
         Assert.Equal((short)3, context.FamilyOutput);
+    }
+
+    [Fact]
+    public void PetActorsOnlyIncludeTargetsWithGuid0x7c4()
+    {
+        var chunk = new ChunkBuilder().S16(1).S16(8);
+        chunk.U16(4096).U16(0).S32(0).U32(0).S32(0).U32(0).F32(0).U32(0).S32(0);
+        var (file, resource) = chunk.InFile("TTAB");
+        var table = InteractionTable.Read(file, resource).WithNames(_ => "PetAction");
+
+        var world = new SimulationWorld();
+        var pet = world.Add(new XPerson(1, PrimitiveTestWorld.Definition(2))
+        {
+            TypeRecord = new TypeRecord(1),
+            AnimatorBodyStringMode = 2,
+        });
+        var ordinaryTarget = world.Add(new XObject(2, PrimitiveTestWorld.Definition())
+        {
+            TypeRecord = new TypeRecord(2) { Interactions = table },
+        });
+        var petSocialTarget = world.Add(new XObject(3, PrimitiveTestWorld.Definition())
+        {
+            TypeRecord = new TypeRecord(0x7c4) { Interactions = table },
+        });
+
+        Assert.Empty(InteractionMenus.Read(world, pet, ordinaryTarget));
+        var petChoices = InteractionMenus.Read(world, pet, petSocialTarget);
+        Assert.Equal(["PetAction"], petChoices.Select(c => c.ActionText));
+
+        pet.AnimatorBodyStringMode = 0;
+        var humanChoices = InteractionMenus.Read(world, pet, ordinaryTarget);
+        Assert.Equal(["PetAction"], humanChoices.Select(c => c.ActionText));
     }
 }

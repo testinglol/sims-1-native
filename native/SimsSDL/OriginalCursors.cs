@@ -1,9 +1,5 @@
 namespace SimsSDL;
 
-/// <summary>
-/// The original <c>UIGraphics/Shared/cursors/*.cur</c> set (FUN_004efb69 loads these 46 files at start-up).
-/// SDL cursors are created lazily from the .cur files in the game content and cached by file name.
-/// </summary>
 public sealed class OriginalCursors
 {
     private readonly GameContent _content;
@@ -25,7 +21,6 @@ public sealed class OriginalCursors
         _content = content;
     }
 
-    /// <summary>Shows the named cursor (a file stem such as <c>LivePerson</c>); a missing file falls back to the system arrow.</summary>
     public void Show(string name)
     {
         if (string.Equals(name, _current, StringComparison.Ordinal))
@@ -60,7 +55,8 @@ public sealed class OriginalCursors
         }
     }
 
-    /// <summary>Decodes a Windows .cur (ICONDIR, then a BITMAPINFOHEADER DIB whose height counts the XOR bitmap and the AND mask).</summary>
+    /// <summary>Decodes a Windows cursor containing an ICONDIR structure and a BITMAPINFOHEADER DIB whose
+    /// height encompasses both the XOR image and AND mask.</summary>
     public static unsafe nint MakeCursor(byte[] data)
     {
         ArgumentNullException.ThrowIfNull(data);
@@ -77,7 +73,6 @@ public sealed class OriginalCursors
         }
     }
 
-    /// <summary>Writes the cursor as a BMP, for <c>--script</c> checks of the decoder.</summary>
     public unsafe bool Dump(string name, string path)
     {
         byte[]? data = ReadCursorBytes(name);
@@ -108,7 +103,7 @@ public sealed class OriginalCursors
         if (bytes.Length <= 22 || iconType is not (1 or 2) || U16(4) < 1)
             return null;
 
-        // MOVEIN.cur is stored as an icon (type 1), whose directory fields hold planes and bit count instead of a hotspot.
+        // MOVEIN.cur is typed as an icon (1), storing planes instead of a hotspot.
         bool isCursor = iconType == 2;
         hotX = isCursor ? U16(10) : 0;
         hotY = isCursor ? U16(12) : 0;

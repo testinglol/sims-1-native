@@ -6,10 +6,9 @@ using SimsEngine.World;
 
 namespace SimsSimulation;
 
-/// <summary>Wallpaper catalog projection for the native runtime. Build.iff STR# 0x83 supplies base price, name
-/// and description triples; standalone .wll files in GameData/Walls supply dynamic wallpapers starting at ID 256
-/// (FUN_004c5715, FUN_004c5da6). Base thumbnails use walls.iff BMP_ 512 + pattern (FUN_004cbf52); popup previews
-/// render the isometric wall segment at medium zoom (FUN_004e5493, FUN_00540c42).</summary>
+/// <summary>Build.iff STR# 0x83 supplies base wallpaper price, name, and description triples, while
+/// standalone .wll files supply dynamic wallpapers starting at ID 256. Base thumbnails use walls.iff BMP_
+/// chunks (512 plus pattern ID), and popup previews render the isometric wall segment at medium zoom.</summary>
 internal static class WallCatalogPage
 {
     private sealed record Item(int Id, string Name, string Description, int Price, string File, IffFile ArtFile, ushort PatternSpriteId, ushort? BmpChunkId);
@@ -109,7 +108,7 @@ internal static class WallCatalogPage
         return new { file, columns, rows = 1 };
     }
 
-    /// <summary>FUN_004e58e7 / FUN_004e5c2f: renders a 37x37 thumbnail for dynamic .wll files that lack a pre-baked BMP_ chunk.</summary>
+    /// <summary>Renders a 37x37 thumbnail for dynamic .wll files that lack a pre-baked BMP_ chunk.</summary>
     private static object? WallThumbnailIcon(IffFile walls, IffFile patternFile, ushort patternSpriteId, string session)
     {
         try
@@ -143,7 +142,8 @@ internal static class WallCatalogPage
                 var t = 54 + i * 4;
                 bytes[t] = 255; bytes[t + 2] = 255; bytes[t + 3] = 255;
             }
-            // Box-average the 38px wide (6px left cap + 32px face) x 118px visible height wall segment into x=8..28 (21px) x y=0..36 (37px).
+            // Downsamples the 38px wide (6px cap plus 32px face) by 118px high wall segment into the 37x37
+            // icon area.
             for (var dstY = 0; dstY < boxSize; dstY++)
             {
                 var y0 = 17 + dstY * 118 / boxSize;
@@ -199,7 +199,7 @@ internal static class WallCatalogPage
         { return null; }
     }
 
-    /// <summary>FUN_004e5493 & FUN_00540c42: renders the 160x119 isometric wall/fence segment preview for cWinCatalogPopup.</summary>
+    /// <summary>Renders a 160x119 isometric wall and fence segment preview for the catalog popup.</summary>
     internal static object? WallSegmentPreview(IffFile walls, IffFile patternFile, ushort style, ushort patternSpriteId, string session)
     {
         try
@@ -218,9 +218,8 @@ internal static class WallCatalogPage
 
             const int boxW = 160;
             const int boxH = 119;
-            // FUN_004e5493 lines 15-23:
-            // iVar4 = 80, iVar2 = (119 * 3) / 4 = 89.
-            // iVar3 = iVar2 + 14 (103) for style 1; iVar2 - 16 (73) for style 2, 13, 14; iVar2 - 2 (87) for style 12.
+            // Calculates the preview vertical baseline with per-style offsets: +14 for style 1, -16 for
+            // styles 2, 13, and 14, and -2 for style 12.
             var anchorX = boxW / 2;
             var baseY = (boxH * 3) / 4;
             var anchorY = style switch
@@ -229,7 +228,6 @@ internal static class WallCatalogPage
                 12 => baseY - 2,
                 _ => baseY + 14,
             };
-            // FUN_00540c42 lines 96-103: at zoom 2, half-width is 16 and bottom is anchorY + 16.
             var bottomY = anchorY + 16;
             var faceLeftX = anchorX - 16;
 
@@ -271,7 +269,6 @@ internal static class WallCatalogPage
             var faceTopY = bottomY - faceArt.Height;
             if (style == 1)
             {
-                // Draw 6px left end cap from frame 0.
                 var capArt = patternSprite.Frames[0];
                 var capMask = maskSprite.Frames[0];
                 BlitMaskedFrame(capArt, capMask, faceLeftX - 6, bottomY - capArt.Height, 0, 6);

@@ -5,7 +5,8 @@ namespace SimsEngine.Tests;
 
 public sealed class MakeNewCharacterPrimitiveTests
 {
-    // Operand: the skin local (byte 0), the gender local (byte 1), the B local (byte 2) and the mode (byte 3).
+    // The operand encodes the skin tone local index in byte 0, gender local in byte 1, personality local in
+    // byte 2, and creation mode in byte 3.
     private static byte[] Operand(byte skin = 0, byte gender = 1, byte b = 0, byte mode = 2) => [skin, gender, b, mode, 0, 0, 0, 0];
 
     private static (TreeContext Context, PrimitiveTestHost Host) Lot()

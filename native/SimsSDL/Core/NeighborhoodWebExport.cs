@@ -2,9 +2,6 @@ using System.Text.Json.Serialization;
 
 namespace SimsSDL.Core;
 
-/// <summary>
-/// Builds the neighborhood Web pages from the game's installed templates, as Sims.exe FUN_0055cb93 does.
-/// </summary>
 public static class NeighborhoodWebExport
 {
     public sealed record MemberProfile
@@ -244,7 +241,6 @@ public static class NeighborhoodWebExport
         "Libra", "Scorpio", "Sagittarius", "Capricorn", "Aquarius", "Pisces",
     ];
 
-    /// <summary>Writes the Web page set under the profile and returns the page that the original opens.</summary>
     public static string Export(
         string templates,
         IReadOnlyList<Family> families,
@@ -252,8 +248,6 @@ public static class NeighborhoodWebExport
         InstalledGameLanguage? language = null)
     {
         var resolvedLanguage = language ?? InstalledGameLanguage.EnglishUS;
-        // Sims.exe's internal path uses Web_Templates; the Complete Collection install on disk
-        // stores the same directory as "Web Templates" (the game's Windows-to-macOS extraction name).
         (string templateLanguage, string webLanguageCode) = resolvedLanguage.Code switch
         {
             2 => ("English", "en"),
@@ -377,7 +371,6 @@ public static class NeighborhoodWebExport
         }
         catch
         {
-            // Ignore cleanup errors before recreating destination directory.
         }
         Directory.CreateDirectory(destination);
 
@@ -385,7 +378,7 @@ public static class NeighborhoodWebExport
         {
             ["sims_web_character_set"] = "iso-8859-1",
             ["sims_web_language_code"] = webLanguageCode,
-            // The installed Complete Collection stores the original pack mask in SIMI GameEdition.
+            // The SIMI resource stores the expansion pack bitmask in GameEdition.
             ["sims_game_edition"] = "255",
             ["sims_neighborhood_numfamilies"] = exportFamilies.Count.ToString(),
         };
@@ -473,12 +466,11 @@ public static class NeighborhoodWebExport
             {
                 foreach (string leftover in Directory.EnumerateFiles(directory, "*.html"))
                 {
-                    try { File.Delete(leftover); } catch { /* ignore */ }
+                    try { File.Delete(leftover); } catch { }
                 }
             }
             catch
             {
-                // Ignore directory scan errors for stale HTML cleanup.
             }
 
             foreach (string page in new[] { "familyhome.html", "house.html" })
@@ -722,7 +714,8 @@ public static class NeighborhoodWebExport
         return ms.ToArray();
     }
 
-    /// <summary>Replaces ^^^^tag^^^^ markers; tags without a supplied value become empty.</summary>
+    /// <summary>Replaces <c>^^^^tag^^^^</c> template placeholders, clearing any tags without matching
+    /// values.</summary>
     public static string Fill(string template, IReadOnlyDictionary<string, string> values)
     {
         byte[] data = File.ReadAllBytes(template);
@@ -781,7 +774,7 @@ public static class NeighborhoodWebExport
         {
             if (File.Exists(tempPath))
             {
-                try { File.Delete(tempPath); } catch { /* ignore */ }
+                try { File.Delete(tempPath); } catch { }
             }
         }
     }

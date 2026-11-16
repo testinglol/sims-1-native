@@ -1,42 +1,22 @@
+using System.Runtime.CompilerServices;
 using SimsEngine.Formats;
 
 namespace SimsEngine.Content;
 
-/// <summary>One file the character search path finds: its name, the search folder it was found in (a Windows path
-/// below the installation, as Sims.exe spells it), and where its bytes come from.</summary>
 public sealed record CharacterFile(string Name, string Folder, string Source, Func<ReadOnlyMemory<byte>> Read)
 {
     public string Extension => Path.GetExtension(Name);
 }
 
-/// <summary>The folders Sims.exe searches for character files (suits, skeletons, meshes, textures and animations),
-/// in the order it searches them.
-/// <para>Sims.exe FUN_005837c0 builds two ';'-separated search paths. The skins path holds GameData\Skins\, then the
-/// folders cmx, cmx2 to cmx10, cmxpreview, People1, People2, Accessories1 and Accessories2 under GameData\ that
-/// exist, then, when the game setting short is above 3, ExpansionShared's Skins, SkinsBuy, Animations and Skeletons,
-/// TemplateNPCs and ExpansionShared's Accessories, then each installed pack's Skins, Animations and Accessories from
-/// Makin' Magic (bit 0x80) back to House Party (bit 2), then Livin' Large's ExpansionPackAssets (bit 1), and last the
-/// folders of downloaded objects (FUN_0043beaa). FUN_0059f6cf then reads every .cmx and .bcf file on it. The
-/// animation path holds GameData\Animation\ and the same downloaded-object folders; FUN_005a009d reads its files.
-/// A third path, the texture path FUN_00413d0e builds while "Initializing vitaboy" and hands to FUN_005caef6, holds,
-/// when the setting short is above 3, ExpansionShared's Accessories, Skins and SkinsBuy and TemplateNPCs, then each
-/// installed pack's Accessories and Skins (Makin' Magic back to House Party), Livin' Large's ExpansionPackAssets,
-/// GameData\Skins\, GameData\Textures2\, GameData\Textures\, and the downloaded-object folders, first registered
-/// first.</para>
-/// <para>Inferred, not traced: a .far in a folder is read as part of that folder, and a .far in a pack's folder holds
-/// that pack's subfolders as entry folders (ExpansionPack2.far's "Skins/" entries are ExpansionPack2\Skins\); loose
-/// files come before archive entries; names compare without case and the first file found under a name is the one
-/// used; downloaded-object folders are those of objects from the Downloads scan, the last registered first (the
-/// registry flag FUN_0043beaa tests, entry +0xb4 bits 0xc == 8, is not decoded, nor is its .ndx test).</para></summary>
+/// <summary>Resolves character asset files across base game, expansion pack, and download directories in
+/// strict search precedence order. Discovers loose files and archive entries, matching filenames
+/// case-insensitively with earlier search locations taking priority.</summary>
 public sealed class CharacterSearchPath
 {
     private readonly Dictionary<string, CharacterFile> _byName = new(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>The search folders that exist, in order, with what they resolved to.</summary>
     public IReadOnlyList<(string Folder, IReadOnlyList<string> Sources)> Folders { get; }
-    /// <summary>Every file found, in search order (shadowed files included).</summary>
     public IReadOnlyList<CharacterFile> Files { get; }
-    /// <summary>Files whose name an earlier folder already supplied.</summary>
     public IReadOnlyList<CharacterFile> Shadowed { get; }
 
     private CharacterSearchPath(List<(string, IReadOnlyList<string>)> folders, List<CharacterFile> files)
@@ -49,14 +29,12 @@ public sealed class CharacterSearchPath
         Shadowed = shadowed;
     }
 
-    /// <summary>The file named <paramref name="name"/> (with its extension), first in search order.</summary>
     public CharacterFile? Find(string name) => _byName.GetValueOrDefault(name);
 
-    /// <summary>The files used under each name with <paramref name="extension"/> (".cmx", ".skn", ...).</summary>
     public IEnumerable<CharacterFile> OfExtension(string extension) =>
         _byName.Values.Where(file => string.Equals(file.Extension, extension, StringComparison.OrdinalIgnoreCase));
 
-    // The pack bits of the game setting, highest first as FUN_005837c0 adds them, with the pack's root folder names.
+    // Expansion pack bitmasks and root folder names ordered from newest pack to oldest.
     private static readonly (int Bit, string[] Roots)[] Packs =
     [
         (0x80, ["ExpansionPack7"]),
@@ -70,7 +48,6 @@ public sealed class CharacterSearchPath
 
     private static readonly string[] LivinLarge = ["ExpansionPack", "ExpansionPack1"];
 
-    /// <summary>The skins path. <paramref name="registry"/> supplies the downloaded objects' folders.</summary>
     public static CharacterSearchPath Skins(string game, ObjectRegistry? registry = null)
     {
         var folders = new List<string> { @"GameData\Skins" };
@@ -79,7 +56,7 @@ public sealed class CharacterSearchPath
         folders.Add(@"GameData\cmxpreview");
         folders.AddRange([@"GameData\People1", @"GameData\People2", @"GameData\Accessories1", @"GameData\Accessories2"]);
         var gameEditionMask = registry?.GameEditionMask ?? DetectGameEditionMask(game);
-        // FUN_005837c0 uses the game-edition short, not folder presence, to include shared pack assets.
+        // Includes shared expansion directories only when pack edition mask exceeds 3.
         if (gameEditionMask > 3)
             folders.AddRange([@"ExpansionShared\Skins", @"ExpansionShared\SkinsBuy", @"ExpansionShared\Animations",
                 @"ExpansionShared\Skeletons", "TemplateNPCs", @"ExpansionShared\Accessories"]);
@@ -90,7 +67,6 @@ public sealed class CharacterSearchPath
         return Build(game, folders, registry, lastRegisteredFirst: true);
     }
 
-    /// <summary>The texture path (FUN_00413d0e).</summary>
     public static CharacterSearchPath Textures(string game, ObjectRegistry? registry = null)
     {
         var gameEditionMask = registry?.GameEditionMask ?? DetectGameEditionMask(game);
@@ -105,14 +81,13 @@ public sealed class CharacterSearchPath
         return Build(game, folders, registry, lastRegisteredFirst: false);
     }
 
-    /// <summary>The animation path.</summary>
     public static CharacterSearchPath Animation(string game, ObjectRegistry? registry = null) =>
         Build(game, [@"GameData\Animation"], registry, lastRegisteredFirst: true);
 
     private static string? Root(string game, string[] names) =>
         names.FirstOrDefault(name => ObjectRegistry.Resolve(game, name) is not null);
 
-    // FUN_00413d0e sets these edition bits from installed marker files; do not infer installation from directories.
+    // Determines installed expansion mask from marker files rather than directories.
     private static byte DetectGameEditionMask(string game)
     {
         bool HasFile(string windowsPath)
@@ -134,6 +109,30 @@ public sealed class CharacterSearchPath
         return mask;
     }
 
+    private static readonly ConditionalWeakTable<FarArchive, Dictionary<string, List<(string FileName, FarArchive.Entry Entry)>>> ArchiveDirectoryCache = new();
+
+    private static Dictionary<string, List<(string FileName, FarArchive.Entry Entry)>> DirectoryIndex(FarArchive archive) =>
+        ArchiveDirectoryCache.GetValue(archive, static far =>
+        {
+            var index = new Dictionary<string, List<(string FileName, FarArchive.Entry Entry)>>(StringComparer.OrdinalIgnoreCase);
+            foreach (var entry in far.Entries)
+            {
+                var raw = entry.Name;
+                var slash = raw.LastIndexOf('/');
+                var backslash = raw.LastIndexOf('\\');
+                var sep = Math.Max(slash, backslash);
+                var folder = sep < 0 ? "" : raw[..sep].Replace('\\', '/');
+                var fileName = sep < 0 ? raw : raw[(sep + 1)..];
+                if (!index.TryGetValue(folder, out var bucket))
+                {
+                    bucket = [];
+                    index[folder] = bucket;
+                }
+                bucket.Add((fileName, entry));
+            }
+            return index;
+        });
+
     private static CharacterSearchPath Build(string game, List<string> windowsFolders, ObjectRegistry? registry, bool lastRegisteredFirst)
     {
         var archives = new Dictionary<string, FarArchive>(StringComparer.Ordinal);
@@ -152,8 +151,7 @@ public sealed class CharacterSearchPath
                     if (!path.EndsWith(".far", StringComparison.OrdinalIgnoreCase))
                         found.Add(new CharacterFile(Path.GetFileName(path), windowsFolder, path, () => File.ReadAllBytes(path)));
             }
-            // Archives in the folder itself (entries without a folder), then archives in its parent whose entries
-            // sit in a folder of this folder's name.
+            // Checks archives in the folder, then parent archives matching folder name.
             var parts = windowsFolder.Split('\\');
             var parent = parts.Length > 1 ? ObjectRegistry.Resolve(game, string.Join('\\', parts[..^1])) : null;
             foreach (var (directory, prefix) in new[] { (folder, ""), (parent, parts[^1]) })
@@ -162,17 +160,14 @@ public sealed class CharacterSearchPath
                 foreach (var path in Directory.EnumerateFiles(directory, "*.far").Order(StringComparer.OrdinalIgnoreCase))
                 {
                     var archive = Archive(path);
-                    var any = false;
-                    foreach (var entry in archive.Entries)
+                    var dirIndex = DirectoryIndex(archive);
+                    if (!dirIndex.TryGetValue(prefix, out var bucket)) continue;
+                    sources.Add(prefix.Length == 0 ? path : path + "::" + prefix + "/");
+                    foreach (var (fileName, entry) in bucket)
                     {
-                        var name = entry.Name.Replace('\\', '/');
-                        var slash = name.LastIndexOf('/');
-                        var entryFolder = slash < 0 ? "" : name[..slash];
-                        if (!string.Equals(entryFolder, prefix, StringComparison.OrdinalIgnoreCase)) continue;
-                        any = true;
-                        found.Add(new CharacterFile(name[(slash + 1)..], windowsFolder, path + "::" + entry.Name, () => archive.Read(entry)));
+                        var captured = entry;
+                        found.Add(new CharacterFile(fileName, windowsFolder, path + "::" + captured.Name, () => archive.Read(captured)));
                     }
-                    if (any) sources.Add(prefix.Length == 0 ? path : path + "::" + prefix + "/");
                 }
             }
             if (sources.Count == 0) return;
@@ -193,17 +188,16 @@ public sealed class CharacterSearchPath
 
                 var archive = Archive(folder.Path);
                 var logicalFolder = Path.GetRelativePath(game, folder.Path).Replace('/', '\\') + "\\" + folder.ArchivePrefix.Replace('/', '\\');
-                var found = new List<CharacterFile>();
-                foreach (var entry in archive.Entries)
+                var dirIndex = DirectoryIndex(archive);
+                var normalizedPrefix = folder.ArchivePrefix.Replace('\\', '/');
+                if (dirIndex.TryGetValue(normalizedPrefix, out var bucket) && bucket.Count > 0)
                 {
-                    var name = entry.Name.Replace('\\', '/');
-                    var slash = name.LastIndexOf('/');
-                    var entryFolder = slash < 0 ? "" : name[..slash];
-                    if (!string.Equals(entryFolder, folder.ArchivePrefix, StringComparison.OrdinalIgnoreCase)) continue;
-                    found.Add(new CharacterFile(name[(slash + 1)..], logicalFolder, folder.Path + "::" + entry.Name, () => archive.Read(entry)));
-                }
-                if (found.Count > 0)
-                {
+                    var found = new List<CharacterFile>(bucket.Count);
+                    foreach (var (fileName, entry) in bucket)
+                    {
+                        var captured = entry;
+                        found.Add(new CharacterFile(fileName, logicalFolder, folder.Path + "::" + captured.Name, () => archive.Read(captured)));
+                    }
                     folders.Add((logicalFolder, [folder.Path + "::" + folder.ArchivePrefix + "/"]));
                     files.AddRange(found);
                 }

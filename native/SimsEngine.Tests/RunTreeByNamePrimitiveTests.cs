@@ -5,22 +5,19 @@ using SimsEngine.Simulation;
 
 namespace SimsEngine.Tests;
 
-/// <summary>Run Tree By Name (0x1c), after FUN_0044ba66: the waiting frame's result, the string and mode decoding, the
-/// stack object check and its errors. Named-tree resolution is covered by GlobalLibraryTests.</summary>
 public class RunTreeByNamePrimitiveTests
 {
     private const short StackObjectId = 5;
     private const short TableWord = 0x0102;
 
-    /// <summary>The operand: the string table in word 0, the flags in byte 2, the string index in byte 4 and the mode in
-    /// byte 5.</summary>
+    /// <summary>Operand layout encodes the string table ID in word 0, flags in byte 2, string index in byte
+    /// 4, and execution mode in byte 5.</summary>
     private static byte[] Operand(short table = TableWord, byte index = 1, byte mode = 0, byte flags = 0) =>
         [(byte)table, (byte)(table >> 8), flags, 0, index, mode, 0, 0];
 
     private static Bhav Caller(byte mode = 0, byte index = 1) =>
         PrimitiveTestWorld.Tree(0, (0x1c, 0xFE, 0xFF, Operand(mode: mode, index: index)));
 
-    /// <summary>A stack that runs the tests' primitives: an Expression and Run Tree By Name, with the frame stack.</summary>
     private sealed class PrimitiveStack(SimulationWorld world, XObject me) : TreeStack
     {
         protected override PrimitiveResult RunPrimitive(StackFrame frame, BhavInstruction instruction)
@@ -75,7 +72,6 @@ public class RunTreeByNamePrimitiveTests
     {
         var (context, host) = Lot();
         host.Strings[(TableWord, 0)] = "Greet";
-        // The name and stack object exist, but no behavior scope is attached to the stack object's type record.
         Assert.False(TreeRunner.Run(context, Caller(), 0, new TreeTable()));
         Assert.Equal(new[] { (TableWord, 0) }, host.StringRequests);
     }
@@ -94,7 +90,7 @@ public class RunTreeByNamePrimitiveTests
     {
         var (context, host) = Lot();
         host.Strings[(TableWord, 3)] = "";
-        // Mode 3 is bad, but the empty name answers first (the handler reads the string before the mode).
+        // When running a tree by name, empty string resolution fails before mode validation.
         Assert.False(TreeRunner.Run(context, Caller(mode: 3), 0, new TreeTable()));
     }
 
@@ -173,8 +169,8 @@ public class RunTreeByNamePrimitiveTests
     [InlineData(false)]
     public void WaitingFrameAnswersTheResultOfTheTreeItStarted(bool result)
     {
-        // Frames: a marker (waiting), the running tree (waiting, as a mode 2 call leaves it) and the tree it started,
-        // which returns the result. The waiting frame reads LastResult and branches to its true or false target.
+        // Mode 2 tree calls leave the caller frame in a waiting state; upon completion, the waiting frame
+        // consumes the result to branch.
         var (context, _) = Lot();
         var table = new TreeTable();
         var stack = new PrimitiveStack(context.World, context.Me);

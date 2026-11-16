@@ -3,9 +3,7 @@ using SimsEngine.Simulation;
 
 namespace SimsSimulation;
 
-/// <summary>The family and fame lookups of the dynamic string parser (Sims.exe FUN_0044bf5a) for the loaded lot: every
-/// family of Neighborhood.iff (its FAMI record and FAMs name, searched by family number as FUN_00425db3 does) and the
-/// fame titles of fame.iff STR# 1.</summary>
+/// <summary>Provides family names and fame titles for dynamic dialog string substitutions.</summary>
 internal sealed class MenuTextSources(SimulationWorld world, IReadOnlyList<string>? fameTitles, IffFile? neighborhood, byte language)
     : ISimulationMenuTextSources
 {
@@ -21,7 +19,8 @@ internal sealed class MenuTextSources(SimulationWorld world, IReadOnlyList<strin
         return new MenuTextSources(world, titles, neighborhood, language);
     }
 
-    /// <summary>The FAMI chunk whose id is the family number, else the one whose stored family number matches.</summary>
+    /// <summary>Finds a family record whose chunk ID matches the family number, falling back to matching
+    /// the stored internal family index.</summary>
     private (IffChunk Chunk, Family Family)? Find(int familyNumber)
     {
         if (neighborhood is null) return null;
@@ -46,7 +45,8 @@ internal sealed class MenuTextSources(SimulationWorld world, IReadOnlyList<strin
     public int? FamilyAssets(int familyNumber)
     {
         if (Find(familyNumber) is not { } found) return null;
-        // The active family's funds are live in the budget host; every other family keeps them in its FAMI record.
+        // Live household funds for the active family come from the budget host, while other families read
+        // directly from their saved record.
         var live = world.FamilyBudget is FamilyBudget { ActiveFamily: { } active, FamilyChunkId: { } chunk } && chunk == found.Chunk.Id
             ? world.FamilyBudget.ReadFamilyBudget() + active.Value : (int?)null;
         return live ?? unchecked(found.Family.Budget + found.Family.Value);

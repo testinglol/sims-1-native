@@ -34,7 +34,8 @@ public sealed class AlterBudgetPrimitiveTests
         return (new TreeContext(world, me, frame), me, budget);
     }
 
-    // Scope, owner byte, data, flags, expense type. Bytes 5 and 7 are unused.
+    // AlterBudget primitive operand layout: scope, owner byte, 16-bit data value, flags, and expense type,
+    // with bytes 5 and 7 unused.
     private static byte[] Operand(byte scope, byte owner, short data, byte flags, byte expenseType) =>
         [scope, owner, (byte)data, (byte)(data >> 8), flags, 0, expenseType, 0];
 
@@ -60,7 +61,8 @@ public sealed class AlterBudgetPrimitiveTests
     [Fact]
     public void FailsAChargeThatTheBudgetCannotCover()
     {
-        // The original test: a charge fails whenever the budget is below it, not only when the budget is negative.
+        // Budget deductions fail when available funds are insufficient to cover the expense, not only when
+        // the balance is already negative.
         var (context, _, budget) = World(10);
         Assert.Equal(PrimitiveResult.False, AlterBudgetPrimitive.Execute(context, Operand(0, 0, 500, 0, 0)));
         Assert.Equal(10, budget.Funds);
@@ -83,7 +85,7 @@ public sealed class AlterBudgetPrimitiveTests
     [Fact]
     public void NegatedAmountIsIncomeAndNeverFails()
     {
-        // Flag bit 1 negates the amount, so 100 becomes -100: the budget rises and nothing is tested.
+        // Flag bit 1 negates the transaction amount, crediting the budget without balance checks.
         var (context, _, budget) = World(0);
         Assert.Equal(PrimitiveResult.True, AlterBudgetPrimitive.Execute(context, Operand(0, 0, 100, 2, 0)));
         Assert.Equal(100, budget.Funds);
@@ -101,7 +103,6 @@ public sealed class AlterBudgetPrimitiveTests
     [Fact]
     public void ReadsTheAmountFromItsScope()
     {
-        // Scope 1 is parameter 1 (value 1), scope 2 is local 2 (value 7), and scope 3 takes owner 8 (temporary) with data 4.
         var (context, me, budget) = World(1000);
         me.Temporaries[4] = 33;
         Assert.Equal(PrimitiveResult.True, AlterBudgetPrimitive.Execute(context, Operand(1, 0, 1, 0, 0)));
@@ -114,7 +115,7 @@ public sealed class AlterBudgetPrimitiveTests
     public void ChecksTheExpenseTypeBeforeTheAmount()
     {
         var (context, _, _) = World(1000);
-        // Owner 0xEE is not an owner, but the expense type (9) is refused first.
+        // Expense type validation precedes checking variable scope owners in AlterBudget.
         Assert.Equal(SimulationError.BadExpenseTypeSpecified, Fails(() => AlterBudgetPrimitive.Execute(context, Operand(3, 0xEE, 0, 0, 9))));
         Assert.Equal(SimulationError.IllegalOwnerFieldInDataReference, Fails(() => AlterBudgetPrimitive.Execute(context, Operand(3, 0xEE, 0, 0, 8))));
     }

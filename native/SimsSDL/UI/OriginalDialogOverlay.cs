@@ -54,14 +54,14 @@ public sealed class OriginalDialogOverlay
         public sealed record Cancel : PhoneBookAction;
     }
 
-    private const double ScrollbarWidth = 17; // WinScrol.bmp is 204x20 across 12 cells (005f3a06.c:199).
+    private const double ScrollbarWidth = 17; // Scrollbar texture contains 12 horizontal cells of 17x20 pixels each.
     private const double ScrollbarButtonHeight = 20;
-    private const double ScrollbarReservedWidth = 20; // cWinListBox reserves 20px on the right (005f4e36.c:37, 005f51e0.c:32).
-    private const int PhoneBookVisibleRows = 10; // cWinPhoneBook sets both cWinListBox page counts to 10 (0052242d.c:103, 127).
-    private static readonly (byte R, byte G, byte B) DefaultTextColor = (195, 205, 205); // DAT_006f2a44 (004ff397.c:26, 91).
-    private static readonly (byte R, byte G, byte B) SelectedTextColor = (0, 255, 255);  // DAT_006f2a4c (004ff397.c:28, 63, 71).
-    private static readonly (byte R, byte G, byte B) HoverTextColor = (255, 255, 255);   // DAT_006f2a48 (004ff397.c:27, 65, 72).
-    private static readonly (byte R, byte G, byte B) DisabledTextColor = (64, 93, 95);   // DAT_006f2a50 (004ff397.c:29, 67, 73).
+    private const double ScrollbarReservedWidth = 20; // List boxes reserve a 20-pixel right margin for scrollbar controls.
+    private const int PhoneBookVisibleRows = 10;
+    private static readonly (byte R, byte G, byte B) DefaultTextColor = (195, 205, 205);
+    private static readonly (byte R, byte G, byte B) SelectedTextColor = (0, 255, 255);
+    private static readonly (byte R, byte G, byte B) HoverTextColor = (255, 255, 255);
+    private static readonly (byte R, byte G, byte B) DisabledTextColor = (64, 93, 95);
 
     public GameDialog Dialog { get; }
     public SimsBitmapFont Font { get; }
@@ -73,10 +73,8 @@ public sealed class OriginalDialogOverlay
     public SimsBitmapFont TooltipFont { get; }
     public UIDevice Device { get; }
 
-    /// <summary>
-    /// The original's navy dialog art as nine-slice sheets: the neighborhood screens' soft-edged tiler, and the control
-    /// panel's bevelled popup tile on a lot. <c>Edge</c> is one slice of each sheet in pixels.
-    /// </summary>
+    /// <summary>Nine-slice dialog background frames for neighborhood screens (soft-edged) and lot views
+    /// (beveled), where <c>Edge</c> specifies the slice border width in pixels.</summary>
     public (UITexture Texture, double Edge) NeighborhoodFrame { get; }
     public (UITexture Texture, double Edge) LotFrame { get; }
     public UITexture ButtonTexture { get; }
@@ -93,10 +91,8 @@ public sealed class OriginalDialogOverlay
     public UITexture TooltipBackground { get; }
     public UITexture TooltipBorder { get; }
 
-    /// <summary>
-    /// The original book window bitmap (<c>kMagicBookBkg</c>, resource 82) is larger than its 600x382 content rect so
-    /// its frame can overhang the controls. Keep its native pixel dimensions when drawing it.
-    /// </summary>
+    /// <summary>The magic book background bitmap exceeds its 600x382 content area so decorative borders
+    /// overhang dialog controls.</summary>
     public Image? BookBackground { get; }
     public Image? BookRowBackground { get; }
     public Image? BookCatalogButton { get; }
@@ -133,9 +129,8 @@ public sealed class OriginalDialogOverlay
     private double _messageSideOriginX;
     private double _messageFullOriginX;
 
-    /// <summary>
-    /// Vertical <c>WinScrol.bmp</c> draws (Up arrow, Track, Down arrow, Thumb) for tall <c>cWinMessage</c> bodies and <c>cWinPhoneBook</c> lists.
-    /// </summary>
+    /// <summary>Scrollbar draw calls (up arrow, track, down arrow, and thumb) rendered from
+    /// <c>WinScrol.bmp</c> for scrollable dialog bodies and lists.</summary>
     private readonly List<(UITexture Texture, CGRect Rect, Vector4 UV)> _scrollButtonDraws = [];
     public IReadOnlyList<(UITexture Texture, CGRect Rect, Vector4 UV)> ScrollButtonDraws => _scrollButtonDraws;
     private CGRect _messageScrollbarRect;
@@ -228,9 +223,9 @@ public sealed class OriginalDialogOverlay
         Dialog = dialog;
         Font = font;
 
-        // Shipped UIGraphics/Fonts/variablesans_*.ffn pixel line heights are larger than nominal point size
-        // (08 -> 16px, 09 -> 17px, 10 -> 19px, 12 -> 23px, 14 -> 27px). Using variablesans_12 (13px cap) for titles
-        // and variablesans_10 (10px cap) for body/input/WinBtn keeps cWinMessage & 33px WinBtn.bmp proportionate to the HUD.
+        // Bitmap font line heights exceed nominal point sizes (08 is 16px, 09 is 17px, 10 is 19px, 12 is
+        // 23px, 14 is 27px), requiring a 12pt title font (13px cap) and 10pt body font (10px cap) to align
+        // with standard button heights.
         var loaded12 = TryFont(content, "UIGraphics/Fonts/variablesans_12.ffn") ?? font;
         TitleFont = loaded12;
         DialogTitleFont = loaded12;
@@ -274,7 +269,7 @@ public sealed class OriginalDialogOverlay
             Illustration = loadedIllustration;
             double frameW = loadedIllustration.FrameSize.Width;
             double frameH = loadedIllustration.FrameSize.Height;
-            // FUN_004360c1 (lines 266-285): 35x41 Sim face portraits (BMP_ #2002, 3x1 sheet or single cell) are centered inside 45x45 PeopleTemplate.bmp.
+            // Centers 35x41 Sim head portraits within the 45x45 frame of <c>PeopleTemplate.bmp</c>.
             FramesIllustrationInPeopleTemplate = frameW > 0 && frameW <= 41 && frameH > 0 && frameH <= 43
                 && (loadedIllustration.Columns == 3
                     || ((int)Math.Round(frameW, MidpointRounding.AwayFromZero) == 35
@@ -318,7 +313,6 @@ public sealed class OriginalDialogOverlay
 
         BodyTexture = Upload(new SimsBitmap(content.Read("UIGraphics/Shared/Dlg/LBoxTile.bmp")), transparent: false);
 
-        // FUN_00523937 (00523937.c:35-37) + cWinTextEdit::OnPaint (005f1da2.c): DAT_006f2a54 = RGB(0, 0, 82) fill with DAT_006f2a44 text/border.
         InputBackground = Texture(device, 1, 1, [0, 0, 82, 255]);
         InputBorderFocused = Texture(device, 1, 1, [195, 205, 205, 255]);
         InputBorderUnfocused = Texture(device, 1, 1, [64, 93, 95, 255]);
@@ -369,7 +363,6 @@ public sealed class OriginalDialogOverlay
 
             PhoneIcon = TryUploadSheet(content, "UIGraphics/cpanel/Backgrounds/phoneicon.bmp", columns: 1, rows: 1, transparent: false, Upload);
 
-            // cWinPhoneBook listboxes (0052242d.c:95, 119) use variablesans_10 with cWinListBox color set 6 (004ff397.c:61-68).
             var families = dialog.PhoneBook ?? [];
             _phoneBookFamilyLabels = new List<(Image, Image, Image)>(families.Count);
             _phoneBookContactLabels = new List<List<(Image, Image, Image)>>(families.Count);
@@ -454,7 +447,6 @@ public sealed class OriginalDialogOverlay
                 }
                 catch
                 {
-                    // Skip malformed ingredient icon bitmaps cleanly.
                 }
             }
             BookIngredientIcons = icons;
@@ -562,7 +554,8 @@ public sealed class OriginalDialogOverlay
 
     private static Image Label(string value, SimsBitmapFont font, UIDevice device, (byte R, byte G, byte B) color)
     {
-        // SimsBitmapFont.Rasterize pads by 3px on each side; crop back to the exact glyph cell (matching OriginalGameplayOverlay.Text).
+        // Crops 3 pixels of rasterization padding from each margin to match the exact glyph cell
+        // boundaries.
         var image = font.Rasterize(value, color);
         const int pad = 3;
         if (image.Width > 2 * pad && image.Height > 2 * pad)
@@ -634,7 +627,8 @@ public sealed class OriginalDialogOverlay
         bool upActive = scroll > 0 && _lastHoverLocal is { } hoverUp && upRect.Contains(hoverUp);
         bool downActive = scroll < maxScroll && _lastHoverLocal is { } hoverDown && downRect.Contains(hoverDown);
 
-        // FUN_005f6677 (lines 70-113): cell 0/1 = Up normal/pressed, cell 3 = stretched Track, cell 4/5 = Down normal/pressed, cell 2 = Thumb.
+        // Maps scrollbar texture cells: cells 0 and 1 for up button states, cell 2 for the thumb, cell 3
+        // for the track, and cells 4 and 5 for down button states.
         _scrollButtonDraws.Add((ScrollbarTexture, upRect, new Vector4((upActive ? 1f : 0f) * cellW, 0f, cellW, 1f)));
         if (trackRect.Height > 0)
             _scrollButtonDraws.Add((ScrollbarTexture, trackRect, new Vector4(3f * cellW, 0f, cellW, 1f)));
@@ -742,15 +736,16 @@ public sealed class OriginalDialogOverlay
 
     private void PrepareBook(CGSize viewport)
     {
-        // FUN_005109fe sets the book size to 600 x 382 (0x17e) and centers it in (0, -100, screenW, screenH - 100).
+        // Sizes the book dialog to 600x382 pixels, centering it vertically within the viewport area above
+        // the bottom 100-pixel HUD.
         const double width = 600;
         const double height = 382;
         double centerOffsetY = Math.Max(0, (viewport.Height - 100 - height) / 2.0);
         Rect = new CGRect(Math.Floor((viewport.Width - width) / 2.0), Math.Floor(centerOffsetY), width, height);
 
-        // Left column: (49, 54) size 240x272 (4 rows of 240x68, SpellPickItemBkg.bmp).
-        // Right column: header at (331, 8) size 240xlineHeight, description at (331, 54) size 240x180,
-        // station illustration at (420, 232) size 130x90 (FUN_00511453).
+        // Defines book dialog layout: left column contains four 240x68 recipe rows at offset (49, 54);
+        // right column contains header at (331, 8), description at (331, 54), and station artwork at (420,
+        // 232).
         BookListRect = new CGRect(Rect.MinX + 49, Rect.MinY + 54, 240, 272);
         BodyRect = new CGRect(Rect.MinX + 331, Rect.MinY + 54, 240, 180);
         BookDetailRect = BodyRect;
@@ -783,7 +778,8 @@ public sealed class OriginalDialogOverlay
             int index = firstIndex + row;
             var entry = catalog[index];
             var rowRect = new CGRect(BookListRect.MinX, BookListRect.MinY + row * rowHeight, 240, rowHeight);
-            // FUN_004ebd1d places the 3 ingredient buttons at x = 29 + i * 68, y = (68 - 45)/2 - 5 = 6, size 45x45.
+            // Positions up to three 45x45 ingredient buttons at horizontal 68-pixel increments starting at
+            // x=29 within each recipe row.
             int slotCount = Math.Min(3, entry.IngredientIDs.Count);
             var slots = new List<BookIngredientSlot>(slotCount);
             for (int slotIdx = 0; slotIdx < slotCount; slotIdx++)
@@ -801,7 +797,7 @@ public sealed class OriginalDialogOverlay
         }
         _bookRows = rows;
 
-        // FUN_004ecbce fills any remaining (< 4) row slots with the normal frame of SpellPickItemBkg.bmp.
+        // Fills unused rows up to the 4-row maximum with unselected row background frames.
         var emptyRects = new List<CGRect>();
         for (int row = _bookRows.Count; row < 4; row++)
             emptyRects.Add(new CGRect(BookListRect.MinX, BookListRect.MinY + row * rowHeight, 240, rowHeight));
@@ -837,8 +833,8 @@ public sealed class OriginalDialogOverlay
             _cachedBookDetailKey = detailKey;
         }
 
-        // FUN_005109fe lines 71-123: Magic Book bottom bar uses 33px-tall 3-slice WinBtn buttons (min width 65px,
-        // auto-sized to 12pt label + 20px cap padding so longer localized labels never clip).
+        // Magic book bottom buttons use 33px-tall 3-sliced frames with a 65px minimum width, padding text
+        // by 20px to prevent clipping localized strings.
         const double buttonH = 33;
         double buttonY = Rect.MaxY - Math.Floor(buttonH * 3.0 / 2.0);
         double backW = Math.Max(65, Math.Ceiling((BookBack?.Size.Width ?? 0) + 20));
@@ -876,8 +872,8 @@ public sealed class OriginalDialogOverlay
 
     private void PreparePhoneBook(CGSize viewport)
     {
-        // Sims.exe FUN_0052242d sets the Phone Book window size to 652 x 426 (0x28c x 0x1aa) and places
-        // the family list at (34, 77, 280, 10 * rowHeight) and the contact list at (351, 77, 280, 10 * rowHeight).
+        // Positions phone book window elements within a 652x426 frame, placing family entries at (34, 77)
+        // and contact entries at (351, 77) across 10 visible rows.
         const double width = 652;
         const double height = 426;
         Rect = new CGRect(Math.Floor((viewport.Width - width) / 2.0), Math.Floor((viewport.Height - height) / 2.0), width, height);
@@ -995,8 +991,8 @@ public sealed class OriginalDialogOverlay
             _cachedPhoneBookBannerText = bannerText;
         }
 
-        // FUN_0052242d + SMCtrlMgr::CreateButton (005e7b7d.c:33-35): WinBtn height=33, width=max(100, textWidth+20),
-        // Call at x=20 (0x14), Cancel at x=width-buttonWidth-20, y=height - (33 * 3) / 2.
+        // Calculates phone book action button layouts, enforcing a 100px minimum width with 20px text
+        // padding and anchoring Call on the left and Cancel on the right.
         const double buttonHeight = 33;
         double buttonY = Rect.MaxY - Math.Floor(buttonHeight * 3.0 / 2.0);
         var buttonRects = new List<CGRect>(Labels.Count);
@@ -1008,7 +1004,8 @@ public sealed class OriginalDialogOverlay
         }
         _buttonRects = buttonRects;
 
-        // FUN_00522a12 places phoneicon.bmp (33x23) at x = rect.minX + (rect.width - 23) / 2, y = buttonY + 5.
+        // Centers the 33x23 phone icon horizontally within the call button and offsets it 5 pixels from the
+        // top edge.
         CGSize iconSize = PhoneIcon?.Size ?? new CGSize(33, 23);
         PhoneIconRect = new CGRect(
             Rect.MinX + Math.Floor((Rect.Width - 23) / 2.0),
@@ -1179,7 +1176,6 @@ public sealed class OriginalDialogOverlay
                     }
                     catch
                     {
-                        // Leave prior tooltip cleared if label rasterization fails.
                     }
                 }
                 else if (BookIngredientTooltip is { } existing)
@@ -1541,15 +1537,13 @@ public sealed class OriginalDialogOverlay
     private void RefreshInputLabel()
     {
         string display = AcceptsTextInput ? Text + "|" : Text;
-        // FUN_00523937 (00523937.c:29 -> 004efb69.c:103 DAT_006f2aa0) + cWinTextEdit::OnPaint (005f1da2.c:30):
-        // 11pt variablesans_11.ffn in RGB(195, 205, 205) over RGB(0, 0, 82).
         Input = Label(display, InputFont, Device, DefaultTextColor);
     }
 
     public void UpdateText(string value)
     {
         ArgumentNullException.ThrowIfNull(value);
-        // FUN_00523937 (00523937.c:33) allocates 64 characters for kind == 3 text entry.
+        // Limits text input to a maximum length of 64 characters.
         if (value.Length > 64)
             return;
         foreach (char c in value)

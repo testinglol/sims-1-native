@@ -57,10 +57,8 @@ public sealed record GameplayPanelState
         [JsonPropertyName("performanceLabel")]
         public string? PerformanceLabel { get; init; }
 
-        /// <summary>
-        /// Grade shown by the Mac report-card button. Sims.exe cJob::GetGrade indexes work.iff STR# 0x1001
-        /// by JobPerformance (the original table accessor uses the one-based string index performance + 1).
-        /// </summary>
+        /// <summary>Report card grade looked up from <c>work.iff</c> string table 0x1001 using the
+        /// one-based index of job performance.</summary>
         [JsonPropertyName("reportCardGrade")]
         public string? ReportCardGrade { get; init; }
 
@@ -389,9 +387,6 @@ public sealed record GameplayPanelState
         [JsonPropertyName("famous")]
         public bool? Famous { get; init; }
 
-        /// <summary>
-        /// Mutual friendship as the simulation decides it, with the friendship_threshold loaded from the game's constants.
-        /// </summary>
         [JsonPropertyName("mutualFriend")]
         public bool? MutualFriend { get; init; }
 
@@ -551,9 +546,8 @@ public sealed record GameplayPanelState
         [JsonPropertyName("personType")]
         public int? PersonType { get; init; }
 
-        /// <summary>
-        /// Original Gender person-data word; dog and cat species are encoded by bits 0x2 and 0x4.
-        /// </summary>
+        /// <summary>PersonData gender flags, where bits 0x2 and 0x4 encode dog and cat species
+        /// respectively.</summary>
         [JsonPropertyName("gender")]
         public int? Gender { get; init; }
 
@@ -563,9 +557,7 @@ public sealed record GameplayPanelState
         [JsonPropertyName("skills")]
         public IReadOnlyDictionary<string, int>? Skills { get; init; }
 
-        /// <summary>
-        /// Unleashed pet aliases of the shared PersonData skill words.
-        /// </summary>
+        /// <summary>Pet skill aliases that repurpose the shared PersonData skill words.</summary>
         [JsonPropertyName("petSkills")]
         public IReadOnlyDictionary<string, int>? PetSkills { get; init; }
 
@@ -677,9 +669,6 @@ public sealed record GameplayPanelState
     [JsonPropertyName("budget")]
     public int? Budget { get; init; }
 
-    /// <summary>
-    /// CPState::GetFamilyFriendCount is a control-panel value independent of the selected person's subpanel.
-    /// </summary>
     [JsonPropertyName("familyFriends")]
     public int? FamilyFriends { get; init; }
 
@@ -859,10 +848,6 @@ public sealed record GameplayPanelState
 
 public static partial class OriginalGameplayLayout
 {
-    /// <summary>
-    /// WinViewControl::Init sizes the Family Friend Count button immediately to the left of Funds. Its width is the
-    /// caption width and its height is the button font height; CaptionDraw right-aligns the count to Funds' left edge.
-    /// </summary>
     public static CGRect FamilyFriendsButton(CGRect funds, double fontHeight, double captionWidth) =>
         new(funds.MinX - captionWidth, funds.MinY, captionWidth, fontHeight);
 
@@ -917,7 +902,6 @@ public static partial class OriginalGameplayLayout
                 RelationshipFilter.All => true,
                 _ => false,
             })
-            // FUN_004ea0e9 (004ea0e9.c:13-48): household members first, then Sims on the lot, then daily descending, then neighborID ascending.
             .OrderByDescending(r => r.Household)
             .ThenByDescending(r => r.Position is not null)
             .ThenByDescending(r => r.Daily)
@@ -925,10 +909,6 @@ public static partial class OriginalGameplayLayout
             .ToArray();
     }
 
-    /// <summary>
-    /// The inventory sort buttons (FUN_0051aaec): Magic, Other, Gift stacked at strip-local x=2,
-    /// y = title font height (13, from the relationship filters' FUN_0051d7c8 formula) + 20, +41 and +62, 21 px apart.
-    /// </summary>
     public enum InventorySort
     {
         Magic,
@@ -948,55 +928,38 @@ public static partial class OriginalGameplayLayout
         IEnumerable<GameplayPanelState.InventoryItem> values,
         InventorySort sort)
     {
-        // FUN_0051e3b5 reuses the existing widget with the same GUID (+0x194), then writes this record's
-        // count to +0x198. Repeated records therefore produce one row with the last record's count.
+        // Duplicate GUIDs overwrite quantity with the last entry rather than summing.
         var byGuid = new Dictionary<uint, GameplayPanelState.InventoryItem>();
         foreach (var item in values)
         {
             if (sort.Includes(item.Type))
                 byGuid[item.Guid] = item;
         }
-        // FUN_0051e3b5 sorts the shown widgets by signed GUID (comparator at 0x51ead0).
+        // Inventory items are sorted by GUID interpreted as a signed integer.
         return byGuid.Values.OrderBy(item => unchecked((int)item.Guid)).ToArray();
     }
 
-    /// <summary>
-    /// FUN_004cff80 selects the alternate Live-panel layout for STR language codes 15, 17, 18, 19 and 20.
-    /// </summary>
     public static bool UsesAsianInventoryLayout(int languageCode) =>
         languageCode is 15 or 17 or 18 or 19 or 20;
 
     public static CGRect InventorySortButton(int index, bool asian = false) =>
         new(522, (asian ? 53 : 83) + index * 21, 20, 20);
 
-    /// <summary>
-    /// The original moves the strip from live-local y=50 to y=0 and its title from local (5,0) to (10,5).
-    /// </summary>
     public static CGPoint InventoryTitle(bool asian = false) =>
         asian ? new CGPoint(530, 5) : new CGPoint(525, 50);
 
-    /// <summary>
-    /// The Gift button (4507) sits at live-local (237,116).
-    /// </summary>
     public static readonly CGPoint InventoryButton = new(457, 116);
 
-    /// <summary>
-    /// 5 tiles per page below 1024 px, 9 at 1024 (FUN_005186da stores 6 or 10 and the page shows one fewer), then one more per 56 px.
-    /// </summary>
+    /// <summary>Calculates inventory tile capacity: 5 slots below 1024px, 9 slots at 1024px, plus one slot
+    /// per additional 56px.</summary>
     public static int InventoryCapacity(double width) =>
         width < 1024 ? 5 : 9 + (int)((Math.Min(width, 16384.0) - 1024.0) / 56.0);
 
     public static readonly CGSize InventoryTileSize = new(42, 60);
 
-    /// <summary>
-    /// Asian tile y is derived by preserving the recovered 29 px tile offset from the strip top.
-    /// </summary>
     public static CGRect InventoryTile(int index, bool asian = false) =>
         new(565 + index * 42, asian ? 29 : 79, 42, 60);
 
-    /// <summary>
-    /// Asian arrow y is derived by preserving the recovered 34 px arrow offset from the strip top.
-    /// </summary>
     public static CGRect InventoryArrow(bool next, double width, bool asian = false) =>
         new(next ? width - 11 : 554, asian ? 34 : 84, 9, 49);
 
@@ -1029,45 +992,29 @@ public static partial class OriginalGameplayLayout
     public static readonly IReadOnlyList<string> PetSkills =
         ["HouseBroken", "Obedience", "Tricks"];
 
-    /// <summary>
-    /// DAT_006f4438 (00531ace.c / 00532650.c): 3 pet skill bars at local (207, 27), (207, 42), (207, 57) in 800x600.
-    /// </summary>
     public static CGRect PetSkillBar(int index) =>
         new(727, 77 + index * 15, 40, 11);
 
-    /// <summary>
-    /// DAT_006f44c8 (0053166b.c / 005320ad.c): 3 right-aligned pet skill labels (102x16) at local (103, 25 + index * 15).
-    /// </summary>
     public static CGRect PetSkillLabel(int index) =>
         new(623, 75 + index * 15, 102, 16);
 
-    /// <summary>
-    /// Mac cWinSubpanelCatSkills/DogSkills divides each saved word by 100, clamps to 0...10, then draws 4 px per level.
-    /// </summary>
+    /// <summary>Calculates pet skill bar width by dividing the stored skill value by 100, clamping to 0–10,
+    /// and rendering 4 pixels per point.</summary>
     public static int PetSkillWidth(int value) =>
         Math.Min(40, Math.Max(0, value / 100 * 4));
 
-    /// <summary>
-    /// DAT_006f3ee0 (0052e571.c): 5 house score bars at local (157, 6), (157, 24), (157, 42), (157, 60), (157, 79).
-    /// </summary>
     public static CGRect HouseBar(int index)
     {
         int[] ys = [56, 74, 92, 110, 129];
         return new CGRect(677, ys[Math.Min(Math.Max(0, index), 4)], 40, 16);
     }
 
-    /// <summary>
-    /// DAT_006f4120 (0052dde1.c lines 140-156): 5 score labels right-aligned to barX - 3 (674) at local y = [7, 25, 43, 61, 79].
-    /// </summary>
     public static double HouseScoreLabelY(int index)
     {
         double[] ys = [57, 75, 93, 111, 129];
         return ys[Math.Min(Math.Max(0, index), 4)];
     }
 
-    /// <summary>
-    /// DAT_006f4120 (0052dde1.c): 4 house info labels at local (0, 18), (0, 38), (0, 58), (0, 78).
-    /// </summary>
     public static double HouseInfoLabelY(int index)
     {
         double[] ys = [68, 88, 108, 128];
@@ -1080,15 +1027,9 @@ public static partial class OriginalGameplayLayout
     public static CGRect SkillLabel(int index) =>
         new(613, 56 + index * 15, 62, 16);
 
-    /// <summary>
-    /// DAT_006f3cd8 (0052cae6.c): 6 fame skill bars at local (210, 7 + index * 15) and star bar at local (3, 30).
-    /// </summary>
     public static CGRect FameSkillBar(int index) =>
         new(730, 57 + index * 15, 40, 11);
 
-    /// <summary>
-    /// DAT_006f3e60 (0052bc54.c): 6 right-aligned fame skill labels (62x16) at local (145, 6 + index * 15).
-    /// </summary>
     public static CGRect FameSkillLabel(int index) =>
         new(665, 56 + index * 15, 62, 16);
 
@@ -1151,11 +1092,8 @@ public static partial class OriginalGameplayLayout
         return nearest;
     }
 
-    /// <summary>
-    /// SetZodiacSign__FPss writes the sign profile into PersonData in the order
-    /// Outgoing, Nice, Playful, Neat, Active. Values are scaled by 100, then
-    /// rounded with fctiwz(value + 0.5); expose that original profile by trait.
-    /// </summary>
+    /// <summary>Generates default personality trait scores for a zodiac sign, mapped to Outgoing, Nice,
+    /// Playful, Neat, and Active scaled by 100.</summary>
     public static Dictionary<string, int>? ZodiacPersonality(int sign)
     {
         if (sign is < 1 or > 12)
@@ -1185,15 +1123,9 @@ public static partial class OriginalGameplayLayout
     public static CGRect Need(int index) =>
         new(520 + (index % 2) * 100, 71 + (index / 2) * 19, 100, 20);
 
-    /// <summary>
-    /// Positive and negative segments of cWinPeople's vertical Mood Rating meter.
-    /// </summary>
     public static CGRect MoodRatingSegment(bool positive) =>
         new(425, positive ? 53 : 123, 27, 25);
 
-    /// <summary>
-    /// FUN_004d2a7e (004d2a7e.c lines 127, 157, 175): action queue slots start at (32, 32) with 50px horizontal spacing.
-    /// </summary>
     public static CGRect Action(int index) =>
         new(32 + index * 50, 32, 45, 45);
 
@@ -1202,7 +1134,6 @@ public static partial class OriginalGameplayLayout
 
     public static ((byte X, byte Y, byte Z) Green, (byte X, byte Y, byte Z) Red) BarColors(int value)
     {
-        // FUN_00513857 quantizes the blend weight to 8 bits, then rounds each channel by adding 0.5 before __ftol.
         float factor = MathF.Min(1f, MathF.Max(0f, (value + 50) * 0.01f));
         const float grayX = 64f;
         const float grayY = 93f;

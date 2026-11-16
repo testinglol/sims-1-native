@@ -1,8 +1,5 @@
 namespace SimsSDL.Core;
 
-/// <summary>
-/// Reader for Sims FAR version 1 archives and safe normalized archive resource keys.
-/// </summary>
 public sealed class FARArchive
 {
     public readonly record struct Entry(string Name, int Offset, int Size);
@@ -108,9 +105,6 @@ public sealed class FARArchive
     }
 }
 
-/// <summary>
-/// Bounds-checked little-endian binary reader over an in-memory byte buffer.
-/// </summary>
 public sealed class SimsBinaryReader
 {
     public byte[] Data { get; }

@@ -74,7 +74,6 @@ public sealed partial class PackStack
         var plugins = PluginReports();
         var panels = PanelReports();
 
-        // Packs without plugins or panels keep their earlier fingerprint calculation.
         var code = plugins
             .Select(static p => $"plugin:{p.PackID}:{p.Sha256}:{p.StateVersion}")
             .Concat(panels.Select(static p => $"panel:{p.PackID}:{p.Id}:{p.Sha256}"));

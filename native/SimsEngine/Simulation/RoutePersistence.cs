@@ -1,11 +1,10 @@
 namespace SimsEngine.Simulation;
 
-/// <summary>A route waypoint retained by the native route callback while a Sim follows a saved path.</summary>
 public readonly record struct RouteWaypointState(int TileX, int TileY, int X, int Y,
     int CellCenterX, int CellCenterY, bool IsDestination);
 
-/// <summary>A route state saved beside the lot because Sims.exe's person/animator streams retain the active follow path.
-/// OwnerFrameIndex reconnects the asynchronous callback to the corresponding restored BHAV frame.</summary>
+/// <summary>Saves active route state alongside lot data, allowing asynchronous movement callbacks to
+/// reconnect to their restored execution frame.</summary>
 public sealed record RouteStateSnapshot(
     short AnchorObjectId, ObjectPosition Destination, RoutingSlotRequest Slot,
     short PendingPortalId, int PortalCallerDepth, int OwnerFrameIndex, short OpenedPortalId,
@@ -31,11 +30,11 @@ public sealed record RouteStateSnapshot(
     int MotionTargetPathIndex = -1, bool AwaitingBeginFollow = false,
     float? TransitionTargetX = null, float? TransitionTargetY = null, float? LookTowardsHeading = null);
 
-/// <summary>The current route and any routes suspended while portal behavior runs nested on the same Sim stack.</summary>
+/// <summary>Captures the active route and any parent routes suspended while portal behavior executes nested
+/// on the call stack.</summary>
 public sealed record PersonRouteSnapshot(RouteStateSnapshot? Current,
     RouteStateSnapshot[] Parents);
 
-/// <summary>Per-Sim animation runtime metadata stored beside the native lot save.</summary>
 public sealed record PersonAnimationRuntimeSnapshot(short PersonId,
     AvatarAnimationPlaybackState? Primary, AvatarAnimationPlaybackState? Background,
     AvatarAnimationPlaybackState? Carry, string[] InteractionAttachments,
@@ -49,10 +48,8 @@ public sealed record PersonAnimationRuntimeSnapshot(short PersonId,
     int? AnimatorStateTailField198 = null, int? AnimatorCurrentSkill = null,
     bool? AnimatorPracticeScaleEnabled = null);
 
-/// <summary>Captures and rebinds the native route callback to the restored source BHAV stack.</summary>
 public static class RoutePersistence
 {
-    /// <summary>Restores SAnimator's shared XEVT FIFO, migrating the primary-channel queue found in older saves.</summary>
     public static void RestorePendingAnimationEvents(XPerson person, short[]? savedEvents)
     {
         ArgumentNullException.ThrowIfNull(person);
@@ -67,8 +64,6 @@ public static class RoutePersistence
         legacyPrimary.EventQueue.Clear();
     }
 
-    /// <summary>Restores SAnimator +0x220 from the per-Sim runtime field, falling back to route snapshots written by
-    /// older metadata versions before the per-Sim walking scale was serialized.</summary>
     public static float RestoreAnimatorWalkingScale(float? savedScale, PersonRouteSnapshot? routes) =>
         savedScale ?? routes?.Current?.MotionPlaybackScale ?? routes?.Parents.LastOrDefault()?.MotionPlaybackScale ?? 1f;
 

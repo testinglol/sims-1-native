@@ -1,11 +1,7 @@
 namespace SimsEngine.Formats;
 
-/// <summary>What a person's character object (the 0x2a0-byte object a person keeps at +0xadc, built by FUN_00587d5c)
-/// writes through its virtual slot 0x84 (FUN_0059187a), for the versions with ObjM states: two u32s kept at +0xa4
-/// and +0xa0, from version 0x33 five pairs of strings (inferred: the mesh and texture of each body part) and a
-/// u32-counted list of further pairs, from version 0x3b three strings (each resolved through the object's slot 0x8c
-/// when read), and from version 0x3d a u32 kept at +0x190 (Sims.exe replaces values other than 0 to 3 with 3) and
-/// nine floats (+0x210 to +0x224, then +0x8c to +0x94).</summary>
+/// <summary>Serialized character appearance data for a Sim, including body part mesh and texture string
+/// pairs, head and outfit bindings, and scale transforms.</summary>
 public sealed record PersonCharacter(
     int Value0xA4,
     int Value0xA0,
@@ -15,10 +11,8 @@ public sealed record PersonCharacter(
     int? Value0x190,
     float[] Values);
 
-/// <summary>A 0x44-byte record a person keeps (FUN_0041f1c7; inferred: an interaction, current or queued): a u32,
-/// a u32 id (Sims.exe keeps the largest one read as the next id), three object ids (the first is checked to be a
-/// person when read), a u32, four s16s, a u32, an s16, a float and a u32 of flags. Before version 0x3e the flags are
-/// stored as bools: bit 2, bit 5, when bit 2 is set bits 3 and 4, and from version 0x3c bit 1.</summary>
+/// <summary>Represents a serialized queue or active interaction record, containing action identifiers,
+/// target object references, parameters, and versioned flags.</summary>
 public sealed record PersonAction(
     int Value0x00,
     int Id,
@@ -32,18 +26,12 @@ public sealed record PersonAction(
     float Value0x24,
     int Flags);
 
-/// <summary>A 12-byte entry of the person's list at +0xb00 (FUN_00459461): an object id, a u32 and a bool.</summary>
 public sealed record PersonObjectEntry(short Object, int Value, bool Flag);
 
-/// <summary>A 12-byte entry of the person's list at +0xad0 (FUN_00459244): a u32 and two floats.</summary>
 public sealed record PersonValueEntry(int Value, float First, float Second);
 
-/// <summary>The fields a person's serializer (FUN_0045d099) writes after the object state it shares with every
-/// object, for the versions with ObjM states: the character (<see cref="PersonCharacter"/>), 16 floats at +0x78c and
-/// 16 at +0x7cc (inferred: motive values), the person data (s16s at +0x58c: 0x50 before version 0x47, 0x100 from it),
-/// the count of 0x9c-byte entries at +0xaf0 (each entry's serializer, 0x5fe275, writes nothing), two actions and a
-/// u32-counted list of actions (<see cref="PersonAction"/>), a u32-counted list at +0xb00 and a u32-counted list at
-/// +0xad0.</summary>
+/// <summary>Serialized state specific to a Sim object, containing character mesh bindings, motives, person
+/// data variables, and interaction queue records.</summary>
 public sealed record PersonState(
     PersonCharacter Character,
     float[] Values0x78C,
@@ -128,7 +116,6 @@ public sealed record PersonState(
             flags);
     }
 
-    /// <summary>Writes the person fields in the reader's order (FUN_0045d099's tail).</summary>
     internal static void Write(PersistWriter stream, PersonState state, int version)
     {
         WriteCharacter(stream, state.Character, version);

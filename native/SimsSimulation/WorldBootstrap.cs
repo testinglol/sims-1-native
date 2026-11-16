@@ -7,9 +7,6 @@ using System.Runtime.CompilerServices;
 
 namespace SimsSimulation;
 
-/// <summary>Production setup shared by the native protocol server and isolated headless replays. The saved ObjM
-/// restore remains in SavedLotObjectLoader (Sims.exe FUN_0043fe4a); this adds the profile and runtime services that
-/// the live server needs after that restore.</summary>
 internal sealed record RemovedObject(string Guid, short ObjectId, string Name, int Refund);
 internal sealed record MigratedObject(string From, string To, short ObjectId);
 
@@ -164,8 +161,8 @@ internal sealed record WorldBootstrap(
             var records = neighborhood.OfType(ResourceType.Parse("FAMI"))
                 .Where(chunk => chunk.Id != 0)
                 .Select(chunk => (chunk.Id, Family: Family.Read(neighborhood, chunk))).ToArray();
-            // Native legacy code selected FAMI by resource chunk ID (FAMI.ChunkID), not its parsed inner number.
-            // Chunk 0 is the neighborhood sentinel and must never be selected as an active household.
+            // Selects the household by FAMI resource chunk ID. Chunk ID 0 is a neighborhood sentinel and
+            // cannot be chosen as an active family.
             active = activeFamilyChunkId is { } requestedFamilyId && requestedFamilyId != 0 &&
                 records.FirstOrDefault(record => record.Id == requestedFamilyId) is var requested && requested.Family is not null
                 ? requested
@@ -179,15 +176,13 @@ internal sealed record WorldBootstrap(
         }
         var activeFamily = active?.Family;
         var homeFamily = unchecked((short)(active?.ChunkId ?? familyId));
-        // SimulationServer.LoadHouse sets NGBH slot 2 to the active family's house before
-        // lot scripts run. VisitGenerator/PedMarkers use this slot to reject neighbors from
-        // the currently played household; without it, a stale value blocks walk-bys/visits.
+        // Sets neighborhood data slot 2 to the active household's house number so visitor generators can
+        // reject members of the current family.
         if (activeFamily is not null) world.NeighborhoodData[2] = checked((short)house);
         world.FamilyBudget = new FamilyBudget(world, activeFamily, active?.ChunkId);
         world.NeighborhoodFamilies = new NeighborhoodFamilies(world, neighborhood, active?.ChunkId);
-        // FUN_00410561 loads the selected FAMI member vector at family +0x12c through FUN_00410d4c. GenericSimsCall
-        // 0x12/0x20 read that same ordered vector through FUN_004e9918, so FamilyBudget owns its lifecycle.
-        // Family::TestMember on the active family, which UpdateInstanceVisitorTypes reads through these keys.
+        // Registers active family member GUIDs so neighbor interaction systems can check household
+        // membership.
         if (activeFamily is not null)
             world.NeighborInteractionManagerTypeKeys.AddRange(activeFamily.Members.Select(guid => unchecked((int)guid)));
         world.MenuTextSources = MenuTextSources.Load(world, gameRoot, language, neighborhood);
@@ -217,11 +212,9 @@ internal sealed record WorldBootstrap(
                 refund,
                 resetIds);
         }
-        // Changed-code reset trees can enumerate careers, read neighborhood state and run
-        // autonomy checks. Run the post-load reset only after those production services exist.
+        // Post-load object reset trees may access careers, neighborhood state, and autonomy, requiring
+        // those services to be initialized first.
         world.ResetObjectsWithChangedCode();
-        // Neighborhood::LoadHouse checks the SIMI tutorial flag and neighborhood progress after restoring
-        // the lot, then creates Tutorial.iff's controller out of world if it is not already present.
         TutorialEvents.EnsureController(world);
         ExpansionBootstrap.EnsureGlobalSimObjects(world, registry);
         ExpansionBootstrap.EnsureSpellboundController(world, userData, house, activeFamily);
@@ -271,11 +264,11 @@ public static class ExpansionBootstrap
 
     public static readonly int[] ExpansionPhonePluginGuids =
     [
-        unchecked((int)0xA6F31853), // Hot Date: Downtown (GoDowntownPhonePlugin.iff)
-        unchecked((int)0xABA9DF4A), // Vacation: Vacation Island (VacationPhonePlugin.iff)
-        unchecked((int)0xEAA79D86), // Unleashed: Old Town (NeighborhoodPhonePlugin.iff)
-        unchecked((int)0xC61F8102), // Superstar: Studio Town (PhonePluginStudioLots.iff)
-        unchecked((int)0x99197314), // Makin' Magic: Magic Town (phonepluginmagiclots.iff)
+        unchecked((int)0xA6F31853),
+        unchecked((int)0xABA9DF4A),
+        unchecked((int)0xEAA79D86),
+        unchecked((int)0xC61F8102),
+        unchecked((int)0x99197314),
     ];
 
     private sealed record GlobalSimObjectsCache(int EntryCount, ObjectEntry[] Entries);
@@ -300,10 +293,8 @@ public static class ExpansionBootstrap
         return filtered;
     }
 
-    /// <summary>
-    /// Ports Sims.exe FUN_00442bdf (00442bdf.c:18-78): ensures every enabled Type 7 (SimType) or Type 12 (Controller)
-    /// object definition with IsGlobalSimObject (+0x54, ObjdField 42) != 0 has an active instance on the lot.
-    /// </summary>
+    /// <summary>Ensures that every enabled SimType or Controller object definition with the global Sim
+    /// object flag set in its OBJD data has an active instance on the lot.</summary>
     public static void EnsureGlobalSimObjects(SimulationWorld world, ObjectRegistry registry)
     {
         if (world.ObjectFactory is null ||
@@ -344,11 +335,8 @@ public static class ExpansionBootstrap
         }
     }
 
-    /// <summary>
-    /// Spawns Makin' Magic Mystery Man starter box controller (NPC_Controller_Spellbound 0x994F1DEC)
-    /// out-of-world on inhabited residential lots if not already present in the lot save or if
-    /// the starter box has not already been delivered.
-    /// </summary>
+    /// <summary>Spawns the magic starter box controller out-of-world on inhabited residential lots if not
+    /// already present and not yet delivered.</summary>
     public static XObject? EnsureSpellboundController(SimulationWorld world, string userData, int house, Family? activeFamily)
     {
         if (activeFamily is null || house <= 0) return null;
@@ -368,10 +356,8 @@ public static class ExpansionBootstrap
         return controller;
     }
 
-    /// <summary>
-    /// Ensures all 5 expansion travel phone plugins (Downtown, Vacation, Old Town, Studio Town, Magic Town)
-    /// are instantiated out-of-world with Category = 1 so phones discover them via SetToNext mode 6.
-    /// </summary>
+    /// <summary>Ensures all expansion travel phone plugins are instantiated out-of-world with Category 1 so
+    /// phones can discover them via SetToNext mode 6.</summary>
     public static void EnsurePhonePlugins(SimulationWorld world)
     {
         if (world.ObjectFactory is null) return;

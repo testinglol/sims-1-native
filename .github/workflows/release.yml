@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Release version string (e.g. 0.1.0)
+        description: Release version string (e.g. 0.2.0)
         required: false
-        default: '0.1.0'
+        default: '0.2.0'
   push:
     tags:
       - 'v*'
@@ -40,7 +40,7 @@ jobs:
           elif [[ -n "${{ inputs.version }}" ]]; then
             echo "RELEASE_VERSION=${{ inputs.version }}" >> "${GITHUB_ENV}"
           else
-            echo "RELEASE_VERSION=0.1.0" >> "${GITHUB_ENV}"
+            echo "RELEASE_VERSION=0.2.0" >> "${GITHUB_ENV}"
           fi
 
       - name: Package macOS arm64 bundle
@@ -94,7 +94,7 @@ jobs:
           } elseif ("${{ inputs.version }}") {
             "${{ inputs.version }}"
           } else {
-            "0.1.0"
+            "0.2.0"
           }
           "RELEASE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
@@ -171,7 +171,7 @@ jobs:
           elif [[ -n "${{ inputs.version }}" ]]; then
             echo "RELEASE_VERSION=${{ inputs.version }}" >> "${GITHUB_ENV}"
           else
-            echo "RELEASE_VERSION=0.1.0" >> "${GITHUB_ENV}"
+            echo "RELEASE_VERSION=0.2.0" >> "${GITHUB_ENV}"
           fi
 
       - name: Package Linux x64 bundle

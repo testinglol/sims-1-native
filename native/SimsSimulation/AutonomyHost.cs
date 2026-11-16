@@ -1,7 +1,6 @@
 using SimsEngine.Formats;
 using SimsEngine.Simulation;
 
-/// <summary>Native data services consumed by Sims.exe's Find Best Interaction pipeline.</summary>
 internal sealed class AutonomyHost : ISimulationAutonomyHost
 {
     private readonly SimulationWorld world;
@@ -24,9 +23,6 @@ internal sealed class AutonomyHost : ISimulationAutonomyHost
 
     public AutonomyLot AutonomyLotState()
     {
-        // FUN_0045dea5 reads the lot key and lot family id separately. The loaded residential lot number is the
-        // available native key; its home family id is projected from the first household person. The original
-        // DAT_006f2a04 gate has no decoded native field yet; false is the observed base-residential default.
         var homeFamily = world[SimulationGlobal.CurrentFamily] != 0
             ? world[SimulationGlobal.CurrentFamily]
             : world.WalkOrder.OfType<XPerson>()

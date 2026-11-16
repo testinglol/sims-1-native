@@ -2,31 +2,19 @@ using System.Buffers.Binary;
 
 namespace SimsEngine.Formats;
 
-/// <summary>One object saved in an ObjM chunk: its object id, the objt type index it refers to and its state, the
-/// block that the object's own serializer (virtual slot 0x7c) wrote, and that block decoded when the object's class is
-/// known (<see cref="ObjectState"/>). <see cref="Head"/>, the part every class writes the same way, is always read.</summary>
+/// <summary>Represents an object saved within an ObjM chunk, containing its instance ID, catalog type
+/// index, and serialized state payload.</summary>
 public sealed record LotObject(short ObjectId, short TypeIndex, byte[] State, int StateOffset, ObjectState? Decoded = null,
     ObjectHead? Head = null)
 {
-    /// <summary>The object's block end in the ObjM chunk body, after the block's stored offset header and its state.</summary>
     public int BlockEnd { get; init; }
 
-    /// <summary>The state bytes as stored, from the block's state start to its end (the manager dword included).</summary>
     public byte[] StateBytes { get; init; } = [];
 }
 
-/// <summary>The objects of a lot (ObjM), as Sims.exe FUN_0043fe4a reads them from the resource stream.
-/// <para>From version 0x2f: the field-coding flag; the object list, each an s16 object id followed by its s16 objt type
-/// index (FUN_0043bfaf), ended by an id of 0; then one block per object (FUN_00464c0a / FUN_00464c6e) in list order,
-/// holding the state the object's serializer writes (and, from version 0x36, for an object whose definition is not a
-/// placeholder (<see cref="IsPlaceholder"/>), a u32 Sims.exe keeps per object id). Before version 0x2f none of this is stored. Then for
-/// every version an s16 object id that Sims.exe keeps at +0xa8 (FUN_0043fd68, 0 for none), and from version 0x34 a u32
-/// count of s16 object ids kept at +0x38 and a string.</para>
-/// <para>This reader keeps each object's state as the raw block. Given the lot's object type table (objt) and a way to
-/// find object definitions by GUID, it also decodes the state of every object whose definition is found, with the
-/// class Sims.exe would build the object as (<see cref="ClassOf"/>); a decoded block must end exactly at its stored
-/// end.
-/// Inferred, not traced: what the +0xa8 object and the +0x38 list are used for.</para></summary>
+/// <summary>Represents the saved lot objects (ObjM) resource. In version 0x2f and later, the chunk stores
+/// an object ID and type index table terminated by ID 0, followed by serialized object state blocks,
+/// trailing manager flags (version 0x36+), and auxiliary object lists.</summary>
 public sealed class LotObjects
 {
     public int Version { get; }
@@ -35,7 +23,6 @@ public sealed class LotObjects
     public short Object0xA8 { get; }
     public IReadOnlyList<short> ObjectList0x38 { get; }
     public string? Name { get; }
-    /// <summary>Bytes left in the chunk after the last field.</summary>
     public int UnreadBytes { get; }
 
     private LotObjects(int version, bool coded, IReadOnlyList<LotObject> objects, short objectA8,
@@ -50,9 +37,9 @@ public sealed class LotObjects
         Name = name;
     }
 
-    /// <summary>The class Sims.exe builds an object of <paramref name="definition"/> as (FUN_004409db): with no master
-    /// id a person for OBJD type 2, nothing for types 8 and 9 and a cXObject otherwise; with a master id a portal for
-    /// type 8 and a multi-tile object otherwise.</summary>
+    /// <summary>Determines the runtime object class for a definition: standalone objects are persons (type
+    /// 2) or standard objects, while objects with a master ID are portals (type 8) or multi-tile
+    /// components.</summary>
     public static ObjectClass? ClassOf(Objd definition)
     {
         var type = definition[ObjdField.Type];
@@ -60,11 +47,8 @@ public sealed class LotObjects
         return type switch { 2 => ObjectClass.Person, 8 or 9 => null, _ => ObjectClass.Object };
     }
 
-    /// <summary>The GUIDs of the definitions Sims.exe FUN_0043fe4a gives an object whose own definition is missing
-    /// (FUN_0043e07d for any object, FUN_0043e088, FUN_0043e093 and FUN_0043e09e for a person, chosen by the person's
-    /// type). An object of one of these writes no u32 after its state. Sims.exe uses the first one in place of the last
-    /// two when bit 0x20 of a game setting (+0x66 of DAT_006e486c) is clear; inferred: the bit is set with the expansion
-    /// packs that store such persons, so all four count here.</summary>
+    /// <summary>Determines whether a GUID represents a fallback placeholder definition used when an object
+    /// or person definition is missing.</summary>
     public static bool IsPlaceholder(uint guid) => guid is 0x3C08965F or 0x7FD96B54 or 0x4A70DF92 or 0x7BEA0977;
 
     public static LotObjects Read(IffFile file, IffChunk chunk, ObjectTypeTable? types = null,
@@ -97,8 +81,6 @@ public sealed class LotObjects
                 }
                 else if (decodeUnknownAsObject)
                 {
-                    // Types 8 and 9 get no cXObject in Sims.exe, but their saved block still follows the plain object
-                    // serializer in the installed lots. Probe a copy so a failure leaves the stream untouched.
                     var probe = stream;
                     try
                     {
@@ -135,10 +117,6 @@ public sealed class LotObjects
         return new LotObjects(version, stream.FieldCoded, objects, objectA8, list38, name, stream.Remaining);
     }
 
-    /// <summary>Re-encodes the whole ObjM body in the reader's order: the id/type list, a block per object (a decoded
-    /// state through <see cref="ObjectState.Write"/>, otherwise its stored bytes), the trailing block offset, the +0xa8
-    /// object id and the version-0x34+ list and name. The caller supplies each type index's class and placeholder flag.
-    /// </summary>
     public static byte[] Write(LotObjects source, bool swap, string tag,
         Func<short, (ObjectClass Class, bool Placeholder)> classOfTypeIndex,
         IReadOnlyDictionary<short, ObjectState>? states = null, IReadOnlyList<LotObject>? objects = null)
@@ -178,11 +156,8 @@ public sealed class LotObjects
         return writer.ToArray();
     }
 
-    /// <summary>Rewrites the per-object manager flag dword (the trailing u32 of each decoded block, written for
-    /// version 0x36+ non-placeholder definitions) in an ObjM chunk body of the same size. The stream's first byte
-    /// selects big-endian storage, as <see cref="PersistReader"/> does. Only an uncompressed (coding-flag 0) stream can
-    /// be patched this way; a field-coded stream bit-packs the dword, so a new value can change the block size and
-    /// needs the full writer that is not implemented yet. Objects without the dword keep their bytes.</summary>
+    /// <summary>Updates the per-object manager flag dwords directly within an uncompressed ObjM chunk body
+    /// without reallocating stream blocks.</summary>
     public static byte[] WriteManagerFlags(IReadOnlyList<LotObject> objects, IffChunk chunk,
         IReadOnlyDictionary<short, uint> flagsByObjectId)
     {

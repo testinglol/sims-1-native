@@ -1,12 +1,7 @@
 namespace SimsEngine.Formats;
 
-/// <summary>One object type a lot was saved with (FUN_0043a5fb).
-/// <para><see cref="TreeValue0"/> and <see cref="TreeValue1"/> are what FUN_00457759 and FUN_0045778a return for the
-/// type when it is saved (values Sims.exe computes from FUN_004561a0(0) and FUN_004561a0(1)); on load Sims.exe marks a
-/// type whose current values differ (flag 2 at +0xb4). <see cref="TypeIndex"/> is the number the lot's objects refer to
-/// the type by (kept at +0xa4). <see cref="ObjectType"/> is the OBJD object type (OBJD word 9; 2 is a person), -1
-/// before version 2. <see cref="Field0x8C"/> is the value the type keeps at +0x8c of its definition, 0 before
-/// version 3. Inferred, not traced: that the tree values are checksums of the type's trees.</para></summary>
+/// <summary>Represents an object type entry in a lot's type table, recording its GUID, tree checksums,
+/// lot-scoped type index, and object classification.</summary>
 public sealed record ObjectTypeEntry(
     uint Guid,
     uint TreeValue0,
@@ -16,10 +11,8 @@ public sealed record ObjectTypeEntry(
     string Name,
     int Field0x8C);
 
-/// <summary>The object type table (objt) of a lot file, as Sims.exe FUN_0043a5fb reads it from the resource stream
-/// (FUN_0043de5b loads it, FUN_0043df8d writes version 3): a list of types, each starting with its GUID and ended by a
-/// GUID of 0. Each type stores, from version 1, two u32 tree values, then the s16 type index, from version 2 the s16
-/// object type, the name and from version 3 a u32.</summary>
+/// <summary>Parses and serializes the lot object type table (objt), a null-GUID-terminated list mapping
+/// GUIDs to type indices and tree checksums across chunk versions.</summary>
 public sealed class ObjectTypeTable
 {
     private static readonly ResourceType GuidTableType = ResourceType.Parse("Gtab");
@@ -33,8 +26,8 @@ public sealed class ObjectTypeTable
         Entries = entries;
     }
 
-    /// <summary>FUN_00415784 / FUN_0041589a: reads the optional Gtab (0x47746162, id 1) GUID translation table
-    /// written by FUN_00428f4f when a .FAM lot is imported with newly allocated character GUIDs.</summary>
+    /// <summary>Reads the optional Gtab GUID translation table used to map saved object GUIDs to newly
+    /// allocated character GUIDs during family import.</summary>
     public static IReadOnlyList<(uint OldGuid, uint NewGuid)> ReadGuidTable(IffFile file)
     {
         if (file.Find(GuidTableType, 1) is not { } chunk) return [];
@@ -51,7 +44,6 @@ public sealed class ObjectTypeTable
         return entries;
     }
 
-    /// <summary>FUN_004157ac / FUN_0041589a: writes the Gtab (0x47746162, id 1) GUID translation table.</summary>
     public static byte[] WriteGuidTable(bool swap, IReadOnlyList<(uint OldGuid, uint NewGuid)> entries)
     {
         var stream = PersistWriter.Start(swap, 0, "batG");
@@ -64,8 +56,8 @@ public sealed class ObjectTypeTable
         return stream.ToArray();
     }
 
-    /// <summary>FUN_00415747: walks the Gtab chain (marking visited entries so cycles terminate) to translate
-    /// a saved OBJT GUID to its imported character GUID.</summary>
+    /// <summary>Resolves a saved GUID through the translation table chain, cycle-checking visited entries
+    /// until reaching the final imported GUID.</summary>
     public static uint TranslateGuid(uint guid, IReadOnlyList<(uint OldGuid, uint NewGuid)> guidTable)
     {
         if (guidTable.Count == 0) return guid;
@@ -87,7 +79,6 @@ public sealed class ObjectTypeTable
         }
     }
 
-    /// <summary>FUN_0043a5fb's versioned GUID-terminated type list.</summary>
     public byte[] Write(bool swap, string tag, IReadOnlyList<ObjectTypeEntry>? entries = null)
     {
         var stream = PersistWriter.Start(swap, Version, tag);

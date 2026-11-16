@@ -1,16 +1,12 @@
 using SimsEngine.Formats;
 
-/// <summary>The files of an installed game folder, loose or inside its FAR archives, for the offline pack compilers.</summary>
 internal static class InstalledFiles
 {
     internal sealed record Entry(string Path, Func<byte[]> Read)
     {
-        /// <summary>The file name without folders, for archive entries too.</summary>
         public string Name => System.IO.Path.GetFileName(Path[(Path.LastIndexOf("::", StringComparison.Ordinal) + 1)..].Replace('\\', '/').TrimStart(':'));
     }
 
-    /// <summary>Visits every file whose name <paramref name="wanted"/> accepts. Archive entries are named
-    /// <c>archive.far::entry</c>; their contents are read only when the visitor asks for them.</summary>
     internal static void Visit(string game, Func<string, bool> wanted, Action<Entry> visit)
     {
         if (!Directory.Exists(game)) throw new InvalidDataException($"No installed game at {game}");

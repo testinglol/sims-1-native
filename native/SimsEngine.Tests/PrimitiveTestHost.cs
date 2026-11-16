@@ -3,8 +3,6 @@ using SimsEngine.Simulation;
 
 namespace SimsEngine.Tests;
 
-/// <summary>A host for the primitive tests: the random values come from a queue (0 once it is empty), the wait cell
-/// choice and the cached alternative type are set per test, and the other host calls answer nothing.</summary>
 internal sealed class PrimitiveTestHost : ISimulationHost
 {
     public Queue<uint> Randoms { get; } = [];
@@ -17,25 +15,21 @@ internal sealed class PrimitiveTestHost : ISimulationHost
         return Randoms.Count > 0 ? Randoms.Dequeue() : 0;
     }
 
-
     public TypeRecord? AlternativeObjectType(TypeRecord entry)
     {
         Calls.Add($"AlternativeObjectType({entry.Key})");
         return Alternatives.GetValueOrDefault(entry);
     }
 
-    /// <summary>The text of each (string table, index) entry; missing entries are null.</summary>
     public Dictionary<(short Table, int Index), string> Strings { get; } = [];
     public List<(short Table, int Index)> StringRequests { get; } = [];
     public List<(int Message, string Text)> Broadcasts { get; } = [];
-    /// <summary>The sound banks that accept an event.</summary>
     public HashSet<int> AcceptingBanks { get; } = [];
     public List<(int Bank, short Event)> SoundRequests { get; } = [];
     public List<short> PositionalSounds { get; } = [];
     public bool PositionalPlays { get; set; } = true;
 
     public IReadOnlyList<short>? Constants(StackFrame frame, ushort id) => null;
-    /// <summary>The room fields the tests set (room and field to value); a missing one is no room.</summary>
     public Dictionary<(short Room, short Field), short> RoomFields { get; } = [];
     public short? Room(short room, short field) => RoomFields.TryGetValue((room, field), out var value) ? value : null;
     public bool CareerExists(short career) => false;
@@ -57,7 +51,6 @@ internal sealed class PrimitiveTestHost : ISimulationHost
         return PositionalPlays;
     }
 
-    /// <summary>Every host call the new primitives make, as text, in order (the order-of-checks tests read it).</summary>
     public List<string> Calls { get; } = [];
     public bool BurnEnabledAnswer { get; set; } = true;
     public TypeRecord? FireType { get; set; }
@@ -142,9 +135,7 @@ internal sealed class PrimitiveTestHost : ISimulationHost
         Calls.Add($"SetBalloonFields({owner.Id},{duration},{label},{flag})");
     public void NotifyObjectTable(XObject owner) => Calls.Add($"NotifyObjectTable({owner.Id})");
 
-    /// <summary>The answer each check gives (Grab, Drop and Drop Onto).</summary>
     public bool PlacementAnswer { get; set; } = true;
-    /// <summary>The state DialogRecordState answers (null for no record).</summary>
     public int? DialogState { get; set; }
     public byte DialogGlobalFlagF8Answer { get; set; }
 
@@ -193,7 +184,6 @@ internal sealed class PrimitiveTestHost : ISimulationHost
     }
     public void ShowDialog(XPerson owner, byte style) => Calls.Add($"ShowDialog({owner.Id},{style})");
 
-    /// <summary>What TurnStatus answers (0, 1 or 2) and what TryStartTurn answers.</summary>
     public int TurnStatusAnswer { get; set; }
     public bool TryStartAnswer { get; set; } = true;
 
@@ -214,14 +204,11 @@ internal sealed class PrimitiveTestHost : ISimulationHost
         return TryStartAnswer;
     }
 
-    /// <summary>Whether routing runs, what the route answers and what the avatar's Animate answers.</summary>
     public bool RoutingEnabledAnswer { get; set; } = true;
     public PrimitiveResult RouteAnswer { get; set; } = PrimitiveResult.True;
     public PrimitiveResult AnimateAnswer { get; set; } = PrimitiveResult.True;
-    /// <summary>The routing slots of each stack object, by its id, and the lot's table (the test's objects are small ids).</summary>
     public Dictionary<short, List<RoutingSlotRequest>> StackRoutingSlots { get; } = [];
     public List<RoutingSlotRequest> LotRoutingSlots { get; } = [];
-    /// <summary>The target of each Route call, in order (null for a continued route).</summary>
     public List<RoutingSlotRequest?> Routes { get; } = [];
 
     public bool RoutingEnabled()
@@ -266,7 +253,6 @@ internal sealed class PrimitiveTestHost : ISimulationHost
     public void StopOwnerSounds(short ownerId) => Calls.Add($"StopOwnerSounds({ownerId})");
     public void ChangeActionString(XObject me, short stackObject, string? text) =>
         Calls.Add($"ChangeActionString({me.Id},{stackObject},{text ?? "null"})");
-    /// <summary>What RunSnapshot answers.</summary>
     public PrimitiveResult SnapshotAnswer { get; set; } = PrimitiveResult.True;
     public PrimitiveResult RunSnapshot(XObject me, XObject? target, ObjectPosition position, int snapTargetSlot, bool snapTargetFlag,
         int directionMask, bool slotFlag, (int Dy, int Dx, int Ddir)? relative)
@@ -282,15 +268,9 @@ internal sealed class PrimitiveTestHost : ISimulationHost
         return EffectStarts;
     }
 
-    /// <summary>Find Best Interaction: the tuning and lot values the host answers (the lot is forced by default, so the gate
-    /// is the body's), the candidate table's count, flags and classes, the room and state answers, and the records and motive
-    /// table-derived records. Missing table flags answer the eligible bit, and missing rooms answer value 1 (the room exists).
-    /// The nine source-selected motive IDs and their curves are engine data.</summary>
     public AutonomyLot Lot { get; set; } = new(true, false, false, 0, 0, 0, null);
-    /// <summary>Find Best Interaction test fixtures. The owning tests serialize these into candidate TTAB/guard data before invoking the engine.</summary>
     public Dictionary<short, List<InteractionRecord>> Records { get; } = [];
     public AutonomyLot AutonomyLotState() => Lot;
-    /// <summary>Push Interaction: the answer the native-table-validated push gives.</summary>
     public bool PushAnswer { get; set; } = true;
     public bool PushInteraction(XPerson person, XObject owner, byte interactionId, int priority, XObject? secondary, int flags)
     {
@@ -298,7 +278,6 @@ internal sealed class PrimitiveTestHost : ISimulationHost
         return PushAnswer;
     }
 
-    /// <summary>Make New Character: the character the creation answers (null when it fails).</summary>
     public XObject? NewCharacter { get; set; }
 
     public XObject? CreateCharacter(int mode)
@@ -306,7 +285,6 @@ internal sealed class PrimitiveTestHost : ISimulationHost
         Calls.Add($"CreateCharacter({mode})");
         return NewCharacter;
     }
-    /// <summary>GenericSimsCall call 0x0c: out-of-domain transform table bytes.</summary>
     public Func<int, sbyte> TileTransformByteAnswer { get; set; } = _ => 0;
 
     public sbyte TileTransformByte(int index)
@@ -314,7 +292,6 @@ internal sealed class PrimitiveTestHost : ISimulationHost
         Calls.Add($"TileTransformByte({index})");
         return TileTransformByteAnswer(index);
     }
-    /// <summary>GenericSimsCall call 0x12: the active-person index (-1 by default, meaning none).</summary>
     public Func<int, int> ActivePersonIndexAnswer { get; set; } = _ => -1;
 
     public int ActivePersonIndex(int position)
@@ -323,7 +300,6 @@ internal sealed class PrimitiveTestHost : ISimulationHost
         return ActivePersonIndexAnswer(position);
     }
 
-    /// <summary>GenericSimsCall call 0x12: the record id (null by default, meaning no record).</summary>
     public Func<int, short?> ActivePersonRecordIdAnswer { get; set; } = _ => null;
 
     public short? ActivePersonRecordId(int index)
@@ -332,7 +308,6 @@ internal sealed class PrimitiveTestHost : ISimulationHost
         return ActivePersonRecordIdAnswer(index);
     }
 
-    /// <summary>GenericSimsCall call 0x1a: the stored slot (null by default, meaning no stored object).</summary>
     public short? StoredSlotPersonIdAnswer { get; set; }
 
     public short? StoredSlotPersonId()
@@ -441,7 +416,6 @@ internal sealed class PrimitiveTestHost : ISimulationHost
     }
 
     public void SelectedPersonChanged(XObject person) => Calls.Add($"SelectedPersonChanged({person.Id})");
-    /// <summary>Set to Next mode 11: the entries of the global id table, in order.</summary>
     public List<int> IdTableEntries { get; set; } = [];
 
     public IReadOnlyList<int> GlobalIdTable()
@@ -449,7 +423,6 @@ internal sealed class PrimitiveTestHost : ISimulationHost
         Calls.Add("GlobalIdTable");
         return IdTableEntries;
     }
-    /// <summary>Set to Next mode 10: the career entry ids, in vector order.</summary>
     public List<int> CareerEntries { get; set; } = [];
 
     public IReadOnlyList<int> CareerTable()
@@ -457,7 +430,6 @@ internal sealed class PrimitiveTestHost : ISimulationHost
         Calls.Add("CareerTable");
         return CareerEntries;
     }
-    /// <summary>Create New Object Instance: what the creation answers (null when it fails), and the tile, room and facing answers.</summary>
     public Func<int, XObject?> CreateObjectAnswer { get; set; } = _ => null;
     public Func<int, int, int, int?, bool> TileHasObjectAnswer { get; set; } = (_, _, _, _) => false;
     public Func<int, int, int, short> RoomAtTileAnswer { get; set; } = (_, _, _) => 0;
@@ -495,7 +467,6 @@ internal sealed class PrimitiveTestHost : ISimulationHost
     public void InitCreatedPerson(XPerson created) => Calls.Add($"InitCreatedPerson({created.Id})");
     public void ArriveCreatedPerson(XPerson created) => Calls.Add($"ArriveCreatedPerson({created.Id})");
 
-    /// <summary>Manage Inventory: what SoundBankOf answers for every object.</summary>
     public Func<XObject, int> SoundBankAnswer { get; set; } = _ => 0;
 
     public int SoundBankOf(XObject obj)
@@ -504,7 +475,6 @@ internal sealed class PrimitiveTestHost : ISimulationHost
         return SoundBankAnswer(obj);
     }
 
-    /// <summary>Find Location For: what the lot search answers (null for none), and the found tile.</summary>
     public bool FindLocationAnswer { get; set; } = true;
     public ObjectPosition FoundTile { get; set; }
 
@@ -526,22 +496,12 @@ internal sealed class PrimitiveTestHost : ISimulationHost
         Calls.Add($"RotateForPlacement({stackObject.Id},{steps})");
     public void FinishLocationSearch(XObject stackObject) => Calls.Add($"FinishLocationSearch({stackObject.Id})");
     public void FinalizePlacement(XObject stackObject) => Calls.Add($"FinalizePlacement({stackObject.Id})");
-    // Idle For Input, Gosub Found Action, Reach/Put.
-    /// <summary>The object a queued action runs on when the start is accepted, or null (refused or none).</summary>
     public XObject? QueuedActionTarget { get; set; }
-    /// <summary>The found-action table FoundActions answers, or null for none.</summary>
-    /// <summary>What CanStartAction answers.</summary>
-    /// <summary>What CanPlace answers (the Put check).</summary>
     public bool PlaceAnswer { get; set; } = true;
-    /// <summary>What GrabHolder answers: the holder and the value that goes with it.</summary>
     public (XObject? Holder, int Value) HolderAnswer { get; set; }
-    /// <summary>What SlotPosition answers for every slot.</summary>
     public float SlotPositionAnswer { get; set; } = 1f;
-    /// <summary>The event codes NextAvatarEvent hands out, in order; an empty queue answers false.</summary>
     public Queue<int> AvatarEvents { get; } = [];
-    /// <summary>What ReachAnimationDone answers.</summary>
     public bool ReachDoneAnswer { get; set; }
-    /// <summary>What StartReachAnimation answers.</summary>
     public bool StartReachAnswer { get; set; } = true;
     public ActionQueueSlot? StartedAction { get; private set; }
     public bool SetNonInterruptibleDuringQueuedActionStart { get; set; }
@@ -594,7 +554,6 @@ internal sealed class PrimitiveTestHost : ISimulationHost
         Calls.Add($"Place({target.Id},{at.X},{at.Y},{at.Height},{who.Id},{flag})");
 }
 
-/// <summary>A tree table for the tests: trees by id.</summary>
 internal sealed class TreeTable(params (short Id, Bhav Tree)[] trees) : ITreeTable
 {
     private readonly Dictionary<short, Bhav> _trees = trees.ToDictionary(entry => entry.Id, entry => entry.Tree);
@@ -602,8 +561,6 @@ internal sealed class TreeTable(params (short Id, Bhav Tree)[] trees) : ITreeTab
     public Bhav? Find(short id) => _trees.GetValueOrDefault(id);
 }
 
-/// <summary>Shared builders for the primitive tests: the operand bytes Sims.exe reads, and a lot with a person (id 1)
-/// that holds the frame. The person is id 100, so the test objects can use small ids.</summary>
 internal static class PrimitiveTestWorld
 {
     public static short[] Definition(short type = 0)
@@ -613,7 +570,6 @@ internal static class PrimitiveTestWorld
         return definition;
     }
 
-    /// <summary>A tree as the test file stores it: the type, then each instruction's opcode, targets and operand.</summary>
     public static Bhav Tree(byte type, params (ushort Opcode, byte True, byte False, byte[] Operand)[] code)
     {
         var chunk = new ChunkBuilder().U16(0x8002).S16((short)code.Length).U8(type).U8(0).U8(0).U8(0).U32(0);
@@ -622,8 +578,6 @@ internal static class PrimitiveTestWorld
         return Bhav.Read(file, iff);
     }
 
-    /// <summary>An Expression operand: left and right values, the owner of each (8 is temporary, 7 literal) and the
-    /// operator.</summary>
     public static byte[] Expression(short lhs, short rhs, byte op, byte lhsOwner = 8, byte rhsOwner = 7) =>
         [(byte)lhs, (byte)(lhs >> 8), (byte)rhs, (byte)(rhs >> 8), 0, op, lhsOwner, rhsOwner];
 

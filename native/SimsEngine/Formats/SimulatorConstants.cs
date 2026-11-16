@@ -1,15 +1,13 @@
 namespace SimsEngine.Formats;
 
-/// <summary>One FCNS tuning entry loaded by Sims.exe's FUN_0041337c/FUN_004135ba path.</summary>
 public sealed record SimulatorConstant(string Name, float Value, string Description);
 
-/// <summary>The FCNS 2 simulator constants from Global.iff. Sims.exe looks up names case-insensitively in
-/// FUN_00413236/FUN_0046f990 and applies caller-provided defaults in FUN_004132b3.</summary>
+/// <summary>Manages simulator tuning constants loaded from the Global.iff FCNS resource, supporting
+/// case-insensitive lookups with fallback defaults.</summary>
 public sealed class SimulatorConstants
 {
     private readonly Dictionary<string, float> _values = new(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>The empty table uses the exact ROM defaults passed to FUN_004132b3 by its callers.</summary>
     public static SimulatorConstants Empty { get; } = new([]);
     public IReadOnlyList<SimulatorConstant> Entries { get; }
 
@@ -17,11 +15,11 @@ public sealed class SimulatorConstants
     {
         Entries = entries;
         foreach (var entry in entries)
-            _values.TryAdd(entry.Name, entry.Value); // The original lookup returns the first matching row.
+            _values.TryAdd(entry.Name, entry.Value);
     }
 
-    /// <summary>Reads the original version-1 FCNS layout: SNCF header, count, and even-padded name/float/description rows.
-    /// Layout corroborated against the installed Global.far FCNS 2 chunk; lookup and fallback semantics come from Sims.exe.</summary>
+    /// <summary>Reads the version 1 FCNS layout, consisting of an SNCF header, row count, and even-padded
+    /// name, float value, and description fields.</summary>
     public static SimulatorConstants Read(IffFile file, IffChunk chunk)
     {
         ArgumentNullException.ThrowIfNull(file);
@@ -51,6 +49,5 @@ public sealed class SimulatorConstants
         return new SimulatorConstants(entries);
     }
 
-    /// <summary>FUN_004132b3: get one value by its source name, retaining the supplied Sims.exe fallback on a miss.</summary>
     public float Get(string name, float defaultValue) => _values.GetValueOrDefault(name, defaultValue);
 }

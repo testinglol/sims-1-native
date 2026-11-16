@@ -135,7 +135,7 @@ public sealed class SimulationWorldTileValueTests
         var item = world.Add(Object(16, position));
         item[ObjectData.PlacementFlags] = 0x0020;
 
-        // FUN_00477a73 initializes +0x64 cells to 0xff, so FUN_004790bc rejects this gated cell.
+        // Uninitialized placement eligibility cells have value 0xFF and reject object placement.
         Assert.False(world.HasPlacementEligibilityAt(2, 2, 1));
         Assert.False(world.CanPlaceObject(item, position));
 
@@ -244,8 +244,8 @@ public sealed class SimulationWorldTileValueTests
 
         Assert.Equal(new ObjectPosition(0x90, 0x70, 1), root.Position);
         Assert.Equal(new ObjectPosition(0xa0, 0x90, 2), part.Position);
-        // A non-lead FUN_00421ea5 request delegates directly to the master's +0x58 group callback;
-        // the root wrapper's cache writes are not executed by FUN_00422c62.
+        // Moving a non-lead multi-tile part delegates directly to the master object callback without
+        // caching intermediate root wrapper position state.
         Assert.Null(root.MultiTileMovePositionState);
         Assert.Null(part.MultiTileMovePositionState);
         Assert.Equal((short)0, root.MultiTileMoveFlag1B0);
@@ -270,8 +270,8 @@ public sealed class SimulationWorldTileValueTests
         var lead = Object(17, new ObjectPosition(0x88, 0x98, 1));
         lead.RuntimeClass = ObjectClass.MultiTileObject;
         lead.SavedMultiTileState = new MultiTileState(0, 0, 0, 0, 0, 0, 0, null);
-        // FUN_0042339b computes +0x1a0 from the +0xf8 difference (ObjectHead.X), and +0x1a4 from
-        // +0xf4 (ObjectHead.Y). An asymmetric saved footprint must be unchanged by a placement refresh.
+        // Multi-tile part relative offsets derive from lead object tile differences and must remain
+        // unchanged during placement refresh.
         var original = new ObjectPosition(lead.Position.X + x * 16, lead.Position.Y + y * 16, 1);
         var part = Object(18, original);
         part.RuntimeClass = ObjectClass.MultiTileObject;
@@ -488,11 +488,11 @@ public sealed class SimulationWorldTileValueTests
     }
 
     [Theory]
-    [InlineData(0)] // unresolved definition slot
-    [InlineData(1)] // competing occupant
-    [InlineData(2)] // disallowed height
-    [InlineData(3)] // insufficient support
-    [InlineData(4)] // containment cycle
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(4)]
     public void NonPersonAssociationWithInvalidResolvedSlotDoesNotFallBackToOrdinaryPlacement(int rejection)
     {
         var world = new SimulationWorld();
@@ -662,7 +662,7 @@ public sealed class SimulationWorldTileValueTests
             TypeRecord = new TypeRecord(31) { FootprintMask = 0x1111 },
         };
         person[ObjectData.AllowedHeightFlags] = 1;
-        person[ObjectData.PlacementFlags] = 1; // bypass the occupied root cell so the source footprint error 0x0b is exercised
+        person[ObjectData.PlacementFlags] = 1; // Placement flag 1 bypasses root cell occupancy validation.
         person[ObjectData.RotationNotches] = 1;
         person[ObjectData.Direction] = 2;
         person.MultiTileMoveValue1C4 = 44;
@@ -729,8 +729,8 @@ public sealed class SimulationWorldTileValueTests
 
         world.BeginObjectRemoval(person, 1);
 
-        // FUN_00433ef5 (00433ef5.c:30-53) moves both +0x130 slot children with person, while FUN_0044822b
-        // (0044822b.c:18,45) invokes +0x50(0) only on the second person footprint slot (+0x48).
+        // Moving a person relocates both slot children, but triggers the removal callback only on the
+        // second footprint slot.
         Assert.Equal((short)0, firstSlotObject.RemovalCallbackWord14);
         Assert.Equal((short)-1, secondSlotObject.RemovalCallbackWord14);
         Assert.Equal(new ObjectPosition(-16, -16, 1), secondSlotObject.Position);
@@ -977,7 +977,7 @@ public sealed class SimulationWorldTileValueTests
         var destination = world.Add(Object(38, destinationPosition));
         var mover = world.Add(Object(39, new ObjectPosition(0x30, 0x40, 1)));
         var displaced = world.Add(Object(40, destinationPosition with { Height = 1 }, destination.ClockManagerIndex));
-        destination.Slots.AddRange([0, 0]); // The relation vector still reflects the pre-apply empty slot.
+        destination.Slots.AddRange([0, 0]);
         destination.FootprintSlots.Add(new ObjectFootprintSlot { OccupantObjectId = displaced.ClockManagerIndex });
         mover.Slots.Add(0);
         displaced[ObjectData.ParentId] = destination.ClockManagerIndex;
@@ -1109,7 +1109,7 @@ public sealed class SimulationWorldTileValueTests
         world.LotRoomMaps[1] = RoomMapWithDiagonalWall(diagonal);
         var item = world.Add(Object(16));
         item[ObjectData.WallPlacementFlags] = (short)wallFlags;
-        item[ObjectData.PlacementFlags] = 0x0400; // isolate FUN_004770d1 from FUN_00476f33's separate footprint-wall gate
+        item[ObjectData.PlacementFlags] = 0x0400;
         var candidate = new ObjectPosition(0x18, 0x18, 1);
 
         Assert.Equal(expected, world.CanPlaceObject(item, candidate));
@@ -1125,15 +1125,15 @@ public sealed class SimulationWorldTileValueTests
     public void RequiredCardinalWallCategoryIsCheckedWhenDiagonalSegmentIsPresent(int category, bool expected)
     {
         var world = new SimulationWorld();
-        // FUN_004770d1 requires cardinal segment 2 and a diagonal segment. The category rejection is
-        // for the required cardinal segment; diagonal segment presence is controlled by flags 0x40/0x80.
+        // Wall category restrictions apply only to required cardinal wall segments, while diagonal segments
+        // are validated solely for presence or absence.
         world.LotRoomMaps[1] = RoomMapWithWallGeometry(0x12, (byte)category);
         var expanded = world.LotRoomMaps[1].ExpandedWallAt(1, 1)!.Value;
         Assert.Equal((uint)0x12, expanded.UInt32At(0));
         Assert.Equal((ushort)category, expanded.WallCategory(2));
         var item = world.Add(Object(19));
-        item[ObjectData.WallPlacementFlags] = 0x0081; // require local segment 2 and permit a diagonal wall
-        item[ObjectData.PlacementFlags] = 0x0400; // isolate FUN_004770d1 from the separate footprint-wall gate
+        item[ObjectData.WallPlacementFlags] = 0x0081;
+        item[ObjectData.PlacementFlags] = 0x0400;
 
         Assert.Equal(expected, world.CanPlaceObject(item, new ObjectPosition(0x18, 0x18, 1)));
     }
@@ -1150,8 +1150,8 @@ public sealed class SimulationWorldTileValueTests
         var expanded = world.LotRoomMaps[1].ExpandedWallAt(1, 1)!.Value;
         Assert.Equal((ushort)diagonalCategory, expanded.WallCategory(0x10));
         var item = world.Add(Object(20));
-        item[ObjectData.WallPlacementFlags] = 0x00c0; // require and permit a diagonal segment
-        item[ObjectData.PlacementFlags] = 0x0400; // skip the separate footprint-wall gate
+        item[ObjectData.WallPlacementFlags] = 0x00c0;
+        item[ObjectData.PlacementFlags] = 0x0400;
 
         Assert.True(world.CanPlaceObject(item, new ObjectPosition(0x18, 0x18, 1)));
     }
@@ -1184,11 +1184,11 @@ public sealed class SimulationWorldTileValueTests
         Assert.Equal((ushort)diagonalCategory, expanded.WallCategory(0x10));
 
         var item = world.Add(Object(21));
-        item[ObjectData.WallPlacementFlags] = 0x00c0; // require and permit the diagonal segment only
-        item[ObjectData.PlacementFlags] = 0x0400; // skip FUN_00476f33's separate footprint-wall gate
+        item[ObjectData.WallPlacementFlags] = 0x00c0;
+        item[ObjectData.PlacementFlags] = 0x0400;
 
-        // FUN_004770d1 rejects forbidden categories only for required cardinal masks; diagonal bits
-        // are tested for presence/absence, so these category ids do not reject this placement.
+        // Forbidden wall categories reject placement only for required cardinal segments, while diagonal
+        // segments are evaluated without category filtering.
         Assert.True(world.CanPlaceObject(item, new ObjectPosition(0x18, 0x18, 1)));
     }
 
@@ -1225,7 +1225,6 @@ public sealed class SimulationWorldTileValueTests
         var world = new SimulationWorld();
         var item = world.Add(Object(71, new ObjectPosition(0x18, 0x18, 1)));
 
-        // OBJD field 4 is NumGraphics; the placement gate reads cXObject +0x52, object-data field 4.
         item.Definition[(int)ObjdField.NumGraphics] = 1;
         item[ObjectData.AllowedHeightFlags] = 0;
         Assert.False(world.CanPlaceObject(item, item.Position));
@@ -1356,12 +1355,12 @@ public sealed class SimulationWorldTileValueTests
         var world = new SimulationWorld();
         var master = Object(76, new ObjectPosition(0x80, 0x80, 1));
         master.RuntimeClass = runtimeClass;
-        master[ObjectData.PlacementFlags] = 1; // Every validated member skips the synthetic shared root cell.
+        master[ObjectData.PlacementFlags] = 1;
         world.Add(master);
         var position = new ObjectPosition(0x38, 0x38, 1);
         var sibling = Object(78, position);
         sibling.RuntimeClass = runtimeClass;
-        sibling[ObjectData.PlacementFlags] = 1; // Source bit 0 bypasses the tile-root occupancy comparison.
+        sibling[ObjectData.PlacementFlags] = 1;
         world.Add(sibling);
         var candidate = Object(77, position);
         candidate.RuntimeClass = runtimeClass;
@@ -1637,8 +1636,6 @@ public sealed class SimulationWorldTileValueTests
         Assert.False(world.CanPlaceObject(candidate, candidate.Position, stack));
         Assert.Equal([other.Id], stack.StackObjects);
 
-        // The second source call changes ECX to the neighbor, so its own scope and
-        // temporaries must be used. Re-running the candidate tree cannot approve this.
         other.TypeRecord = new TypeRecord(32)
         {
             FunctionTable = functions,

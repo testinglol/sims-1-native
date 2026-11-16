@@ -13,8 +13,6 @@ public sealed class NotifyStackObjectOutOfRoomPrimitiveTests
         public Bhav? Find(short id) => id == 4096 ? tree : null;
     }
 
-    /// <summary>A lot with the running object (100) and a stack object (5) whose restored thread waits on
-    /// <paramref name="opcode"/>; the instruction's operand word 0 names the counter parameter.</summary>
     private static (TreeContext Context, XObject StackObject, StackFrame Frame) Lot(
         short opcode, short counterIndex = 0, short[]? parameters = null)
     {

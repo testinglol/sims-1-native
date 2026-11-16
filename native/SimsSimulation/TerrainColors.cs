@@ -1,12 +1,9 @@
 using Microsoft.Xna.Framework;
 
-/// <summary>Terrain ramp colours configured per lot type by Sims.exe cTerrainRenderer (004c482f.c,
-/// 0049e331.c, 0049e3a0.c, 0049e421.c, 0049e49a.c, 0049e4ff.c, 0049e56a.c).</summary>
 internal static class TerrainColors
 {
-    // Indexed 0..7 by lot terrain type:
-    // 0 = Grass (0049e331.c), 1 = Beach Sand (0049e3a0.c), 2 = Grass default, 3 = Snow (0049e421.c),
-    // 4 = Grass default, 5 = Magic Dark Grass (0049e4ff.c), 6 = Magic Autumn Grass (0049e56a.c), 7 = Magic Cloud (0049e49a.c).
+    // Indexed 0 through 7 by lot terrain type: 0, 2, and 4 for grass; 1 for beach sand; 3 for snow; 5 for
+    // magic dark grass; 6 for magic autumn grass; and 7 for magic cloud.
     internal static readonly Color[] LightGreen =
     [
         new(0x50, 0x74, 0x3b), new(0x50, 0x74, 0x3b), new(0x50, 0x74, 0x3b), new(0xe6, 0xf0, 0xff),

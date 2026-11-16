@@ -5,9 +5,6 @@ using System.Xml;
 using System.Xml.Linq;
 using SimsEngine.Formats;
 
-/// <summary>
-/// Lists objects in a Sims 1 or The Sims Online object tree as TSV for candidate selection, and merges TSO object packs (.iff + .spf + .otf) into a single Sims 1-compatible .iff.
-/// </summary>
 static class TsoInventory
 {
     public static int Run(string root, string output)
@@ -69,9 +66,8 @@ static class TsoInventory
         return 0;
     }
 
-    /// <summary>
-    /// Reads <paramref name="objectName"/> from a TSO objects directory, merging its .spf sprites and .otf tuning tables into the .iff chunk list when present.
-    /// </summary>
+    /// <summary>Reads an object package from disk, merging any external .spf sprites and .otf tuning tables
+    /// into the .iff chunk list.</summary>
     public static (byte[] Bytes, string Summary) Merged(string root, string objectName)
     {
         var name = Path.GetFileNameWithoutExtension(objectName);

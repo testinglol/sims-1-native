@@ -5,13 +5,11 @@ namespace SimsEngine.Tests;
 
 public sealed class TestSimInteractingWithPrimitiveTests
 {
-    // Byte 0 the mode, byte 1 the owner of the other person's id variable, bytes 2 and 3 its data. Bytes 4 to 7 are not read.
     private static byte[] Operand(byte mode, byte owner, short data) =>
         [mode, owner, (byte)data, (byte)(data >> 8), 0xEE, 0xEE, 0xEE, 0xEE];
 
     private static SimulationError Fails(Action action) => Assert.Throws<SimulationException>(action).Error;
 
-    // Me is person 100 and the stack object is object 2 unless the test replaces it.
     private static (TreeContext Context, XPerson Me, XObject Stack) World(short stackObject = 2)
     {
         var (context, me, _) = PrimitiveTestWorld.Create(stackObject: stackObject);
@@ -60,10 +58,10 @@ public sealed class TestSimInteractingWithPrimitiveTests
         var (context, me, stack) = World();
         var other = context.World.Add(new XPerson(5, PrimitiveTestWorld.Definition(XPerson.PersonType)));
         other.InteractingObjects.Add(stack);
-        // Named by a literal (owner 7): person 5 holds the stack object, so the answer is true.
         Assert.Equal(PrimitiveResult.True, TestSimInteractingWithPrimitive.Execute(context, Operand(1, 7, 5)));
 
-        // My own list is not searched in mode 1: I hold the stack object but person 5 does not.
+        // Mode 1 checks only the target person's interacting objects list, ignoring the caller's own
+        // interaction list.
         other.InteractingObjects.Clear();
         me.InteractingObjects.Add(stack);
         Assert.Equal(PrimitiveResult.False, TestSimInteractingWithPrimitive.Execute(context, Operand(1, 7, 5)));
@@ -76,7 +74,6 @@ public sealed class TestSimInteractingWithPrimitiveTests
         var other = context.World.Add(new XPerson(6, PrimitiveTestWorld.Definition(XPerson.PersonType)));
         other.InteractingObjects.Add(stack);
         context.Me.Temporaries[2] = 6;
-        // Owner 8 is a temporary: temporary 2 holds person 6.
         Assert.Equal(PrimitiveResult.True, TestSimInteractingWithPrimitive.Execute(context, Operand(1, 8, 2)));
     }
 

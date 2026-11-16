@@ -140,26 +140,44 @@ fragment main0_out main0(main0_in in [[stage_in]], texture2d<float> art [[textur
     {
         int2 nearest = clamp(int2(fast::clamp(in.inUV, float2(0.0), float2(1.0)) * texSize), int2(0), artDims - int2(1));
         float4 raw = art.read(uint2(nearest), 0);
-        if (raw.w < in.inDepthInterval.z)
-        {
-            discard_fragment();
-        }
-        if (raw.w > 0.0)
-        {
-            float _334 = raw.w;
-            float4 _335 = raw;
-            float3 _338 = _335.xyz / float3(_334);
-            raw.x = _338.x;
-            raw.y = _338.y;
-            raw.z = _338.z;
-            raw.w = 1.0;
-        }
         int2 depthCoord = clamp(int2(fast::clamp(in.inUV, float2(0.0), float2(1.0)) * float2(depthDims)), int2(0), depthDims - int2(1));
         float d = depthMap.read(uint2(depthCoord), 0).x;
         if (d >= 1.0)
         {
             discard_fragment();
         }
+        if (in.inDepthInterval.w < (-0.5))
+        {
+            bool _354 = raw.w >= in.inDepthInterval.z;
+            bool _362;
+            if (!_354)
+            {
+                _362 = raw.w < 0.0039215688593685626983642578125;
+            }
+            else
+            {
+                _362 = _354;
+            }
+            if (_362)
+            {
+                discard_fragment();
+            }
+            float stepBias = fast::max(1.9999999949504854157567024230957e-06, (0.25 * abs(in.inDepthInterval.y - in.inDepthInterval.x)) / 254.0);
+            out.color = raw * in.inTint;
+            out.gl_FragDepth = fast::max(0.0, mix(in.inDepthInterval.x, in.inDepthInterval.y, (d * 255.0) / 254.0) - stepBias);
+            return out;
+        }
+        if (raw.w < in.inDepthInterval.z)
+        {
+            discard_fragment();
+        }
+        float _409 = raw.w;
+        float4 _411 = raw;
+        float3 _414 = _411.xyz / float3(fast::max(_409, 9.9999997473787516355514526367188e-05));
+        raw.x = _414.x;
+        raw.y = _414.y;
+        raw.z = _414.z;
+        raw.w = 1.0;
         out.color = raw * in.inTint;
         out.gl_FragDepth = mix(in.inDepthInterval.x, in.inDepthInterval.y, (d * 255.0) / 254.0);
         return out;
@@ -295,17 +313,17 @@ fragment main0_out main0(main0_in in [[stage_in]], texture2d<float> art [[textur
     bool isEdgePass = in.inDepthInterval.w > 1.5;
     if (isEdgePass)
     {
-        bool _838 = sampled.w >= in.inDepthInterval.z;
-        bool _846;
-        if (!_838)
+        bool _882 = sampled.w >= in.inDepthInterval.z;
+        bool _889;
+        if (!_882)
         {
-            _846 = sampled.w < 0.0039215688593685626983642578125;
+            _889 = sampled.w < 0.0039215688593685626983642578125;
         }
         else
         {
-            _846 = _838;
+            _889 = _882;
         }
-        if (_846)
+        if (_889)
         {
             discard_fragment();
         }
@@ -333,17 +351,17 @@ fragment main0_out main0(main0_in in [[stage_in]], texture2d<float> art [[textur
     float minValidD = 2.0;
     float maxValidD = -1.0;
     float minCoreD = 2.0;
-    bool _902 = d00 < 1.0;
-    bool _908;
-    if (_902)
+    bool _945 = d00 < 1.0;
+    bool _951;
+    if (_945)
     {
-        _908 = c00.w > 0.0;
+        _951 = c00.w > 0.0;
     }
     else
     {
-        _908 = _902;
+        _951 = _945;
     }
-    if (_908)
+    if (_951)
     {
         minValidD = fast::min(minValidD, d00);
         maxValidD = fast::max(maxValidD, d00);
@@ -352,17 +370,17 @@ fragment main0_out main0(main0_in in [[stage_in]], texture2d<float> art [[textur
             minCoreD = fast::min(minCoreD, d00);
         }
     }
-    bool _926 = d10 < 1.0;
-    bool _932;
-    if (_926)
+    bool _969 = d10 < 1.0;
+    bool _975;
+    if (_969)
     {
-        _932 = c10.w > 0.0;
+        _975 = c10.w > 0.0;
     }
     else
     {
-        _932 = _926;
+        _975 = _969;
     }
-    if (_932)
+    if (_975)
     {
         minValidD = fast::min(minValidD, d10);
         maxValidD = fast::max(maxValidD, d10);
@@ -371,17 +389,17 @@ fragment main0_out main0(main0_in in [[stage_in]], texture2d<float> art [[textur
             minCoreD = fast::min(minCoreD, d10);
         }
     }
-    bool _950 = d01 < 1.0;
-    bool _956;
-    if (_950)
+    bool _993 = d01 < 1.0;
+    bool _999;
+    if (_993)
     {
-        _956 = c01.w > 0.0;
+        _999 = c01.w > 0.0;
     }
     else
     {
-        _956 = _950;
+        _999 = _993;
     }
-    if (_956)
+    if (_999)
     {
         minValidD = fast::min(minValidD, d01);
         maxValidD = fast::max(maxValidD, d01);
@@ -390,17 +408,17 @@ fragment main0_out main0(main0_in in [[stage_in]], texture2d<float> art [[textur
             minCoreD = fast::min(minCoreD, d01);
         }
     }
-    bool _974 = d11 < 1.0;
-    bool _980;
-    if (_974)
+    bool _1017 = d11 < 1.0;
+    bool _1023;
+    if (_1017)
     {
-        _980 = c11.w > 0.0;
+        _1023 = c11.w > 0.0;
     }
     else
     {
-        _980 = _974;
+        _1023 = _1017;
     }
-    if (_980)
+    if (_1023)
     {
         minValidD = fast::min(minValidD, d11);
         maxValidD = fast::max(maxValidD, d11);
@@ -424,117 +442,117 @@ fragment main0_out main0(main0_in in [[stage_in]], texture2d<float> art [[textur
         float nearD = depthMap.read(uint2(nearCoord), 0).x;
         if ((maxValidD - minValidD) <= 0.01568627543747425079345703125)
         {
-            bool _1040 = d00 < 1.0;
-            bool _1046;
-            if (_1040)
+            bool _1083 = d00 < 1.0;
+            bool _1089;
+            if (_1083)
             {
-                _1046 = c00.w > 0.0;
+                _1089 = c00.w > 0.0;
             }
             else
             {
-                _1046 = _1040;
+                _1089 = _1083;
             }
-            float _1047;
-            if (_1046)
+            float _1090;
+            if (_1089)
             {
-                _1047 = ((1.0 - f.x) * (1.0 - f.y)) * c00.w;
+                _1090 = ((1.0 - f.x) * (1.0 - f.y)) * c00.w;
             }
             else
             {
-                _1047 = 0.0;
+                _1090 = 0.0;
             }
-            float dw00 = _1047;
-            bool _1064 = d10 < 1.0;
-            bool _1070;
-            if (_1064)
+            float dw00 = _1090;
+            bool _1107 = d10 < 1.0;
+            bool _1113;
+            if (_1107)
             {
-                _1070 = c10.w > 0.0;
+                _1113 = c10.w > 0.0;
             }
             else
             {
-                _1070 = _1064;
+                _1113 = _1107;
             }
-            float _1071;
-            if (_1070)
+            float _1114;
+            if (_1113)
             {
-                _1071 = (f.x * (1.0 - f.y)) * c10.w;
+                _1114 = (f.x * (1.0 - f.y)) * c10.w;
             }
             else
             {
-                _1071 = 0.0;
+                _1114 = 0.0;
             }
-            float dw10 = _1071;
-            bool _1087 = d01 < 1.0;
-            bool _1093;
-            if (_1087)
+            float dw10 = _1114;
+            bool _1130 = d01 < 1.0;
+            bool _1136;
+            if (_1130)
             {
-                _1093 = c01.w > 0.0;
+                _1136 = c01.w > 0.0;
             }
             else
             {
-                _1093 = _1087;
+                _1136 = _1130;
             }
-            float _1094;
-            if (_1093)
+            float _1137;
+            if (_1136)
             {
-                _1094 = ((1.0 - f.x) * f.y) * c01.w;
+                _1137 = ((1.0 - f.x) * f.y) * c01.w;
             }
             else
             {
-                _1094 = 0.0;
+                _1137 = 0.0;
             }
-            float dw01 = _1094;
-            bool _1110 = d11 < 1.0;
-            bool _1116;
-            if (_1110)
+            float dw01 = _1137;
+            bool _1153 = d11 < 1.0;
+            bool _1159;
+            if (_1153)
             {
-                _1116 = c11.w > 0.0;
+                _1159 = c11.w > 0.0;
             }
             else
             {
-                _1116 = _1110;
+                _1159 = _1153;
             }
-            float _1117;
-            if (_1116)
+            float _1160;
+            if (_1159)
             {
-                _1117 = (f.x * f.y) * c11.w;
+                _1160 = (f.x * f.y) * c11.w;
             }
             else
             {
-                _1117 = 0.0;
+                _1160 = 0.0;
             }
-            float dw11 = _1117;
+            float dw11 = _1160;
             float dwSum = ((dw00 + dw10) + dw01) + dw11;
-            float _1141;
+            float _1184;
             if (dwSum > 9.9999997473787516355514526367188e-06)
             {
-                _1141 = ((((d00 * dw00) + (d10 * dw10)) + (d01 * dw01)) + (d11 * dw11)) / dwSum;
+                _1184 = ((((d00 * dw00) + (d10 * dw10)) + (d01 * dw01)) + (d11 * dw11)) / dwSum;
             }
             else
             {
-                _1141 = minValidD;
+                _1184 = minValidD;
             }
-            resolvedDepth = _1141;
+            resolvedDepth = _1184;
         }
         else
         {
-            float _1167;
+            float _1210;
             if (nearD < 1.0)
             {
-                _1167 = nearD;
+                _1210 = nearD;
             }
             else
             {
-                _1167 = (minCoreD < 1.0) ? minCoreD : minValidD;
+                _1210 = (minCoreD < 1.0) ? minCoreD : minValidD;
             }
-            resolvedDepth = _1167;
+            resolvedDepth = _1210;
         }
     }
     float fragZ = mix(in.inDepthInterval.x, in.inDepthInterval.y, (resolvedDepth * 255.0) / 254.0);
     if (isEdgePass)
     {
-        float stepBias = fast::max(1.9999999949504854157567024230957e-06, (0.25 * abs(in.inDepthInterval.y - in.inDepthInterval.x)) / 254.0);
-        fragZ = fast::max(0.0, fragZ - stepBias);
+        float stepBias_1 = fast::max(1.9999999949504854157567024230957e-06, (0.25 * abs(in.inDepthInterval.y - in.inDepthInterval.x)) / 254.0);
+        fragZ = fast::max(0.0, fragZ - stepBias_1);
     }
     out.color = sampled * in.inTint;
     out.gl_FragDepth = fragZ;

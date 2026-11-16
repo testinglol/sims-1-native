@@ -64,11 +64,8 @@ public readonly record struct SceneDrawItem
     }
 }
 
-/// <summary>
-/// The three zoom levels of the original lot view. Scene units are medium-zoom pixels, so near draws every scene unit
-/// as two screen pixels and far as half of one; the art for each level is drawn at its own resolution, which keeps
-/// sprites sharp instead of magnifying the medium art.
-/// </summary>
+/// <summary>Defines the three lot zoom levels. Scene units represent medium-zoom pixels, rendering at 2
+/// screen pixels per unit at near zoom and 0.5 at far zoom using discrete asset resolutions.</summary>
 public enum LotZoom
 {
     Far = 1,
@@ -78,14 +75,8 @@ public enum LotZoom
 
 public static class LotZoomExtensions
 {
-    /// <summary>
-    /// CPState::__ct__ initializes the original control panel's zoom field to 1 (far).
-    /// </summary>
     public const LotZoom GameplayDefault = LotZoom.Far;
 
-    /// <summary>
-    /// Screen pixels per scene unit at a UI scale of 1.
-    /// </summary>
     public static float Factor(this LotZoom zoom) => zoom switch
     {
         LotZoom.Far => 0.5f,
@@ -94,14 +85,10 @@ public static class LotZoomExtensions
         _ => 1f
     };
 
-    /// <summary>
-    /// Zoom-aware lot sounds divide volume by 4 - zoom: near 1, medium 1/2, far 1/3.
-    /// </summary>
+    /// <summary>Calculates volume attenuation based on zoom level, dividing gain by (4 - zoom) to yield 1.0
+    /// at near, 0.5 at medium, and 0.33 at far zoom.</summary>
     public static float SoundGain(this LotZoom zoom) => 1f / (4 - (int)zoom);
 
-    /// <summary>
-    /// One step closer (positive) or farther (negative), stopping at near and far.
-    /// </summary>
     public static LotZoom Stepped(this LotZoom zoom, int steps) =>
         (LotZoom)Math.Clamp((int)zoom + steps, (int)LotZoom.Far, (int)LotZoom.Near);
 }
@@ -112,25 +99,34 @@ public readonly record struct SceneViewport
     public float Scale { get; }
     public Vector2 Origin { get; }
 
-    /// <summary>
-    /// Lays the scene out at an exact zoom factor with a whole-pixel origin, so at near and medium every texel lands on
-    /// whole screen pixels and nearest sampling stays crisp. <paramref name="pan"/> moves the scene centre away from
-    /// the view centre.
-    /// </summary>
+    /// <summary>Lays out the scene at an exact zoom factor with an integer-aligned pixel origin so
+    /// nearest-neighbor sampling maps directly to screen pixels. <paramref name="pan"/> offsets the scene
+    /// center from the view center.</summary>
     public SceneViewport(LotScene scene, Vector2 canvas, float panelHeight, LotZoom zoom, float uiScale, Vector2 pan)
+        : this(scene, canvas, panelHeight, zoom.Factor(), uiScale, pan, snapOriginToPixel: true)
     {
-        Size = new Vector2(canvas.X, MathF.Max(1f, canvas.Y - panelHeight));
-        Scale = MathF.Max(uiScale, 0.01f) * zoom.Factor();
-        Vector2 clamped = ClampedPan(pan, scene, Scale);
-        Vector2 rawOrigin = (Size - new Vector2(scene.Width, scene.Height) * Scale) / 2f + clamped;
-        Origin = new Vector2(
-            MathF.Round(rawOrigin.X, MidpointRounding.ToEven),
-            MathF.Round(rawOrigin.Y, MidpointRounding.ToEven));
     }
 
-    /// <summary>
-    /// Keeps the view centre inside the lot.
-    /// </summary>
+    public SceneViewport(
+        LotScene scene,
+        Vector2 canvas,
+        float panelHeight,
+        float zoomFactor,
+        float uiScale,
+        Vector2 pan,
+        bool snapOriginToPixel = true)
+    {
+        Size = new Vector2(canvas.X, MathF.Max(1f, canvas.Y - panelHeight));
+        Scale = MathF.Max(uiScale, 0.01f) * zoomFactor;
+        Vector2 clamped = ClampedPan(pan, scene, Scale);
+        Vector2 rawOrigin = (Size - new Vector2(scene.Width, scene.Height) * Scale) / 2f + clamped;
+        Origin = snapOriginToPixel
+            ? new Vector2(
+                MathF.Round(rawOrigin.X, MidpointRounding.ToEven),
+                MathF.Round(rawOrigin.Y, MidpointRounding.ToEven))
+            : rawOrigin;
+    }
+
     public static Vector2 ClampedPan(Vector2 pan, LotScene scene, float scale)
     {
         if (scene.LotWidth is int width && scene.LotHeight is int height && width > 2 && height > 2
@@ -149,9 +145,6 @@ public readonly record struct SceneViewport
         return Vector2.Clamp(pan, -limit, limit);
     }
 
-    /// <summary>
-    /// The pan that keeps the same scene point at the view centre after the scale changes.
-    /// </summary>
     public static Vector2 RescaledPan(Vector2 pan, float oldScale, float newScale)
     {
         if (oldScale <= 0f || newScale <= 0f)
@@ -172,10 +165,79 @@ public readonly record struct SceneViewport
     }
 }
 
+public readonly struct PickerAlphaMask
+{
+    private enum MaskKind : byte
+    {
+        Empty = 0,
+        FullyOpaque = 1,
+        Alpha8 = 2,
+        Depth8 = 3,
+    }
+
+    private readonly MaskKind _kind;
+    private readonly byte[] _data;
+
+    private PickerAlphaMask(MaskKind kind, byte[] data)
+    {
+        _kind = kind;
+        _data = data;
+    }
+
+    public static PickerAlphaMask Empty => new(MaskKind.Empty, []);
+    public static PickerAlphaMask Opaque => new(MaskKind.FullyOpaque, []);
+    public bool IsEmpty => _kind == MaskKind.Empty;
+    public bool IsFullyOpaque => _kind == MaskKind.FullyOpaque;
+    public int ByteCount => _data?.Length ?? 0;
+
+    public static PickerAlphaMask FromTexture(LotScene.Texture info, ReadOnlySpan<byte> raw)
+    {
+        int pixelCount = checked(info.Width * info.Height);
+        if (string.Equals(info.Encoding, "depth8", StringComparison.Ordinal))
+        {
+            return raw.Length >= pixelCount ? new PickerAlphaMask(MaskKind.Depth8, raw.ToArray()) : Empty;
+        }
+
+        if (raw.Length < pixelCount * 4)
+        {
+            return Empty;
+        }
+
+        for (int i = 0; i < pixelCount; i++)
+        {
+            if (raw[i * 4 + 3] != 255)
+            {
+                var alpha = new byte[pixelCount];
+                for (int j = 0; j < i; j++)
+                {
+                    alpha[j] = 255;
+                }
+                for (int j = i; j < pixelCount; j++)
+                {
+                    alpha[j] = raw[j * 4 + 3];
+                }
+                return new PickerAlphaMask(MaskKind.Alpha8, alpha);
+            }
+        }
+
+        return Opaque;
+    }
+
+    public byte AlphaAt(int pixelIndex) => _kind switch
+    {
+        MaskKind.FullyOpaque => 255,
+        MaskKind.Alpha8 => (uint)pixelIndex < (uint)_data.Length ? _data[pixelIndex] : (byte)0,
+        _ => 0,
+    };
+
+    public byte DepthAt(int pixelIndex) =>
+        _kind == MaskKind.Depth8 && (uint)pixelIndex < (uint)_data.Length ? _data[pixelIndex] : (byte)255;
+}
+
 public sealed class ScenePicker
 {
     private readonly LotScene _scene;
-    private readonly IReadOnlyList<byte[]> _pixels;
+    private readonly IReadOnlyList<PickerAlphaMask> _masks;
     private readonly IReadOnlyList<SceneDrawItem> _items;
     private readonly IReadOnlyList<Vector4> _meshBounds;
 
@@ -220,9 +282,21 @@ public sealed class ScenePicker
         IReadOnlyList<byte[]> pixels,
         IReadOnlyList<SceneDrawItem>? items = null,
         IReadOnlyList<Vector4>? precomputedMeshBounds = null)
+        : this(scene, ConvertMasks(scene, pixels), items, precomputedMeshBounds)
     {
+    }
+
+    public ScenePicker(
+        LotScene scene,
+        IReadOnlyList<PickerAlphaMask> masks,
+        IReadOnlyList<SceneDrawItem>? items = null,
+        IReadOnlyList<Vector4>? precomputedMeshBounds = null)
+    {
+        if (masks.Count != scene.Textures.Count)
+            throw new ContentError("Scene picker texture count mismatch");
+
         _scene = scene;
-        _pixels = pixels;
+        _masks = masks;
         _items = items ?? SceneDrawItem.Ordered(scene);
         if (precomputedMeshBounds is not null)
             _meshBounds = precomputedMeshBounds;
@@ -232,12 +306,31 @@ public sealed class ScenePicker
             _meshBounds = [];
     }
 
+    private static PickerAlphaMask[] ConvertMasks(LotScene scene, IReadOnlyList<byte[]> pixels)
+    {
+        if (pixels.Count != scene.Textures.Count)
+            throw new ContentError("Scene picker texture count mismatch");
+
+        var masks = new PickerAlphaMask[pixels.Count];
+        for (int i = 0; i < pixels.Count; i++)
+        {
+            masks[i] = PickerAlphaMask.FromTexture(scene.Textures[i], pixels[i]);
+        }
+
+        return masks;
+    }
+
     public LotCamera Camera => _scene.Camera;
 
     private float Alpha(int texture, Vector2 uv, bool repeating = false)
     {
+        PickerAlphaMask mask = _masks[texture];
+        if (mask.IsFullyOpaque)
+            return 1f;
+        if (mask.IsEmpty)
+            return 0f;
+
         var info = _scene.Textures[texture];
-        byte[] data = _pixels[texture];
         Vector2 coordinates = repeating
             ? new Vector2(uv.X - MathF.Floor(uv.X), uv.Y - MathF.Floor(uv.Y))
             : new Vector2(Math.Clamp(uv.X, 0f, 1f), Math.Clamp(uv.Y, 0f, 1f));
@@ -251,8 +344,7 @@ public sealed class ScenePicker
         {
             int column = repeating ? (sx % info.Width + info.Width) % info.Width : Math.Clamp(sx, 0, info.Width - 1);
             int row = repeating ? (sy % info.Height + info.Height) % info.Height : Math.Clamp(sy, 0, info.Height - 1);
-            int index = (row * info.Width + column) * 4 + 3;
-            return data[index] / 255f;
+            return mask.AlphaAt(row * info.Width + column) / 255f;
         }
 
         float top = Sample(x, y) * (1f - fraction.X) + Sample(x + 1, y) * fraction.X;
@@ -266,7 +358,11 @@ public sealed class ScenePicker
         if (info.Width < 2 || info.Height < 2)
             return false;
 
-        byte[] data = _pixels[texture];
+        PickerAlphaMask mask = _masks[texture];
+        if (mask.IsFullyOpaque)
+            return true;
+        if (mask.IsEmpty)
+            return false;
 
         (float Top, float Bottom)? ColumnSpan(int col)
         {
@@ -274,7 +370,7 @@ public sealed class ScenePicker
             int last = -1;
             for (int row = 0; row < info.Height; row++)
             {
-                if (data[(row * info.Width + col) * 4 + 3] >= 64)
+                if (mask.AlphaAt(row * info.Width + col) >= 64)
                 {
                     if (first < 0)
                         first = row;
@@ -353,7 +449,7 @@ public sealed class ScenePicker
             var info = _scene.Textures[texture];
             int x = Math.Min(info.Width - 1, (int)(uv.X * info.Width));
             int y = Math.Min(info.Height - 1, (int)(uv.Y * info.Height));
-            byte raw = _pixels[texture][y * info.Width + x];
+            byte raw = _masks[texture].DepthAt(y * info.Width + x);
             float depth = raw != 255
                 ? near + (far - near) * raw / 254f
                 : near + (far - near) * uv.X;
@@ -406,7 +502,7 @@ public sealed class ScenePicker
                     var info = _scene.Textures[texture];
                     int x = Math.Min(info.Width - 1, (int)(uv.X * info.Width));
                     int y = Math.Min(info.Height - 1, (int)(uv.Y * info.Height));
-                    byte raw = _pixels[texture][y * info.Width + x];
+                    byte raw = _masks[texture].DepthAt(y * info.Width + x);
                     if (raw == 255)
                         continue;
 

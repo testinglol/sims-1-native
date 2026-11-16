@@ -1,13 +1,7 @@
 #version 450
-// Sims.exe cTerrainRenderer, per art pixel. Colours are 128-shade ramps from the light to the dark grass colour of the
-// pixel's colour row (FUN_0049e846); shade 0 is the fully lit ground the scene exports.
-// - Dither (fDitherOffsets 0/8/0/6): each row of a 4-pixel column draws [s, s-8, s, s-6], alternating with
-//   [s-6, s, s-8, s] on the next row (FUN_0049db98).
-// - Grass blades (Terrain Detail medium/high, FUN_0049c48b): per tile, Min..Max blades interpolated by the grass value
-//   between -73 and 85 (300..800 medium, 500..1200 high; FUN_0049cf80), a quarter of that at far zoom. Each blade is a
-//   vertical run drawn upward, 1 pixel at far and medium zoom and 4 at near, less up to half at random, one shorter at
-//   or below -73 (FUN_0049e134, FUN_0049d914); its shade is the ground's plus 30 +- 0..30 (FUN_0049e2f6).
-// Blade placement uses a hash per art pixel instead of the original seeded pool, so the pattern differs pixel by pixel.
+// Per-pixel terrain shader using 128-shade light-to-dark grass ramps (shade 0 = base lit ground),
+// 4x2 alternating dither offsets ([0, -8, 0, -6] / [-6, 0, -8, 0]), and procedural per-pixel grass blades
+// (300..800 medium, 500..1200 high, quartered at far zoom; heights 1 px far/medium, 1..4 px near).
 layout(location = 1) in vec2 inCoordinate;
 layout(location = 2) in vec4 inLight;
 layout(location = 3) in vec4 inDark;
@@ -29,10 +23,13 @@ vec3 toLinear(vec3 c) { return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)
 void main() {
     int detail = int(inDetail.x + 0.5);
     int zoom = clamp(int(inDetail.y + 0.5), 1, 3);
-    ivec2 pixel = ivec2(floor(inCoordinate * float(1 << zoom) * 0.25));
+    vec2 artCoord = inCoordinate * float(1 << zoom) * 0.25;
+    ivec2 pixel = ivec2(floor(artCoord));
+    vec2 fw = fwidth(artCoord);
+    float ditherWeight = 1.0 - smoothstep(0.95, 1.85, max(fw.x, fw.y));
     int column = pixel.x & 3;
-    float shade = (pixel.y & 1) == 0 ? (column == 1 ? -8.0 : column == 3 ? -6.0 : 0.0)
-                                     : (column == 0 ? -6.0 : column == 2 ? -8.0 : 0.0);
+    float shade = ((pixel.y & 1) == 0 ? (column == 1 ? -8.0 : column == 3 ? -6.0 : 0.0)
+                                      : (column == 0 ? -6.0 : column == 2 ? -8.0 : 0.0)) * ditherWeight;
     if (detail > 0) {
         float value = floor(inGrass * 255.0 + 0.5) - 128.0;
         float low = detail == 1 ? 300.0 : 500.0;

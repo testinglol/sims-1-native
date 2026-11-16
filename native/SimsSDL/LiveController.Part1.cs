@@ -1,12 +1,9 @@
 namespace SimsSDL;
 
-/// <summary>
-/// Plays a lot through the simulation host with the original UI: the macOS client's live-mode game logic (its app
-/// delegate's event handling, clicks, hover, keys and the buy and build tools) on SDL input. Points are in canvas pixels.
-/// </summary>
+/// <summary>Coordinates live-mode gameplay, UI event handling, and catalog tools for an active lot.
+/// Coordinates are expressed in canvas pixels.</summary>
 internal sealed partial class LiveController
 {
-    /// <summary>The lot's simulation host; null on the base neighborhood screen.</summary>
     public SimulationBridge? Bridge { get; private set; }
     public GameContent Content { get; }
     public string Workspace { get; }
@@ -33,7 +30,8 @@ internal sealed partial class LiveController
         GroundTile Tile,
         int Direction,
         long Revision,
-        int Level);
+        int Level,
+        int? WallDirection = null);
 
     private readonly record struct WallStrokeMode(bool Rectangle, bool Deleting);
 
@@ -75,11 +73,12 @@ internal sealed partial class LiveController
     private Dictionary<int, LotSimInfo> _lotSims = new();
     private List<string> _simAnimations = [];
     public bool ScriptSimIdle { get; private set; }
-    /// <summary>The selected Sim's queued action names, for <c>--script</c> failure reports.</summary>
     public List<string> ScriptSimActions { get; private set; } = [];
-    /// <summary>A state that arrived before the lot scene loaded, applied to the UI once it has.</summary>
+    /// <summary>Buffers simulation state received before the lot scene finishes loading, applying it once
+    /// the scene is ready.</summary>
     private Dictionary<string, JsonElement>? _stateAwaitingScene;
-    /// <summary>A newly opened lot centres the view on the selected Sim once both are drawn, as the original does on entry.</summary>
+    /// <summary>Centers the view on the selected character once both the character and scene have been
+    /// rendered after opening a lot.</summary>
     private bool _centresOnSelectedSim;
     private int? _edgeScrollRegionKey;
     private CGPoint? _rightOrigin;
@@ -123,17 +122,18 @@ internal sealed partial class LiveController
     private (string Id, PlacementKey Key)? _pendingPlacement;
     private PlacementKey? _desiredPlacement;
     private PlacementKey? _checkedPlacement;
+    private (PlacementKey Key, int Direction)? _snappedPlacementDirection;
     private List<EditableLotObject> _editableObjects = [];
     private Dictionary<int, PlacedObjectMeta> _placedObjectMeta = new();
     private HashSet<string> _pendingSaleRequests = new(StringComparer.Ordinal);
     private (string Id, int ObjectID)? _pendingDisposePreviewRequest;
-    /// <summary>Every object on the lot from the last host state, by simulation ID order, for <c>--script</c>.</summary>
     public CGPoint? ScriptSimPosition { get; private set; }
     private int? _scriptSimLevel;
     public List<(int Id, string Name)> ScriptObjects { get; private set; } = [];
     public bool? ScriptFreeWill { get; private set; }
 
-    /// <summary>The original build cursor (the wall, wallpaper and terrain tools' object at the hovered vertex or wall), drawn by the host.</summary>
+    /// <summary>Represents the cursor key for build tools (walls, wallpaper, terrain) at a hovered grid
+    /// vertex or wall segment.</summary>
     private record struct BuildCursorKey
     {
         public required uint Guid { get; init; }
@@ -154,9 +154,9 @@ internal sealed partial class LiveController
     }
 
     private BuildCursorKey? _desiredBuildCursor;
-    /// <summary>The tiles the build tools may change on the viewed level, from the last host state.</summary>
     private BuildableArea? _buildable;
-    /// <summary>When the build tools last refused an unbuildable spot; the original repeats its error sound at most every 400 ms.</summary>
+    /// <summary>Tracks the timestamp of the last build refusal to throttle error audio playback to at most
+    /// once every 400 ms.</summary>
     private ulong _lastBuildRefusal;
     private BuildCursorKey? _checkedBuildCursor;
     private (string Id, BuildCursorKey Key)? _pendingBuildCursor;
@@ -171,17 +171,18 @@ internal sealed partial class LiveController
     private Dictionary<string, OriginalSoundOptionsOverlay.VolumeChange> _pendingAudioVolumes = new(StringComparer.Ordinal);
     private Dictionary<string, string> _latestAudioVolumeRequest = new(StringComparer.Ordinal);
     private bool _soundGesture;
-    /// <summary>Where a held object is being put down: dragging from here turns it, and releasing places it on this tile.</summary>
+    /// <summary>Anchor point for object placement where dragging rotates the object and releasing commits
+    /// it to the target tile.</summary>
     private (CGPoint Point, GroundTile Tile)? _placementAnchor;
     private int? _lastPieHighlight;
     private string? _lastCutawayTile;
     private (string Key, int X, int Y, int Zoom, double Time)? _desiredCutaway;
     public CGRect? PendingPhoto { get; private set; }
-    /// <summary>The caption of an automatic snapshot (the Special Effect's STR# 0x131 text); null for a photo from the camera mode.</summary>
+    /// <summary>Caption for automatic snapshots sourced from the special effect string resource (STR#
+    /// 0x131), or null for manual camera photos.</summary>
     private string? _pendingPhotoCaption;
     private bool _pendingPhotoIsAutomatic;
 
-    /// <summary>The open picture-in-picture window (<c>cWinPictureInPicture</c>) and the lot-view rectangle its next image is read from.</summary>
     private sealed class PictureInPictureWindow
     {
         public required int ObjectID { get; init; }
@@ -203,17 +204,16 @@ internal sealed partial class LiveController
     private int? _pendingPipCenterObjectID;
     private bool _pendingPipCenterChangesLevel;
     private long? _lastPictureInPictureSequence;
-    /// <summary><c>CPState</c> keeps its selected speed when the separate pause flag is toggled; preserve it while the host represents pause as speed 0.</summary>
+    /// <summary>Preserves the selected simulation speed when pausing, allowing restoration when unpausing
+    /// while the host encodes pause as speed 0.</summary>
     private int _lastRunningSpeed = 1;
     private bool _liveModePaused;
     private string? _localDialogToken;
     private Action<byte>? _localDialogResponse;
     private HashSet<string> _answeredDialogs = new(StringComparer.Ordinal);
-    /// <summary>The last pointer position over the window, for placement previews refreshed by host state.</summary>
     public CGPoint? Pointer { get; private set; }
     private CGSize _canvas = new(1, 1);
     public double ScriptPixelDensity { get; set; } = 1;
-    /// <summary>Moves the real pointer, in canvas pixels (the window sets it).</summary>
     public Action<CGPoint>? WarpPointer { get; set; }
     private WallStroke? _wallStroke;
     private WallBrushSelection? _wallBrush;
@@ -230,11 +230,13 @@ internal sealed partial class LiveController
     private short? _lastStreamedTerrainDelta;
     private bool _terrainStrokePlayedSound;
     private TerrainBrushGesture _terrainGesture = new();
-    /// <summary>A left press that started a build stroke; its drags and release go to the stroke instead of panning the view.</summary>
+    /// <summary>Indicates an active build stroke gesture so subsequent drag and release events route to
+    /// construction rather than camera panning.</summary>
     public bool PrimaryGesture { get; private set; }
     public bool QuitRequested { get; set; }
 
-    /// <summary>FUN_004f1b96: saving is off on community lots and Magic Town lots opened from the main neighborhood (Options skips the save prompts).</summary>
+    /// <summary>Indicates whether saving is disabled for the current lot, such as community and
+    /// sub-neighborhood destinations.</summary>
     private bool _lotSaveDisabled;
     private bool LotSaveDisabled
     {
@@ -266,7 +268,6 @@ internal sealed partial class LiveController
     private long _lastAudioSceneRevision = -1;
     private long _lastAudioAnimationSequence = -1;
 
-    // Neighborhood, Select a Family, Create a Family and wardrobe state, as the macOS app delegate keeps it.
     private int _currentNeighborhood;
     private int? _currentHouse;
     private int? _lastNeighborhoodMode;
@@ -300,14 +301,17 @@ internal sealed partial class LiveController
 
     private string? _pendingHouseholdPreviewRequest;
     private (string Gender, string Age, string Skin, string Head, string Body)? _queuedAppearancePreviewRequest;
-    /// <summary>The preview key the pending request fills: 0 for the Sim being edited, 1–8 for a Create a Family member slot.</summary>
+    /// <summary>Identifier for the pending character preview request: 0 for the individual character
+    /// editor, or 1–8 for family member slots.</summary>
     private int _pendingHouseholdPreviewKey;
     private string _pendingHouseholdPreviewSignature = string.Empty;
-    /// <summary>The appearance each member slot's preview was loaded for, so a slot is fetched again only when its Sim changes.</summary>
+    /// <summary>Caches the appearance signature for each family slot so preview portraits are refetched
+    /// only when character visual attributes change.</summary>
     private Dictionary<int, string> _familyPortraits = new();
     private (int House, int Family, string? Request)? _pendingFamilyMoveIn;
 
-    /// <summary>A bin family chosen with Move In from the banner's Select a Family; the next vacant lot clicked is offered to it.</summary>
+    /// <summary>Tracks a family selected from the family bin for move-in, targeted for placement onto the
+    /// next clicked vacant lot.</summary>
     private OriginalFamilyPickerOverlay.Family? _familyPlacement;
     private OriginalFamilyPickerOverlay.Family? FamilyPlacement
     {
@@ -319,9 +323,11 @@ internal sealed partial class LiveController
         }
     }
 
-    /// <summary>Create a Family was opened from the banner, so the new family goes to the bin instead of the host lot.</summary>
+    /// <summary>Indicates family creation was launched from the neighborhood screen, routing the completed
+    /// family to the family bin rather than directly into a lot.</summary>
     private bool _householdCreationUnhoused;
-    /// <summary>Unhoused Create a Family started from Select a Family, so finish/cancel returns directly to Select a Family.</summary>
+    /// <summary>Indicates unhoused family creation was initiated from the family picker, returning directly
+    /// to the picker upon completion or cancellation.</summary>
     private bool _returnToFamilyPickerAfterHouseholdCreation;
 
     private readonly record struct NeighborhoodRequest(string Id, GameDialog Dialog, int Mode);
@@ -338,7 +344,8 @@ internal sealed partial class LiveController
     private bool _openingNeighborhoodLot;
     private bool _switchingLot;
     private bool _awaitingLotSwitchChange;
-    /// <summary><c>Sims.exe</c> <c>004fb1a5.c:48-57</c>: permanently retires <c>cTSAppSplashWindow</c> (<c>setup.bmp</c> + <c>loadloop.wav</c>) once the initial launch finishes.</summary>
+    /// <summary>Indicates whether initial startup loading has completed, permanently disabling the splash
+    /// screen and initial loading music loop.</summary>
     private bool _hasCompletedInitialLoad;
     private long _highestReceivedSceneRevision;
     private long _minimumSceneRevisionToFinishLoading = 1;
@@ -351,31 +358,26 @@ internal sealed partial class LiveController
     private List<string> _splashProgressQueue = [];
     private double _lastSplashProgressStep;
     private SDLAudioPlayer? _startupLoadAudio;
-    // The audio-only host that plays the neighborhood maps' music and ambience while no lot is loaded.
+    // Audio-only simulation host for neighborhood screen music and ambient sounds.
     private SimulationBridge? _frontendAudio;
     private SDLAudioPlayer? _frontendAudioPlayer;
     private bool _frontendAudioReady;
     private List<(string Operation, Dictionary<string, object?> Parameters)> _pendingFrontendAudio = [];
-    /// <summary>Set by the script command <c>autodismiss</c>: original dialogs are answered with their first button as they open.</summary>
     public bool ScriptAnswersDialogs { get; set; }
     public string? ScriptDialogStop { get; set; }
     private string? _frontendMusic;
     private bool UsesNativeEngine => SimulationEngineSelection.UsesNativeEngine();
-    /// <summary>The last values each plugin reported for its panels, by pack and panel ID.</summary>
     private Dictionary<string, Dictionary<string, Dictionary<string, string>>> _pluginPanelValues = new(StringComparer.Ordinal);
 
-    // Later stored fields declared across LiveController.swift so every partial shares one field layout.
     private bool _catalogPopupWasVisible;
-    /// <summary>
-    /// The original cursor file (without <c>.cur</c>) for the pointer: <c>LivePerson</c> over a Sim, <c>LiveObjectAvail</c> over an object and
-    /// <c>LiveNothing</c> over open ground in live mode; the plain arrow over panels, menus, dialogs and the other modes.
-    /// </summary>
+    /// <summary>The cursor identifier for the current hover target: LivePerson over characters,
+    /// LiveObjectAvail over objects, LiveNothing over terrain in live mode, and Arrow over interface
+    /// elements.</summary>
     public string HoverCursor { get; private set; } = "Arrow";
-    /// <summary>Ctrl or Option held: the original delete modifier (see <c>Press</c>); set each frame by the SDL loop.</summary>
+    /// <summary>Indicates whether the deletion modifier is active, enabling demolition for architectural
+    /// tools such as walls, floors, and wallpaper.</summary>
     public bool DeleteModifier { get; set; }
-    /// <summary>The same modifier as held by a <c>--script</c> <c>hold</c> line.</summary>
     public bool ScriptDeleteModifier { get; set; }
-    /// <summary>Shift modifier as held by a <c>--script</c> <c>hold</c> line.</summary>
     public bool ScriptShiftModifier { get; set; }
     private double _lastTutorialPanelCheck;
     private LotZoom? _simulatorZoom;
@@ -425,7 +427,6 @@ internal sealed partial class LiveController
         return tcs.Task;
     }
 
-    /// <summary>Opens <paramref name="house"/> live, or the base neighborhood screen when <paramref name="house"/> is null.</summary>
     internal LiveController(Options options, int? house, LotRenderer renderer)
     {
         string workspace = options.Workspace ?? InstallLocator.DefaultWorkspace();
@@ -467,7 +468,8 @@ internal sealed partial class LiveController
         }
     }
 
-    /// <summary>The profile's saved music master volume (HIT group 1, <c>Settings/audio.json</c>), or full volume.</summary>
+    /// <summary>Retrieves the saved music master volume (HIT audio group 1), falling back to full volume if
+    /// unset.</summary>
     private float LoadLoopVolume()
     {
         string profile = Path.Combine(Options.DataRoot ?? Workspace, "runtime", "profiles", Options.Profile, "Settings", "audio.json");
@@ -548,7 +550,8 @@ internal sealed partial class LiveController
         return path;
     }
 
-    /// <summary>Starts the persistent warm simulation daemon (<c>house == 0</c>) so neighborhood loads, edits, CAS, audio, and lot opens share one host process.</summary>
+    /// <summary>Launches the persistent background simulation daemon (lot 0) to share a single host process
+    /// across neighborhood navigation, character creation, and lot loading.</summary>
     private void StartWarmDaemon()
     {
         _currentHouse = 0;
@@ -770,7 +773,6 @@ internal sealed partial class LiveController
         }
     }
 
-    /// <summary>Starts the simulation host on a lot, with its own audio player.</summary>
     private void StartSimulation(int house)
     {
         _currentHouse = house;
@@ -838,7 +840,7 @@ internal sealed partial class LiveController
 
         if (_pendingHouseholdCreation is int lot)
         {
-            // Sims.exe (0x00564119) opens Create a Family directly from Select a Family without the lot loading splash or loop.
+            // Family creation from the family picker skips the lot loading splash screen.
             Ui.Loading = false;
             _openingNeighborhoodLot = false;
             _hasCompletedInitialLoad = true;
@@ -848,12 +850,11 @@ internal sealed partial class LiveController
             }
             catch
             {
-                // Keep Swift `try? openHouseholdCreationOverlay(lot: lot)` tolerance.
             }
         }
         else if (!_hasCompletedInitialLoad)
         {
-            // Cold launch into `--house`: show cTSAppSplashWindow (`setup.bmp`, ticker, `loadloop.wav`) once until the first scene renders.
+            // Displays the startup splash screen and loading audio until first scene render.
             _openingNeighborhoodLot = false;
             BeginStartupSplash(startingAt: 5);
             if (_audio is { } activeAudio && LoadLoopURL(Content) is { } loop)
@@ -863,7 +864,7 @@ internal sealed partial class LiveController
         }
         else
         {
-            // Entering a lot from Neighborhood (`00556352`, `00558829`, `004f1b96`): keep Neighborhood visible under the hourglass cursor.
+            // Keep the neighborhood map visible under the wait cursor while loading a lot.
             Ui.Loading = false;
             _openingNeighborhoodLot = true;
         }
@@ -929,12 +930,8 @@ internal sealed partial class LiveController
         }
     }
 
-    // Requests
-
-    /// <summary>
-    /// Asks the host for the selected Sim's head at the menu's current orientation, one request at a time, so the head
-    /// follows the pointer continuously as in the original.
-    /// </summary>
+    /// <summary>Requests the selected character's head rendered at the pie menu cursor angle, serializing
+    /// requests so the head smoothly tracks the pointer.</summary>
     private void RequestPieHeadPreview()
     {
         if (Ui.PieMenu is not { } menu)
@@ -980,7 +977,6 @@ internal sealed partial class LiveController
         }
     }
 
-    /// <summary>The UI sounds asked for while a script runs (<c>waitfor sound</c>), whether or not audio is on.</summary>
     public List<string>? ScriptUISounds { get; set; }
 
     public void PlayUISound(string name)
@@ -998,7 +994,8 @@ internal sealed partial class LiveController
         }
     }
 
-    /// <summary>Buy and build mode music depends on the lot (expansion lots have their own tracks), so the simulation picks the event.</summary>
+    /// <summary>Plays catalog background music determined by the simulation host, allowing expansion and
+    /// community lots to select dedicated soundtracks.</summary>
     private void PlayModeMusic(string mode)
     {
         if (Bridge is not null && _audio is not null)
@@ -1007,11 +1004,8 @@ internal sealed partial class LiveController
         }
     }
 
-    /// <summary>
-    /// The pan and gain of a sound from an object, from where the object sits in the view, as the macOS client mixes it.
-    /// An object with no drawn sprite or mesh (one above the view) is placed from its tile, and a sound from another floor
-    /// is quieter than one on the viewed floor (<see cref="PositionalSound.FloorGain"/>).
-    /// </summary>
+    /// <summary>Calculates stereo pan and gain for an object sound based on its viewport position, falling
+    /// back to tile coordinates for off-screen objects and attenuating sounds across floor levels.</summary>
     private (float Pan, float Gain) SpatialMix(int owner, bool panned, bool zoom)
     {
         if (Renderer.Scene is not { } scene || Renderer.SceneViewport(SimdCanvas) is not { } viewport)
@@ -1048,7 +1042,8 @@ internal sealed partial class LiveController
         return (mix.Pan, mix.Gain * floor * (zoom ? Renderer.Zoom.SoundGain() : 1f));
     }
 
-    /// <summary>Once a frame: finished voices go back to the host and positional sounds follow the view.</summary>
+    /// <summary>Reports completed audio voices to the simulation host and updates 3D positional audio
+    /// parameters relative to the current camera view.</summary>
     public void UpdateAudio()
     {
         _frontendAudioPlayer?.Poll();
@@ -1061,7 +1056,7 @@ internal sealed partial class LiveController
         audio.SetEnvironmentAudio(
             Renderer.Environment?.Effect.AudioGain ?? 1f,
             Renderer.Environment?.Effect.AudioCutoff ?? 0f);
-        // A new scene or animation delta also moves/spawns sound owners and updates floor gain across stories.
+        // Updates positional audio and floor attenuation on camera or scene changes.
         if (Renderer.Pan != _lastAudioPan
             || Renderer.Zoom != _lastAudioZoom
             || Renderer.SceneRevisionNumber != _lastAudioSceneRevision
@@ -1075,7 +1070,7 @@ internal sealed partial class LiveController
         }
     }
 
-    /// <summary>Shuts down on quit or a termination signal: both hosts exit before the client does.</summary>
+    /// <summary>Terminates simulation host processes before shutting down the client application.</summary>
     public void Stop()
     {
         CancelPendingDaemonContinuations(new OperationCanceledException());
@@ -1195,7 +1190,8 @@ internal sealed partial class LiveController
         SendSpeed(target);
     }
 
-    /// <summary>Original HIT events for speed-control transitions (<c>ui_speed_1to2</c>, <c>ui_speed_pto3</c>, ...); P is pause.</summary>
+    /// <summary>Maps simulation speed changes to their corresponding HIT transition sound events, where P
+    /// denotes pause.</summary>
     public static string? SpeedTransitionSound(int current, int requested)
     {
         static string? Code(int speed) => speed switch
@@ -1227,8 +1223,6 @@ internal sealed partial class LiveController
 
     private static Vector2 Simd(CGPoint point) => new((float)point.X, (float)point.Y);
     private Vector2 SimdCanvas => new((float)_canvas.Width, (float)_canvas.Height);
-
-    // Modes
 
     public void DismissTransientMenu()
     {
@@ -1263,6 +1257,7 @@ internal sealed partial class LiveController
         Ui.Build.CancelSelection();
         _desiredPlacement = null;
         _checkedPlacement = null;
+        _snappedPlacementDirection = null;
         try { Renderer.UpdatePlacement(null); } catch { }
         ClearBuildCursor();
     }
@@ -1456,10 +1451,8 @@ internal sealed partial class LiveController
         _centresOnSelectedSim = true;
     }
 
-    /// <summary>
-    /// <c>cTSWinBtn</c>'s mouse handlers keep the button that sent its command (<c>lbl_10650BDC</c>, <c>Sims.exe</c> <c>DAT_006fe954</c>); a person
-    /// button is known by its Sim, whose portrait is the button's image.
-    /// </summary>
+    /// <summary>Records the interface button that triggered the current command, identifying character
+    /// selection buttons by their associated Sim ID.</summary>
     private void RecordButton(int? image = null, int? person = null)
     {
         if (!UsesNativeEngine || !HasActiveLot)
@@ -1499,7 +1492,6 @@ internal sealed partial class LiveController
         _ = Send("cameraOrientation", new Dictionary<string, object?> { ["value"] = next });
     }
 
-    /// <summary>A universal control button, clicked or reached by its shortcut key.</summary>
     public void UniversalControl(OriginalUniversalControl.Action action)
     {
         if (action == OriginalUniversalControl.Action.Help)
@@ -1594,7 +1586,6 @@ internal sealed partial class LiveController
             case OriginalUniversalControl.Action.WallsDown:
             case OriginalUniversalControl.Action.WallsCutaway:
                 DismissTransientMenu();
-                _lastCutawayTile = null;
                 _desiredCutaway = null;
                 string mode = action == OriginalUniversalControl.Action.WallsUp
                     ? "up"
@@ -1604,7 +1595,19 @@ internal sealed partial class LiveController
                 _pendingWallMode = mode;
                 _pendingRoofsVisible = false;
                 _pendingViewSceneRevision = null;
-                _pendingViewRequestID = Send("walls", new Dictionary<string, object?> { ["mode"] = mode });
+                var wallsPayload = new Dictionary<string, object?> { ["mode"] = mode };
+                if (mode == "cutaway" && Pointer is { } cutawayPointer && Renderer.GroundTileAt(Simd(cutawayPointer), SimdCanvas) is { } cwTile)
+                {
+                    wallsPayload["x"] = cwTile.X;
+                    wallsPayload["y"] = cwTile.Y;
+                    wallsPayload["zoom"] = (int)Renderer.Zoom;
+                    _lastCutawayTile = $"{EffectiveViewLevel}:{(int)Renderer.Zoom}:{cwTile.X}:{cwTile.Y}";
+                }
+                else
+                {
+                    _lastCutawayTile = null;
+                }
+                _pendingViewRequestID = Send("walls", wallsPayload);
                 break;
 
             case OriginalUniversalControl.Action.Roofs:
@@ -1686,7 +1689,8 @@ internal sealed partial class LiveController
         _ = Send("blockSimulator", new Dictionary<string, object?> { ["blocked"] = blocked });
     }
 
-    /// <summary>Home and End step the wall view through walls down, cutaway, walls up and roofs.</summary>
+    /// <summary>Steps the wall rendering mode cyclically through walls down, cutaway, walls up, and roof
+    /// view.</summary>
     private void StepWallView(int delta)
     {
         OriginalUniversalControl.Action[] views =
@@ -1761,10 +1765,8 @@ internal sealed partial class LiveController
         ResumeLiveMode();
     }
 
-    /// <summary>
-    /// Whether this frame must also be rendered without the interface and read back: a photo is pending, or the
-    /// picture-in-picture window needs an image (Live PIP on, or the window not built yet).
-    /// </summary>
+    /// <summary>Determines if the frame must be rendered without UI overlays and captured for photo export
+    /// or picture-in-picture display.</summary>
     public bool PrepareFrameCapture()
     {
         UpdatePictureInPictureCaptureState();
@@ -2002,8 +2004,7 @@ internal sealed partial class LiveController
                 break;
 
             case OriginalOptionsPanelOverlay.Button.Neighborhood:
-                // cWinOptions::TSOnCommand / FUN_00517c78: a lot whose saving is enabled offers to save first (UIText STR# 153
-                // entries 3 and 4). Yes saves, No leaves without saving, Cancel stays; a save-disabled lot just leaves.
+                // Prompt to save if enabled (STR# 153); save-disabled lots exit directly.
                 if (LotSaveDisabled)
                 {
                     ReturnToNeighborhood(saving: false);
@@ -2032,8 +2033,7 @@ internal sealed partial class LiveController
                 break;
 
             case OriginalOptionsPanelOverlay.Button.ResetTutorial:
-                // FUN_004f2661: confirm, offer to save, copy base UserData's Tutorial.FAM into the Import folder (refusing to
-                // overwrite one already there) and return to the neighborhood, which imports it onto the tutorial house.
+                // Stage Tutorial.FAM into Import to trigger re-import onto the tutorial house.
                 PresentLocalConfirmation(
                     Strings.ResetTutorialTitle(),
                     Strings.ResetTutorialMessage(),
@@ -2065,7 +2065,8 @@ internal sealed partial class LiveController
         }
     }
 
-    /// <summary>The current neighborhood's folder in the profile: <c>UserData</c> for neighborhood 1, <c>UserDataN</c> otherwise.</summary>
+    /// <summary>Resolves the directory for the active neighborhood: <c>UserData</c> for neighborhood 1, or
+    /// <c>UserDataN</c> for other neighborhoods.</summary>
     private string NeighborhoodUserData =>
         Path.Combine(
             Options.DataRoot ?? Workspace,
@@ -2078,7 +2079,7 @@ internal sealed partial class LiveController
     {
         string imports = Path.Combine(NeighborhoodUserData, "Import");
         Directory.CreateDirectory(imports);
-        // CopyFileA with bFailIfExists: an earlier reset that has not been imported yet makes this fail.
+        // Fails if an unimported tutorial reset file is already present in Import.
         string @base = Path.Combine(Options.DataRoot ?? Workspace, "runtime", "profiles", Options.Profile, "UserData", "Tutorial.FAM");
         string source = File.Exists(@base) ? @base : Path.Combine(Content.Root, "UserData", "Tutorial.FAM");
         TutorialReset.Copy(source, imports);
@@ -2115,7 +2116,6 @@ internal sealed partial class LiveController
 
                 if (save == 0)
                 {
-                    // Mac DoSave asks even when saving is disabled, but skips SaveGame and returns success.
                     if (LotSaveDisabled)
                     {
                         FinishResetTutorial();
@@ -2171,7 +2171,6 @@ internal sealed partial class LiveController
         }
         catch
         {
-            // Keep default options when no valid options file is available yet.
         }
     }
 
@@ -2233,7 +2232,7 @@ internal sealed partial class LiveController
 
         PlayUISound("ui_click");
         ApplyPlayOptions();
-        // Keep the command-line renderer override effective after an in-game options change, as it is on load.
+        // Command-line renderer overrides take precedence over in-game option changes.
         Renderer.LightingEnabled = updated.Lighting && Options.Lighting;
         Renderer.AntiAliasedSprites = updated.AntiAlias;
         Renderer.ShadowsEnabled = updated.Shadows;
@@ -2331,10 +2330,8 @@ internal sealed partial class LiveController
         _pendingLoadRequests.Add(id);
     }
 
-    /// <summary>
-    /// A save that needs uninstalled packs loads only once the player agrees to lose that content; the host backs the
-    /// slot up first, so reinstalling the packs and restoring the backup brings it back.
-    /// </summary>
+    /// <summary>Prompts for confirmation before opening a save with missing expansion content, creating a
+    /// backup so the lot can be restored if packs are reinstalled.</summary>
     private void ConfirmPackRemoval(IReadOnlyList<string> packs)
     {
         string names = string.Join(
@@ -2356,8 +2353,6 @@ internal sealed partial class LiveController
                 SendLoad(removingPacks: true);
             });
     }
-
-    // Local dialogs
 
     private void PresentLocalFeedback(string title, string message)
     {

@@ -5,10 +5,7 @@ using SimsSDL;
 
 namespace SimsSDL.UI;
 
-/// <summary>
-/// The original Select a Family screen (<c>cWinPickFamily</c>, <c>005635de.c</c>; <c>cWinFamilyList</c>, <c>00543ad2.c</c>;
-/// <c>cWinFamilyPickItem</c>, <c>00542d15.c</c>) shown when choosing or moving in an unhoused family.
-/// </summary>
+/// <summary>Renders the Select a Family dialog displayed when choosing or moving in an unhoused family.</summary>
 public sealed class OriginalFamilyPickerOverlay
 {
     public sealed record Family(
@@ -160,7 +157,6 @@ public sealed class OriginalFamilyPickerOverlay
         Control.Cancel
     ];
 
-    // Exact Sims.exe coordinates from DAT_006f5be8..006f5bec (0x00dc7ff8) and 00563e55.c (0x00dc8000).
     public static CGPoint RowOrigin => OriginalFamilyPickerLayout.RowOrigin;
     public static CGSize RowSize => OriginalFamilyPickerLayout.RowSize;
     public static double RowPitch => OriginalFamilyPickerLayout.RowPitch;
@@ -177,7 +173,6 @@ public sealed class OriginalFamilyPickerOverlay
         [Control.Cancel] = new CGRect(143, 529, 114, 62)
     };
 
-    // Colors from FUN_004ff397: DAT_006f2a44, DAT_006f2a48, DAT_006f2a4c, DAT_006f2a68.
     private static readonly (byte R, byte G, byte B) NormalTextColor = (195, 205, 205);
     private static readonly (byte R, byte G, byte B) HoverTextColor = (255, 255, 255);
     private static readonly (byte R, byte G, byte B) SelectedTextColor = (0, 255, 255);
@@ -208,7 +203,7 @@ public sealed class OriginalFamilyPickerOverlay
     private double? _tooltipStartedAt;
 
     private (int Row, int Member)? _hoveredMember;
-    private int? _hoveredScrollArrow; // -1 = up, +1 = down
+    private int? _hoveredScrollArrow;
     private int _scroll;
 
     public int House { get; }
@@ -271,13 +266,12 @@ public sealed class OriginalFamilyPickerOverlay
             Render(value, targetFont, HoverTextColor),
             Render(value, targetFont, SelectedTextColor));
 
-        // DAT_006f2ab4 = variablesans_16, DAT_006f2aa4 = variablesans_12, DAT_006f2a9c = variablesans_10.
         var font16 = LoadFont("UIGraphics/Fonts/variablesans_16.ffn");
         var font12 = LoadFont("UIGraphics/Fonts/variablesans_12.ffn");
         var font10 = LoadFont("UIGraphics/Fonts/variablesans_10.ffn");
         _tooltipFont = font10;
 
-        // DAT_006f2a68 = RGB(0, 50, 0) fills outside the centered 800x600 panel (005635de.c:28, 00563d62.c).
+        // Fills the letterboxed margin outside the centered 800x600 dialog with dark green (RGB 0, 50, 0).
         _outerFill = OriginalGameplayOverlay.CreateImage(device, 1, 1, [0, 50, 0, 255]);
         if (isMagicTown)
         {
@@ -314,10 +308,10 @@ public sealed class OriginalFamilyPickerOverlay
         };
         _tileButton = Upload("UIGraphics/Nbhd/NbhdTileBtn.bmp");
 
-        // Title at y = offsetY + 6, centered across 800px in variablesans_16 (005635de.c:114-127).
         _title = Render(strings.PickFamily(8, "SELECT A FAMILY"), font16, NormalTextColor);
 
-        // Net Worth box width is initialized from "$999,999,999" + 4px padding (00542d15.c:127-135).
+        // Sizes the net worth column to fit the maximum currency amount "$999,999,999" plus 4 pixels of
+        // padding.
         _netWorthBoxWidth = font10.TextWidth("$999,999,999") + 4;
         int minFriendsBoxWidth = font10.TextWidth("12") + 4;
         int minMagiBoxWidth = font10.TextWidth("9999") + 4;
@@ -384,7 +378,7 @@ public sealed class OriginalFamilyPickerOverlay
             [Control.Cancel] = cancelLabel
         };
 
-        // 005635de.c:239-245 overrides Cancel button's tooltip with STR# 128[15] "Back to Neighborhood".
+        // Overrides the cancel button tooltip with string table 128 entry 15 ("Back to Neighborhood").
         _controlTips = new Dictionary<Control, string>
         {
             [Control.Add] = strings.PickFamily(2, "Create New Family"),
@@ -393,13 +387,13 @@ public sealed class OriginalFamilyPickerOverlay
             [Control.Cancel] = strings.PickFamily(15, "Back to Neighborhood")
         };
 
-        // cNghTileBtn::AutoSize (005f730f.c, 00563e55.c): cap = (91 - 1)/2 = 45, margin = 35 -> width = textWidth + 70, centered at (200, 560).
+        // Sizes the neighborhood button with 35-pixel side margins (text width plus 70, minimum 91 pixels),
+        // centering it horizontally at x=200.
         double cancelWidth = Math.Max(91.0, font12.TextWidth(cancelLabel) + 70.0);
         _cancelRect = new CGRect(Math.Floor(200.0 - cancelWidth / 2.0), 529.0, cancelWidth, 62.0);
         _cancelCaptionNormal = Render(cancelLabel, font12, NormalTextColor);
         _cancelCaptionHover = Render(cancelLabel, font12, HoverTextColor);
 
-        // Header column tooltip hotspots (26x23 at y = 42, 005635de.c:160-227).
         var tips = new List<(CGRect Rect, string Text)>(3)
         {
             (new CGRect(isMagicTown ? 563 : 586, 42, 26, 23), strings.PickFamily(10, "Net Worth")),
@@ -413,7 +407,8 @@ public sealed class OriginalFamilyPickerOverlay
         _headerTips = tips;
         _emptyListTip = strings.PickFamily(16, "Click to create a new family");
 
-        // 005635de.c:228-248 starts with no row selected (-1), disabling Delete and Move In until a family is chosen.
+        // Initializes with no family selected, keeping Delete and Move In buttons disabled until a row is
+        // chosen.
         Selected = null;
     }
 
@@ -450,8 +445,8 @@ public sealed class OriginalFamilyPickerOverlay
 
     private static (double Left, double Top, double Factor) Transform(CGSize canvas, float uiScale = 1f)
     {
-        double cap = Math.Max(0.25, uiScale);
-        double factor = Math.Max(0.001, Math.Min(cap, Math.Min(canvas.Width / 800.0, canvas.Height / 600.0)));
+        _ = uiScale;
+        double factor = Math.Max(0.001, Math.Min(canvas.Width / 800.0, canvas.Height / 600.0));
         double left = (canvas.Width - 800.0 * factor) / 2.0;
         double top = (canvas.Height - 600.0 * factor) / 2.0;
         return (left, top, factor);
@@ -477,7 +472,8 @@ public sealed class OriginalFamilyPickerOverlay
     }
 
     private static CGRect MemberFrameRect(CGRect rowRect, int member) =>
-        // 00542d15.c:64-89: grid at (110, 14) with 48px horizontal step, +6px vertical image offset -> (110 + i*48, 20), 45x45.
+        // Lays out 45x45 family member portraits horizontally at 48-pixel intervals starting at offset
+        // (110, 20) within the row.
         new(rowRect.MinX + 110.0 + member * 48.0, rowRect.MinY + 20.0, 45.0, 45.0);
 
     private int VisibleEnd => Math.Min(Families.Count, _scroll + RowsPerPage);
@@ -566,7 +562,8 @@ public sealed class OriginalFamilyPickerOverlay
             }
         }
 
-        // Resolve hover tooltip priority: member portrait -> bottom button -> column header icon -> empty list well.
+        // Resolves tooltip priority in order: member portrait, bottom buttons, column header icons, and
+        // empty list well.
         if (_hoveredMember is { } hm && hm.Member < Families[hm.Row].Members.Count)
         {
             string memberName = Families[hm.Row].Members[hm.Member];
@@ -638,7 +635,6 @@ public sealed class OriginalFamilyPickerOverlay
                 }
                 else
                 {
-                    // Proportional track position (005f70ff.c).
                     double minY = ScrollbarRect.MinY + ScrollArrowHeight;
                     double maxY = ScrollbarRect.MaxY - ScrollArrowHeight - ScrollThumbHeight;
                     int maxScroll = Math.Max(0, Families.Count - RowsPerPage);
@@ -757,20 +753,19 @@ public sealed class OriginalFamilyPickerOverlay
 
         var whole = new Vector4(0f, 0f, 1f, 1f);
 
-        // Outer RGB(0, 50, 0) fill behind the centered 800x600 PickBkg panel (005635de.c:28).
         var items = new List<DrawItem>
         {
             new(_outerFill, new CGRect(0.0, 0.0, canvas.Width, canvas.Height), whole),
             new(_background, Screen(new CGRect(0.0, 0.0, 800.0, 600.0)), whole)
         };
 
-        // SELECT A FAMILY centered across 800px at y = 6 (adjusting -3px for SimsBitmapFont.rasterize's 3px pad).
+        // Centers the dialog title horizontally across the 800-pixel frame at y=6, compensating for the
+        // 3-pixel font padding.
         items.Add(new DrawItem(
             _title,
             Screen(new CGRect((800.0 - _title.Size.Width) / 2.0, 6.0 - 3.0, _title.Size.Width, _title.Size.Height)),
             whole));
 
-        // Always draw all 6 row slots; empty slots show frame 0 of FamilyPickItemBkg.bmp (00543fa0.c:70-100).
         for (int slot = 0; slot < RowsPerPage; slot++)
         {
             var rect = RowRect(slot);
@@ -789,14 +784,12 @@ public sealed class OriginalFamilyPickerOverlay
             var textState = isRowSelected ? TextState.Selected : isRowHovered ? TextState.Hover : TextState.Normal;
             var assets = _rowAssets[index];
 
-            // Family name at row-relative (20, 0) with 2px left text inset (00542d15.c:109, 005434d0.c:39).
             var nameImage = assets.Name.ForState(textState);
             items.Add(new DrawItem(
                 nameImage,
                 Screen(new CGRect(rect.MinX + 22.0 - 3.0, rect.MinY - 3.0, nameImage.Size.Width, nameImage.Size.Height)),
                 whole));
 
-            // Up to 8 member portraits in 45x45 PeopleTemplate.bmp frames at (110 + i * 48, 20) (00542d15.c:64-89).
             int slotCount = MemberSlotCount(index);
             for (int member = 0; member < slotCount; member++)
             {
@@ -815,7 +808,6 @@ public sealed class OriginalFamilyPickerOverlay
 
                 if (member < _memberPortraits[index].Length && _memberPortraits[index][member] is { } portrait)
                 {
-                    // Render 25x25 Sim thumbnail at exact native dimensions centered inside 45x45 PeopleTemplate.bmp.
                     double pw = portrait.Size.Width;
                     double ph = portrait.Size.Height;
                     var portraitRect = new CGRect(
@@ -827,7 +819,6 @@ public sealed class OriginalFamilyPickerOverlay
                 }
             }
 
-            // Net Worth right-aligned in "$999,999,999" box at (526, 21) normal / (494, 21) Magic Town (00542d15.c:127-142).
             var netWorthImage = assets.NetWorth.ForState(textState);
             double netWorthLeft = rect.MinX + (IsMagicTown ? 494.0 : 526.0);
             double netWorthRight = netWorthLeft + _netWorthBoxWidth - 2.0;
@@ -837,7 +828,6 @@ public sealed class OriginalFamilyPickerOverlay
                                   netWorthImage.Size.Width, netWorthImage.Size.Height)),
                 whole));
 
-            // Friends right-aligned at (620, 21) normal / (606, 21) Magic Town (00542d15.c:182-197).
             var friendsImage = assets.Friends.ForState(textState);
             double friendsLeft = rect.MinX + (IsMagicTown ? 606.0 : 620.0);
             double friendsRight = friendsLeft + assets.FriendsBoxWidth - 2.0;
@@ -847,7 +837,6 @@ public sealed class OriginalFamilyPickerOverlay
                                   friendsImage.Size.Width, friendsImage.Size.Height)),
                 whole));
 
-            // MagiCoins right-aligned at (649, 21) in Magic Town (00542d15.c:155-169).
             if (IsMagicTown && assets.MagiCoins is { } magiStates)
             {
                 var magiImage = magiStates.ForState(textState);
@@ -860,14 +849,12 @@ public sealed class OriginalFamilyPickerOverlay
             }
         }
 
-        // Vertical cWinScrollbar at (763, 76, 25, 408) when > 6 families (00543be4.c:88-109, 005f6677.c:71-114).
         if (HasScrollbar && _scrollBar is { } scrollBar)
         {
             const float tileU = 25f / 300f;
             float upFrame = _hoveredScrollArrow == -1 ? 1f : 0f;
             items.Add(new DrawItem(scrollBar, Screen(UpArrowRect), new Vector4(upFrame * tileU, 0f, tileU, 1f)));
 
-            // Tile frame 3 (track) vertically in 30px segments from y = 106 to y = 454.
             double trackY = UpArrowRect.MaxY;
             double trackEndY = DownArrowRect.MinY;
             while (trackY < trackEndY)
@@ -884,11 +871,9 @@ public sealed class OriginalFamilyPickerOverlay
             float downFrame = _hoveredScrollArrow == 1 ? 5f : 4f;
             items.Add(new DrawItem(scrollBar, Screen(DownArrowRect), new Vector4(downFrame * tileU, 0f, tileU, 1f)));
 
-            // Frame 2 is the movable 25x30 thumb.
             items.Add(new DrawItem(scrollBar, Screen(ThumbRect), new Vector4(2f * tileU, 0f, tileU, 1f)));
         }
 
-        // Bottom bitmap buttons (.add, .delete, .moveIn): 0 = normal, 1 = pressed, 2 = hover, 3 = disabled (uvX = 0.75).
         foreach (var control in AllControls)
         {
             if (!_buttons.TryGetValue(control, out var sheet))
@@ -904,7 +889,6 @@ public sealed class OriginalFamilyPickerOverlay
                 new Vector4(frame / (float)sheet.Frames, 0f, 1f / sheet.Frames, 1f)));
         }
 
-        // Cancel cNghTileBtn (005f730f.c, 00563e55.c): NbhdTileBtn.bmp 4x(91x62), cap = 45px, centered at (200, 560).
         {
             var cRect = _cancelRect;
             bool isHovered = HoveredControl == Control.Cancel;
@@ -942,7 +926,6 @@ public sealed class OriginalFamilyPickerOverlay
                 whole));
         }
 
-        // Hover tooltip (cDefaultTTWindow via PlacementTooltip, STR# 128).
         if (_activeTooltip is { } activeTip &&
             PlacementTooltip.Progress(ref _tooltipStartedAt, _quickTips) is { } progress)
         {

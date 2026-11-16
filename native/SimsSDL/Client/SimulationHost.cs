@@ -1,20 +1,9 @@
 namespace SimsSDL.Client;
 
-/// <summary>
-/// Provides in-process simulation host resolution and shared profile/session/mode helpers.
-/// <para>
-/// In the unified .NET 9 <c>SimsSDL</c> binary, <c>SimsSimulation</c> and <c>SimsEngine</c> run directly in-process
-/// via <see cref="SimsSimulation.SimulationServer"/> and <see cref="global::FrontendAudioServer"/>, eliminating external child-process lookups.
-/// </para>
-/// </summary>
 public static class SimulationHost
 {
     public sealed record Launch(string Executable, IReadOnlyList<string> LeadingArguments);
 
-    /// <summary>
-    /// Guards process-wide static state inside <c>SimsSimulation</c> (<see cref="global::Neighborhoods.Current"/>,
-    /// <see cref="global::NeighborhoodExport.GameRoot"/>, and profile neighborhood bootstrapping) during concurrent calls.
-    /// </summary>
     internal static readonly Lock SimulationStateLock = new();
 
     public static bool IsInProcess => true;
@@ -90,11 +79,6 @@ public static class SimulationHost
         }
     }
 
-    /// <summary>
-    /// Ensures the profile directory and requested neighborhood exist on disk, returning the resolved profile path
-    /// and neighborhood <c>UserData</c> directory. Must be called under <see cref="SimulationStateLock"/> when mutating
-    /// shared <see cref="global::Neighborhoods.Current"/> state alongside other calls.
-    /// </summary>
     internal static (string ProfilePath, string UserDataPath) PrepareNeighborhood(
         string installRoot,
         string dataRoot,

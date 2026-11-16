@@ -3,9 +3,6 @@ using System.Numerics;
 
 namespace SimsSDL;
 
-/// <summary>
-/// Command-line and launch options for <see cref="Program"/>.
-/// </summary>
 internal sealed class Options
 {
     public string? Scene { get; set; }
@@ -14,16 +11,10 @@ internal sealed class Options
     public int Height { get; set; } = 960;
     public LotZoom Zoom { get; set; } = LotZoom.Near;
 
-    /// <summary>
-    /// Screen pixels per original pixel: 2 for <c>--png</c> by default, the window's pixel density in a window.
-    /// </summary>
     public float? Scale { get; set; }
 
     public bool Lighting { get; set; } = true;
 
-    /// <summary>
-    /// Ambient occlusion and sun shadows from the sprites' depth (<c>ambient.frag</c>).
-    /// </summary>
     public bool Ambient { get; set; } = true;
 
     public bool Audio { get; set; } = true;
@@ -34,34 +25,16 @@ internal sealed class Options
     public string Profile { get; set; } = "player";
     public int Neighborhood { get; set; } = 1;
 
-    /// <summary>
-    /// The game speed to set once the lot is ready; the host loads a lot paused, and the original enters a lot at normal speed.
-    /// </summary>
     public int? Speed { get; set; } = 1;
 
-    /// <summary>
-    /// Answers every game dialog with its first choice, for unattended runs.
-    /// </summary>
     public bool AnswerDialogs { get; set; }
 
-    /// <summary>
-    /// The custom pack collection (<c>docs/PACKS.md</c>); each child holding a <c>pack.json</c> is enabled.
-    /// </summary>
     public string? Packs { get; set; }
 
-    /// <summary>
-    /// A pack command to run instead of the game.
-    /// </summary>
     public PackTool.Command? PackCommand { get; set; }
 
-    /// <summary>
-    /// Scripted input to play into the live window (<see cref="InputScript"/>).
-    /// </summary>
     public string? Script { get; set; }
 
-    /// <summary>
-    /// Whether CLI usage help was requested (<c>--help</c> / <c>-h</c>).
-    /// </summary>
     public bool HelpRequested { get; set; }
 
     public Options()
@@ -227,13 +200,12 @@ internal sealed class Options
     }
 }
 
-/// <summary>
-/// Offscreen colour and depth GPU textures sized for a render target pass.
-/// </summary>
 internal sealed class RenderTargets : IDisposable
 {
     public GPUTexture Color { get; }
     public GPUTexture Depth { get; }
+    public GPUTexture? MsaaColor { get; }
+    public GPUTexture? MsaaDepth { get; }
 
     public RenderTargets(GPUContext gpu, int width, int height)
     {
@@ -249,9 +221,26 @@ internal sealed class RenderTargets : IDisposable
                 height,
                 GPUContext.DepthFormat,
                 SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER);
+            if (gpu.PreferredSampleCount > SDL_GPU_SAMPLECOUNT_1)
+            {
+                MsaaColor = gpu.MakeTexture(
+                    width,
+                    height,
+                    GPUContext.ColorFormat,
+                    SDL_GPU_TEXTUREUSAGE_COLOR_TARGET,
+                    sampleCount: gpu.PreferredSampleCount);
+                MsaaDepth = gpu.MakeTexture(
+                    width,
+                    height,
+                    GPUContext.DepthFormat,
+                    SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET,
+                    sampleCount: gpu.PreferredSampleCount);
+            }
         }
         catch
         {
+            MsaaDepth?.Dispose();
+            MsaaColor?.Dispose();
             Color.Dispose();
             throw;
         }
@@ -259,15 +248,13 @@ internal sealed class RenderTargets : IDisposable
 
     public void Dispose()
     {
+        MsaaDepth?.Dispose();
+        MsaaColor?.Dispose();
         Color.Dispose();
         Depth.Dispose();
     }
 }
 
-/// <summary>
-/// SimsSDL: the cross-platform front end on SDL3 and SDL_GPU. It plays the game through the simulation host from the
-/// original neighborhood screen, opens one lot directly with <c>--house</c>, or shows an exported lot scene.
-/// </summary>
 internal static unsafe partial class Program
 {
     [LibraryImport("SDL3")]
@@ -331,7 +318,6 @@ internal static unsafe partial class Program
             _ = AttachConsole(unchecked((uint)-1));
         }
 
-        // macOS Cocoa/Metal and SDL3 require OS Thread 1 to own SDL_Init, window creation, and event polling.
         MainThreadDispatcher.InitializeMainThread();
 
         try
@@ -365,8 +351,6 @@ internal static unsafe partial class Program
             }
 
             string sweepRoot = dataRoot;
-            // Stale content mounts can contain several gigabytes. Removing them recursively here blocks window creation;
-            // reclaim them in the background while SDL starts the game.
             _ = Task.Run(() =>
             {
                 foreach (string session in SessionSweeper.Sweep(sweepRoot))
@@ -405,7 +389,7 @@ internal static unsafe partial class Program
                 }
 
                 using var gpu = new GPUContext();
-                var renderer = new LotRenderer(gpu)
+                using var renderer = new LotRenderer(gpu)
                 {
                     UIScale = options.Scale ?? 2f,
                     Zoom = options.Zoom,
@@ -483,7 +467,7 @@ internal static unsafe partial class Program
             throw new SDLError("SDL_AcquireGPUCommandBuffer");
         }
 
-        renderer.Encode(command, targets.Color, targets.Depth);
+        renderer.Encode(command, targets.Color, targets.Depth, targets.MsaaColor, targets.MsaaDepth);
         if (!SDL_SubmitGPUCommandBuffer(command))
         {
             throw new SDLError("SDL_SubmitGPUCommandBuffer");
@@ -494,7 +478,6 @@ internal static unsafe partial class Program
         File.WriteAllBytes(outputPath, png);
     }
 
-    /// <summary>The repository checkout or standalone resource workspace holding <c>native/SimsSimulation</c>.</summary>
     private static string DefaultWorkspace() => InstallLocator.DefaultWorkspace();
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
@@ -518,7 +501,6 @@ internal static unsafe partial class Program
         }
         catch
         {
-            // Never let managed exceptions cross an [UnmanagedCallersOnly] ABI boundary.
         }
         finally
         {
@@ -540,8 +522,6 @@ internal static unsafe partial class Program
                 nint.Zero);
 
             var box = new FolderPickerResult();
-            // GCHandleType.Pinned rejects reference classes containing managed fields; Normal keeps the reference rooted
-            // across GC until the callback fires and unlocks/frees it.
             GCHandle handle = GCHandle.Alloc(box, GCHandleType.Normal);
             bool handedToCallback = false;
             try
@@ -634,7 +614,6 @@ internal static unsafe partial class Program
             }
             claimed = true;
 
-            // The offscreen target holds sRGB-encoded colour; an sRGB swapchain keeps the blit from re-encoding it.
             if (SDL_WindowSupportsGPUSwapchainComposition(device, window, SDL_GPU_SWAPCHAINCOMPOSITION_SDR_LINEAR))
             {
                 _ = SDL_SetGPUSwapchainParameters(
@@ -703,9 +682,11 @@ internal static unsafe partial class Program
             };
 
             bool windowCloseRequested = false;
+            long lastLoopStamp = System.Diagnostics.Stopwatch.GetTimestamp();
             while (running && live?.QuitRequested != true)
             {
                 profiler.Begin();
+                renderer.BeginFrame();
                 nint command = SDL_AcquireGPUCommandBuffer(device);
                 if (command == nint.Zero)
                 {
@@ -719,6 +700,10 @@ internal static unsafe partial class Program
                     {
                         throw new SDLError("SDL_WaitAndAcquireGPUSwapchainTexture");
                     }
+
+                    long loopStamp = System.Diagnostics.Stopwatch.GetTimestamp();
+                    double dtSeconds = Math.Clamp(System.Diagnostics.Stopwatch.GetElapsedTime(lastLoopStamp, loopStamp).TotalSeconds, 0.0, 0.1);
+                    lastLoopStamp = loopStamp;
 
                     profiler.Mark("swapchain");
                     if (swapchain == nint.Zero || width == 0 || height == 0)
@@ -800,7 +785,6 @@ internal static unsafe partial class Program
                         switch (ev.type)
                         {
                             case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
-                                // The close button asks the game to quit (cSimsApp::Quit); SDL then follows with SDL_EVENT_QUIT, which is ignored below.
                                 if (live is not null)
                                 {
                                     windowCloseRequested = true;
@@ -813,7 +797,6 @@ internal static unsafe partial class Program
                                 break;
 
                             case SDL_EVENT_QUIT:
-                                // A termination signal arrives as SDL_EVENT_QUIT alone and quits at once.
                                 if (windowCloseRequested)
                                 {
                                     windowCloseRequested = false;
@@ -850,9 +833,9 @@ internal static unsafe partial class Program
                                         break;
                                     }
 
-                                    // Arrow keys the game did not take scroll the view (or rotate the camera when Shift is held).
                                     const float livePanStep = 64f;
                                     bool shift = (mods & SDL_KMOD_SHIFT) != 0;
+                                    bool continuousArrow = script is null && !shift && live.AllowsContinuousArrowPan;
                                     switch (ev.key_key)
                                     {
                                         case SDLK_LEFT:
@@ -863,7 +846,7 @@ internal static unsafe partial class Program
                                                     live.RotateCamera(-1);
                                                 }
                                             }
-                                            else
+                                            else if (!continuousArrow)
                                             {
                                                 live.Pan(new Vector2(livePanStep, 0f));
                                             }
@@ -876,39 +859,52 @@ internal static unsafe partial class Program
                                                     live.RotateCamera(1);
                                                 }
                                             }
-                                            else
+                                            else if (!continuousArrow)
                                             {
                                                 live.Pan(new Vector2(-livePanStep, 0f));
                                             }
                                             break;
                                         case SDLK_UP:
-                                            live.Pan(new Vector2(0f, livePanStep));
+                                            if (!continuousArrow)
+                                            {
+                                                live.Pan(new Vector2(0f, livePanStep));
+                                            }
                                             break;
                                         case SDLK_DOWN:
-                                            live.Pan(new Vector2(0f, -livePanStep));
+                                            if (!continuousArrow)
+                                            {
+                                                live.Pan(new Vector2(0f, -livePanStep));
+                                            }
                                             break;
                                     }
                                     break;
                                 }
 
-                                const float scenePanStep = 64f;
-                                switch (ev.key_key)
+                                if (script is not null)
                                 {
-                                    case SDLK_LEFT:
-                                        renderer.Pan += new Vector2(scenePanStep, 0f);
-                                        break;
-                                    case SDLK_RIGHT:
-                                        renderer.Pan += new Vector2(-scenePanStep, 0f);
-                                        break;
-                                    case SDLK_UP:
-                                        renderer.Pan += new Vector2(0f, scenePanStep);
-                                        break;
-                                    case SDLK_DOWN:
-                                        renderer.Pan += new Vector2(0f, -scenePanStep);
-                                        break;
-                                    case SDLK_ESCAPE:
-                                        running = false;
-                                        break;
+                                    const float scenePanStep = 64f;
+                                    switch (ev.key_key)
+                                    {
+                                        case SDLK_LEFT:
+                                            renderer.Pan += new Vector2(scenePanStep, 0f);
+                                            break;
+                                        case SDLK_RIGHT:
+                                            renderer.Pan += new Vector2(-scenePanStep, 0f);
+                                            break;
+                                        case SDLK_UP:
+                                            renderer.Pan += new Vector2(0f, scenePanStep);
+                                            break;
+                                        case SDLK_DOWN:
+                                            renderer.Pan += new Vector2(0f, -scenePanStep);
+                                            break;
+                                        case SDLK_ESCAPE:
+                                            running = false;
+                                            break;
+                                    }
+                                }
+                                else if (ev.key_key == SDLK_ESCAPE)
+                                {
+                                    running = false;
                                 }
                                 break;
 
@@ -1025,8 +1021,47 @@ internal static unsafe partial class Program
 
                     FlushPendingMotion();
 
-                    // The simulation bridge posts its events to the main thread; let them run right after swapchain wakeup so the
-                    // freshest mouse drag and animation frames land in the current vblank.
+                    if (script is null && dtSeconds > 0.0 && (SDL_GetModState() & SDL_KMOD_SHIFT) == 0 && (live is null || live.AllowsContinuousArrowPan))
+                    {
+                        byte* keyState = SDL_GetKeyboardState(out int numKeys);
+                        if (keyState != null)
+                        {
+                            float kx = 0f;
+                            float ky = 0f;
+                            if (SDL_SCANCODE_LEFT < numKeys && keyState[SDL_SCANCODE_LEFT] != 0) kx += 1f;
+                            if (SDL_SCANCODE_RIGHT < numKeys && keyState[SDL_SCANCODE_RIGHT] != 0) kx -= 1f;
+                            if (SDL_SCANCODE_UP < numKeys && keyState[SDL_SCANCODE_UP] != 0) ky += 1f;
+                            if (SDL_SCANCODE_DOWN < numKeys && keyState[SDL_SCANCODE_DOWN] != 0) ky -= 1f;
+                            if (kx != 0f || ky != 0f)
+                            {
+                                var dir = new Vector2(kx, ky);
+                                if (dir.LengthSquared() > 1f)
+                                {
+                                    dir = Vector2.Normalize(dir);
+                                }
+
+                                Vector2 panDelta = dir * (520f * MathF.Max(1f, renderer.UIScale) * (float)Math.Clamp(dtSeconds, 0.0, 0.05));
+                                if (live is not null)
+                                {
+                                    live.Pan(panDelta);
+                                }
+                                else
+                                {
+                                    renderer.Pan += panDelta;
+                                }
+                            }
+                        }
+                    }
+
+                    bool wasZoomInterpolating = renderer.IsZoomInterpolating;
+                    renderer.StepSmoothZoom(dtSeconds, instant: script is not null || options.Png is not null);
+                    if (wasZoomInterpolating && !renderer.IsZoomInterpolating)
+                    {
+                        live?.OnSmoothZoomSettled();
+                    }
+
+                    // Drains simulation bridge events immediately after swapchain wakeup so input drags and
+                    // animation frames align with the current display refresh.
                     profiler.Mark("events");
                     MainThreadDispatcher.Drain();
 
@@ -1106,7 +1141,7 @@ internal static unsafe partial class Program
                             renderer.Overlay = [];
                             try
                             {
-                                renderer.Encode(command, photoTarget.Color, photoTarget.Depth);
+                                renderer.Encode(command, photoTarget.Color, photoTarget.Depth, photoTarget.MsaaColor, photoTarget.MsaaDepth);
                             }
                             finally
                             {
@@ -1114,7 +1149,7 @@ internal static unsafe partial class Program
                             }
                         }
 
-                        renderer.Encode(command, targets.Color, targets.Depth);
+                        renderer.Encode(command, targets.Color, targets.Depth, targets.MsaaColor, targets.MsaaDepth);
                         profiler.Mark("encode");
 
                         var blit = new SDL_GPUBlitInfo
@@ -1143,9 +1178,8 @@ internal static unsafe partial class Program
                             throw new SDLError("SDL_SubmitGPUCommandBufferAndAcquireFence");
                         }
 
-                        // Keep at most two frames queued. SDL's Vulkan backend gives every command buffer in flight its own descriptor-set
-                        // cache, sized for a whole frame of draws and never freed, so an unbounded queue (a slow GPU or software
-                        // rasteriser) grows descriptor memory until the driver fails.
+                        // Limits queued frames to two to prevent command buffer descriptor-set caches from
+                        // growing unbounded on slow or software rasterizers.
                         framesInFlight.Add(fence);
                         if (framesInFlight.Count > 2)
                         {
@@ -1238,8 +1272,6 @@ internal static unsafe partial class Program
 
     private static void ApplyEnvironmentTuning(LotRenderer renderer, Options options)
     {
-        // SIMS_SDL_AMBIENT=radius,occlusion,shadow,thickness,reach[,up,toward,right[,ground]] and SIMS_SDL_AMBIENT_DEBUG=1...11
-        // tune and inspect the ambient pass.
         if (ParseFloatList(Environment.GetEnvironmentVariable("SIMS_SDL_AMBIENT")) is { Count: >= 5 } ambientValues)
         {
             renderer.Ambient.Radius = ambientValues[0];
@@ -1266,8 +1298,8 @@ internal static unsafe partial class Program
             ? ambientDebug
             : 0;
 
-        // SIMS_SDL_CLOUDS=cover,shade[,seconds] sets the cloud shadows (0 0 for none) and, with seconds, holds their drift.
-        // A still render holds the drift at 0 so screenshots repeat.
+        // Freezes cloud drift at zero during still renders to ensure deterministic visual output across
+        // captured frames.
         if (options.Png is not null)
         {
             renderer.Ambient.CloudTime = 0f;

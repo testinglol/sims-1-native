@@ -19,7 +19,6 @@ public sealed class BreakpointPrimitiveTests
         return (new TreeContext(world, me, new StackFrame(0, [], [0, 0])), me);
     }
 
-    // The data is the short at byte 0 and the owner the short at byte 2.
     private static byte[] Operand(short data, DataOwner owner) =>
         [(byte)data, (byte)(data >> 8), (byte)(short)owner, (byte)((short)owner >> 8), 0, 0, 0, 0];
 

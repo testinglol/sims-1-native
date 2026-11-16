@@ -5,7 +5,6 @@ namespace SimsEngine.Tests;
 
 public sealed class SleepPrimitiveTests
 {
-    // Operand: the parameter index (u16 at 0).
     private static byte[] Operand(short index) => [(byte)index, (byte)((ushort)index >> 8), 0, 0, 0, 0, 0, 0];
 
     private static SimulationError Fails(Action action) => Assert.Throws<SimulationException>(action).Error;
@@ -19,7 +18,8 @@ public sealed class SleepPrimitiveTests
     {
         var (context, _, _) = PrimitiveTestWorld.Create([5, 3]);
         SetWaitCell(context.World, context.Me, 0);
-        // Parameter 1 is the counter. A zero manager cell clears it and answers true; parameter 0 is untouched.
+        // When the wait timer expires, the sleep primitive clears the counter parameter and returns true
+        // without modifying other parameters.
         Assert.Equal(PrimitiveResult.True, SleepPrimitive.Execute(context, Operand(1)));
         Assert.Equal(0, context.Frame.Parameters[1]);
         Assert.Equal(5, context.Frame.Parameters[0]);
@@ -63,7 +63,6 @@ public sealed class SleepPrimitiveTests
         SetWaitCell(context.World, me, 7);
         Assert.Equal(PrimitiveResult.True, SleepPrimitive.Execute(context, Operand(0)));
         Assert.Equal(PrimitiveResult.True, SleepPrimitive.Execute(context, Operand(1)));
-        // A negative counter is set to zero.
         Assert.Equal(0, context.Frame.Parameters[1]);
         Assert.Equal(7, WaitCell(context.World, me));
     }
@@ -78,9 +77,7 @@ public sealed class SleepPrimitiveTests
         Assert.Equal(PrimitiveResult.Stop, SleepPrimitive.Execute(context, Operand(0)));
         Assert.Equal(PrimitiveResult.Stop, SleepPrimitive.Execute(context, Operand(0)));
         Assert.Equal(0, context.Frame.Parameters[0]);
-        // The counter reached zero, so the next run answers true.
         Assert.Equal(PrimitiveResult.True, SleepPrimitive.Execute(context, Operand(0)));
-        // The wait cell was never written on this path.
         Assert.Equal(7, WaitCell(context.World, me));
     }
 

@@ -1,27 +1,21 @@
 namespace SimsEngine.Formats;
 
-/// <summary>One sprite of a draw group image: which SPR2 frame to draw, its pixel offset, and three floats Sims.exe
-/// keeps together at +0x10 of the sprite entry, in stored order. They are an object-space offset; which axis each one
-/// is has not been traced in Sims.exe.</summary>
+/// <summary>Represents a sprite entry within a draw group image, defining the sprite frame, pixel offsets,
+/// rendering flags, and 3D object-space offset.</summary>
 public readonly record struct DrawGroupSprite(
     int SpriteId, int Frame, int X, int Y, uint Flags, float Offset1, float Offset2, float Offset3);
 
-/// <summary>The sprites drawn for one direction and zoom level.</summary>
 public sealed record DrawGroupImage(int Direction, int Zoom, IReadOnlyList<DrawGroupSprite> Sprites);
 
-/// <summary>A draw group (DGRP), as Sims.exe FUN_0040780c and FUN_004078d2 read it: an s16 version picks the layout.
-/// <para>Below 20003 (FUN_00407915): an s16 image count; per image an s16 sprite count, an s8 direction and an s8
-/// zoom; per sprite an s16 type, sprite id, frame, flags, x and y, and from version 20001 the first offset float.
-/// Sims.exe keeps only the sprites of type -3; the others (-5 in the game files) are dropped.</para>
-/// <para>From 20003 (FUN_00407f40, FUN_00407b00, FUN_00408006, FUN_00407b36): a u32 image count; per image a u32
-/// direction, zoom and sprite count; per sprite a u32 sprite id and frame, s32 x and y, the first offset float, u32
-/// flags, and from version 20004 the second and third offset floats.</para></summary>
+/// <summary>Represents a draw group (DGRP) resource. In versions below 20003, image and sprite counts are
+/// 16-bit and only sprite type -3 entries are retained; versions 20003 and later widen fields to 32-bit and
+/// include 3D offsets.</summary>
 public sealed class DrawGroup
 {
     public int Version { get; }
     public IReadOnlyList<DrawGroupImage> Images { get; }
 
-    /// <summary>Sprites of the old layout that Sims.exe drops because their type is not -3.</summary>
+    /// <summary>Number of legacy-format sprite records skipped because their sprite type was not -3.</summary>
     public int DroppedSprites { get; }
 
     private DrawGroup(int version, IReadOnlyList<DrawGroupImage> images, int droppedSprites)

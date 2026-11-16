@@ -6,9 +6,8 @@ namespace SimsEngine.World;
 public sealed record PoolToolResult(bool Applied, string Command, int Changed, int Charge, string? Refused,
     bool InsufficientFunds, int Budget);
 
-/// <summary>The pool tool's rectangular add/remove operation (cPoolTool::Click and cPoolLayer::AddPool/RemovePool).
-/// Pools are a ground-floor-only operation. Arry 9 stores water/deck occupancy while the ground-floor pattern plane
-/// stores the matching 65535 pool artwork sentinel.</summary>
+/// <summary>Handles rectangular pool placement and removal on the ground floor. Tracks water and deck
+/// occupancy in Arry 9 and stores the 65535 pool sentinel in the ground-floor pattern plane.</summary>
 public sealed class PoolTool(SimulationWorld world, LotFloors floors, LotPool pools, LotTiles tiles,
     LotTerrain terrain, LotWalls walls, FloorCatalog catalog, IFamilyBudget budget, Func<int, bool>? isPoolAccessory = null, LotWater? water = null)
 {
@@ -24,8 +23,8 @@ public sealed class PoolTool(SimulationWorld world, LotFloors floors, LotPool po
         if (left < 1 || top < 1 || right >= LotWalls.Size - 1 || bottom >= LotWalls.Size - 1)
             return Refused("outside-lot");
 
-        // cPoolTool::AllTilesPoolable error 0x11: the corner heights Float stores from the start tile must all be equal, and
-        // every tile of the rectangle must carry exactly those four corners.
+        // Pool placement requires flat terrain where every tile in the rectangle matches the start tile's
+        // elevation.
         var reference = terrain.Corners(fromX, fromY).ToArray();
         var changed = new List<(int X, int Y)>();
         for (var x = left; x <= right; x++)
@@ -34,8 +33,8 @@ public sealed class PoolTool(SimulationWorld world, LotFloors floors, LotPool po
             if (pools.IsPool(x, y, 1) != erase) continue;
             if (!tiles.InsideLot(x, y) || (!erase && (!tiles.Buildable(x, y, 1) || !SameCorners(x, y, reference)))) return Refused("unbuildable");
             if (!erase && water?.IsWater(x, y, 1) == true) return Refused("water");
-            // cPoolTool::AllTilesPoolable (error 0xb, FUN_0048fc3a) ignores hidden objects and type 9 cursors, and only
-            // exempts windows (FUN_00487d5b(selector, 4): RoomSort == 0 && BuildModeType == 2).
+            // Pool construction ignores hidden objects and cursors (type 9), and only permits windows
+            // (RoomSort 0 and BuildModeType 2) on pool tiles.
             if (!erase && world.ObjectsAtTile(x, y, 1).Any(item =>
                     item[ObjectData.Hidden] == 0 && item.Definition[(int)ObjdField.Type] != 9 &&
                     !(item.Definition[(int)ObjdField.RoomSort] == 0 &&
@@ -64,10 +63,8 @@ public sealed class PoolTool(SimulationWorld world, LotFloors floors, LotPool po
             budget.ReadFamilyBudget());
     }
 
-    /// <summary>cPoolTool::AllTilesDepoolable errors 0x2c and 0x2d. When the tile's room (value below 0xfffb) is a pool
-    /// room (Room::IsPool, the byte set from HasPool of the room's first tile), any lot object whose +0x84 room equals it
-    /// refuses with 0x2c. Then any object on the tile whose master BuildModeType (+0x8a) is 7, a pool accessory, refuses
-    /// with 0x2d.</summary>
+    /// <summary>Checks pool removal preconditions, refusing removal if objects occupy the pool room or if
+    /// pool accessories (BuildModeType 7) are present on the tile.</summary>
     private string? DepoolRefusal(int x, int y)
     {
         if (world.LotRoomMaps.TryGetValue(1, out var rooms) && rooms.RoomAt(x, y) is var room and < 0xfffb && pools.IsPool(x, y, 1)
@@ -82,10 +79,8 @@ public sealed class PoolTool(SimulationWorld world, LotFloors floors, LotPool po
             : null;
     }
 
-    /// <summary>cPoolTool::AllTilesPoolable error 7 (FUN_0048fc3a lines 107 to 137). A tile that carries wall data is refused
-    /// for a diagonal wall (segments 0x30), or for a wall on one of its four edges (TileWalls::GetWallBetween) when the
-    /// neighbour across that edge lies inside the rectangle or is already a pool tile (layer value below 0x10). Native stores
-    /// the -x and -y edges in the tile's own record, so the +x and +y edges are read from either the mirror bits or the neighbour's.</summary>
+    /// <summary>Determines if walls block pool placement. Diagonal walls (segments 0x30) or any wall
+    /// dividing adjacent pool tiles refuse pool creation.</summary>
     private bool WallBlocks(int x, int y, int left, int top, int right, int bottom)
     {
         if ((walls[x, y][0] & 0x30) != 0) return true;

@@ -8,10 +8,8 @@ namespace SimsEngine.Tests;
 
 public sealed class SetBalloonHeadlinePrimitiveTests
 {
-    // Operand: word 0 (bit 0 the owner, bits 1 to 15 the local index of selector 2), byte 2 the text id or the type
-    // selector, byte 3 the string table (4 is priority 2, 7 the type balloon), word 4 the value, byte 6 the duration
-    // kind, byte 7 the flags (bit 0 the owner flag, bit 1 the label, bit 2 and bit 4 the text flags, bit 3 timed, bit 4
-    // is also the temporary offset).
+    // Operand encodes owner and local index in word 0, text or type selector in byte 2, string table in
+    // byte 3, value in word 4, duration kind in byte 6, and control flags in byte 7.
     private static byte[] Operand(short word0, byte selector, byte table, short value, byte duration, byte flags) =>
         [(byte)word0, (byte)((ushort)word0 >> 8), selector, table, (byte)value, (byte)((ushort)value >> 8), duration, flags];
 
@@ -39,8 +37,8 @@ public sealed class SetBalloonHeadlinePrimitiveTests
             var frameOffset = firstFrame + index * frameSize;
             BinaryPrimitives.WriteUInt32LittleEndian(body[(spriteHeader + index * 4)..], (uint)frameOffset);
             var frame = body[frameOffset..];
-            BinaryPrimitives.WriteUInt16LittleEndian(frame[4..], 1); // height
-            BinaryPrimitives.WriteUInt16LittleEndian(frame[6..], 1); // width
+            BinaryPrimitives.WriteUInt16LittleEndian(frame[4..], 1);
+            BinaryPrimitives.WriteUInt16LittleEndian(frame[6..], 1);
             new byte[] { 4, 1, 3, 1, 7, 0, 5, 0 }.CopyTo(frame[8..]);
         }
         return new IffFile(data, "fixture Sprites.iff");
@@ -48,7 +46,6 @@ public sealed class SetBalloonHeadlinePrimitiveTests
 
     private static SimulationError Fails(Action action) => Assert.Throws<SimulationException>(action).Error;
 
-    /// <summary>A text balloon on the running object (100): table 2, text 9, value 3, duration kind 1, no flags.</summary>
     private static byte[] Text(byte flags = 0, short value = 3, byte table = 2) => Operand(0, 9, table, value, 1, flags);
 
     private static readonly string[] TextTail =
@@ -57,7 +54,6 @@ public sealed class SetBalloonHeadlinePrimitiveTests
         "SetBalloonFields(100,101,0,False)", "SetBalloonState(100,3)", "RefreshDisplay", "NotifyObjectTable(100)",
     ];
 
-    /// <summary>A type balloon's object at <paramref name="index"/> whose type record is 77, and the alternative 88.</summary>
     private static void TypedObject(TreeContext context, PrimitiveTestHost host, short index)
     {
         var entry = new XObject(50, PrimitiveTestWorld.Definition()) { TypeRecord = new TypeRecord(77) };
@@ -110,9 +106,9 @@ public sealed class SetBalloonHeadlinePrimitiveTests
 
         Assert.Equal(PrimitiveResult.True, SetBalloonHeadlinePrimitive.Execute(context, Text(table: 1)));
 
-        Assert.Equal(109, slot.ReadWord(0x14)); // IconGroup 1 base 100 + text id 9.
-        Assert.Equal(0, slot.ReadWord(0x18)); // The native headless slot does not retain Sims.exe's renderer pointer.
-        Assert.Equal(1, slot.ReadWord(0x1c)); // SPR# frame count / three zooms.
+        Assert.Equal(109, slot.ReadWord(0x14)); // Balloon sprite ID is computed as IconGroup base 100 plus text ID.
+        Assert.Equal(0, slot.ReadWord(0x18));
+        Assert.Equal(1, slot.ReadWord(0x1c)); // Sprite frame count divided across the three zoom levels.
         Assert.Equal(0, slot.ReadWord(0x20));
         Assert.Equal(1, slot.ReadWord(0x24));
         Assert.Equal(101, slot.ReadWord(0x2c));
@@ -133,24 +129,25 @@ public sealed class SetBalloonHeadlinePrimitiveTests
         var slot = new ObjectRuntimeSlot();
         owner.RuntimeSlots.Add(slot);
 
-        // Byte 7 0x0e sets word 6 bit 9 (label 0x200), bit 10 (reverse phase 0x400), and bit 11 (loop duration 0x800).
+        // Byte 7 flag 0x0E maps to runtime flags for label display (0x200), reverse animation phase
+        // (0x400), and loop duration (0x800).
         Assert.Equal(PrimitiveResult.True,
             SetBalloonHeadlinePrimitive.Execute(context, Text(flags: 0x0e, value: 2, table: 1)));
 
         Assert.Equal(109, slot.ReadWord(0x14));
-        Assert.Equal(0, slot.ReadWord(0x20)); // One animation frame starts at frameCount - 1.
+        Assert.Equal(0, slot.ReadWord(0x20)); // Reverse animation phase starts playback at frame count minus one.
         Assert.Equal(-1, slot.ReadWord(0x24));
-        Assert.Equal(101, slot.ReadWord(0x2c)); // GetBalloonSpriteID (0044b764.c:100) reads byte operand[6] (1 -> thought 101).
-        Assert.Equal(103, slot.ReadWord(0x30)); // IconGroup 1 label icon 3.
-        Assert.Equal(24, slot.ReadWord(0x10)); // 2 loops × 1 frame × 12 ticks.
+        Assert.Equal(101, slot.ReadWord(0x2c)); // Balloon type 1 maps to thought balloon sprite ID 101.
+        Assert.Equal(103, slot.ReadWord(0x30)); // IconGroup 1 base 100 offset by label icon index 3.
+        Assert.Equal(24, slot.ReadWord(0x10)); // Balloon duration is calculated as loops * frames * 12 ticks.
 
-        // Bit 9 alone (0x02) sets labelSpriteId (103) without reversing animation phase (+0x24 stays +1).
+        // Flag bit 0x02 enables the label sprite without reversing the animation phase.
         Assert.Equal(PrimitiveResult.True,
             SetBalloonHeadlinePrimitive.Execute(context, Text(flags: 0x02, value: 2, table: 1)));
         Assert.Equal(1, slot.ReadWord(0x24));
         Assert.Equal(103, slot.ReadWord(0x30));
 
-        // Bit 10 alone (0x04) reverses animation phase (+0x24 = -1) without setting labelSpriteId (+0x30 = 0).
+        // Flag bit 0x04 reverses the animation playback phase without enabling a label sprite.
         Assert.Equal(PrimitiveResult.True,
             SetBalloonHeadlinePrimitive.Execute(context, Text(flags: 0x04, value: 2, table: 1)));
         Assert.Equal(-1, slot.ReadWord(0x24));
@@ -292,7 +289,7 @@ public sealed class SetBalloonHeadlinePrimitiveTests
     [Fact]
     public void TextFlagsUseBitTenAndTheTemporaryOffsetAddsTemporaryZero()
     {
-        // Byte 7 0x14 is word 6 bits 10 (text flag) and 12 (add Temporaries[0] to the text id).
+        // Flag 0x14 marks a text balloon and specifies that Temporary 0 is added to the text ID.
         var (context, me, host) = PrimitiveTestWorld.Create();
         me.Temporaries[0] = 4;
         SetBalloonHeadlinePrimitive.Execute(context, Text(flags: 0x14));
@@ -362,7 +359,6 @@ public sealed class SetBalloonHeadlinePrimitiveTests
     [Fact]
     public void TypeBalloonObjectWithoutATypeRecordStops()
     {
-        // Inferred: Sims.exe would pass the missing type record on; the port shows nothing.
         var (context, _, host) = PrimitiveTestWorld.Create(stackObject: 5);
         context.Me.SetObjectTableEntry(5, new XObject(50, PrimitiveTestWorld.Definition()));
         SetBalloonHeadlinePrimitive.Execute(context, Operand(0, 0, 7, 3, 1, 0));
@@ -396,7 +392,7 @@ public sealed class SetBalloonHeadlinePrimitiveTests
     [Fact]
     public void TypeBalloonSelectorTwoReadsTheLocalAtWordZeroShiftedByOne()
     {
-        // Word 0 is 2, so the local index is 1, and that local holds object index 5.
+        // Word 0 stores the target local variable index in bits 1 through 15.
         var (context, _, host) = PrimitiveTestWorld.Create(stackObject: 5);
         context.Frame.Locals[1] = 5;
         TypedObject(context, host, 5);
@@ -408,7 +404,6 @@ public sealed class SetBalloonHeadlinePrimitiveTests
     [Fact]
     public void TypeBalloonSelectorTwoRaisesLocalOutOfRangePastTheLocals()
     {
-        // The frame has two locals; word 0 of 4 is index 2.
         var (context, _, host) = PrimitiveTestWorld.Create(stackObject: 5);
         Assert.Equal(SimulationError.LocalOutOfRange, Fails(() => SetBalloonHeadlinePrimitive.Execute(context, Operand(4, 2, 7, 3, 1, 0))));
         Assert.Equal(new[] { "HasBalloonEntries(100)", "ClaimBalloon(100,1)" }, host.Calls);
@@ -417,7 +412,6 @@ public sealed class SetBalloonHeadlinePrimitiveTests
     [Fact]
     public void TypeBalloonSelectorTwoRaisesLocalOutOfRangeForANegativeIndex()
     {
-        // Inferred: Sims.exe's bounds test passes a negative index; the port raises error 51 for it instead.
         var (context, _, _) = PrimitiveTestWorld.Create(stackObject: 5);
         Assert.Equal(SimulationError.LocalOutOfRange, Fails(() => SetBalloonHeadlinePrimitive.Execute(context, Operand(-2, 2, 7, 3, 1, 0))));
     }

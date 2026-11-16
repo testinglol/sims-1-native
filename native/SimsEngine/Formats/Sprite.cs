@@ -2,12 +2,11 @@ using System.Buffers.Binary;
 
 namespace SimsEngine.Formats;
 
-/// <summary>A decoded frame of an 8-bit sprite: one palette index per pixel, row by row, and whether the frame
-/// draws that pixel.</summary>
+/// <summary>A decoded 8-bit sprite frame, storing row-major palette indices and pixel visibility flags.</summary>
 public sealed class IndexedFrame
 {
-    /// <summary>The first two signed words in the frame header. Sims.exe exposes these through
-    /// cRenderer::GetShapeBounds (Mac) / FUN_004c8ec9 (Windows); the draw path uses Top when positioning a shape.</summary>
+    /// <summary>Signed coordinate bounds from the frame header used to offset the sprite shape during
+    /// rendering.</summary>
     public required short BoundsLeft { get; init; }
     public required short BoundsTop { get; init; }
     public required int Width { get; init; }
@@ -15,27 +14,15 @@ public sealed class IndexedFrame
     public required byte[] Indices { get; init; }
     public required bool[] Opaque { get; init; }
 
-    /// <summary>The frame writes pixels outside its own width and height; Sims.exe draws them, clipped only by the
-    /// screen. They are left out here.</summary>
+    /// <summary>Indicates whether the frame contains drawing commands that extend beyond its declared
+    /// dimensions.</summary>
     public bool WritesOutside { get; init; }
 }
 
-/// <summary>An 8-bit sprite (SPR#), as Sims.exe FUN_004c173f and FUN_004c1ad4 load it: a u32 version, a u32 frame
-/// count, from version 502 a u32 palette id, then one u32 frame offset per frame. Sims.exe uses the palette id only
-/// from version 502 and when it is not negative, and the global default palette otherwise. Versions 501 and 503 hold
-/// two sets of frames (half the count each) and version 506 five.
-/// <para>A frame starts with an 8-byte header (the signed left/top bound words, then height and width as u16) and
-/// continues with byte pairs (command, count), drawn by FUN_004c29b0: 4 starts the next row (the count is the row's
-/// byte length, used to skip clipped rows), 9 skips <c>count</c> rows, 1 skips <c>count</c> pixels, 2 repeats the
-/// next byte <c>count</c> times (the pair after it is the colour and a padding byte), 3 copies <c>count</c> bytes
-/// and pads to an even offset from the frame start, and 5 ends the frame. Other commands are skipped.</para>
-/// <para>Chunks from the Macintosh files are big-endian; FUN_004c90d0 swaps the header, the offsets and each frame's
-/// four header u16s. Which chunks it is applied to is decided by the chunk loader; here a version that does not fit
-/// 16 bits marks a big-endian chunk (inferred from the game files, where every such version swaps to 502 or
-/// 503).</para></summary>
+/// <summary>Parses 8-bit sprite (SPR#) resources. Decodes versioned headers, frame tables, and run-length
+/// draw commands including row skips, pixel spans, repeating colors, and raw byte copies.</summary>
 public sealed class Sprite
 {
-    /// <summary>The palette id when the sprite names one, or -1 for the default palette.</summary>
     public int PaletteId { get; }
     public uint Version { get; }
     public bool BigEndian { get; }
@@ -135,9 +122,8 @@ public sealed class Sprite
     }
 }
 
-/// <summary>A decoded frame of a sprite with depth (SPR2). <see cref="Alpha"/> is 0 where the frame draws nothing,
-/// the stored 5-bit value for pixels drawn with alpha, and 31 for opaque pixels (inferred: the stored values run from
-/// 0 to 31).</summary>
+/// <summary>A decoded depth sprite (SPR2) frame, containing depth values, color indices, and 5-bit alpha
+/// values (0 to 31).</summary>
 public sealed class DepthFrame
 {
     public required int Width { get; init; }
@@ -153,24 +139,12 @@ public sealed class DepthFrame
     public bool WritesOutside { get; init; }
 }
 
-/// <summary>A sprite with depth (SPR2). Version 1000, the one Sims.exe reads (FUN_004c173f keeps the whole chunk),
-/// has a u32 version, a u32 frame count, a u32 palette id (negative for the default palette) and one u32 frame offset
-/// per frame (FUN_004c828c). Version 1001, from The Sims Online, has the version, palette id and count, then the
-/// frames one after another, each after a u32 version and a u32 byte size (layout inferred from the game files).
-/// <para>A frame starts with a 16-byte header: width and height as u16 (used by every blitter), a u32 of flags, the
-/// palette id and the transparent colour index as u16 (names inferred), then the y and x offsets as s16 (added to the
-/// draw position by FUN_004c828c). FUN_004c828c reads only the size and the offsets; the palette Sims.exe draws with
-/// is the sprite's own. The rest is a stream of u16 commands, the top 3 bits the command and the low 13 a
-/// count, drawn by FUN_004bf678 and its variants: 0x0000 starts the next row (the count is the row's byte length,
-/// used to skip clipped rows), 0x8000 skips <c>count</c> rows, 0x6000 skips <c>count</c> pixels, 0x2000 draws
-/// <c>count</c> (depth, colour) byte pairs, 0x4000 <c>count</c> (depth, colour, alpha) triples, 0xC000 <c>count</c>
-/// colour bytes, and 0xA000 ends the frame. After each run of pixel bytes the stream pads to an even offset; other
-/// commands are skipped.</para></summary>
+/// <summary>Parses sprites with depth (SPR2). Decodes version 1000 and 1001 frame headers and 16-bit packed
+/// command streams for depth, color, and 5-bit alpha blits.</summary>
 public sealed class DepthSprite
 {
     public uint Version { get; }
 
-    /// <summary>The sprite's palette id, or -1 for the default palette.</summary>
     public int PaletteId { get; }
 
     public IReadOnlyList<DepthFrame> Frames { get; }
@@ -294,8 +268,7 @@ public sealed class DepthSprite
         throw reader.Error("frame has no end command");
     }
 
-    /// <summary>Sims.exe aligns the stream pointer itself, inside its copy of the whole chunk, so the padding is to an
-    /// even offset from the chunk start.</summary>
+    /// <summary>Aligns the reader to an even byte boundary relative to the chunk start.</summary>
     private static void Align(ref ResourceReader reader)
     {
         if ((reader.Position & 1) != 0 && reader.Remaining > 0) reader.Position++;

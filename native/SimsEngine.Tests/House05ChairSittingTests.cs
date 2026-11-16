@@ -54,18 +54,15 @@ public class House05ChairSittingTests
         Assert.Equal(128, SimPortrait.PieHeadWidth);
         Assert.Equal(128, SimPortrait.PieHeadHeight);
 
-        // Build a synthetic skull + long hair at a distant lot coordinate (tile (35, 45)).
         var lotOffset = new Vector3(45f, 0.55f, 35f);
         var positions = new[]
         {
-            // Skull front & back bounds (Z = [-0.08, +0.08], Y = [-0.10, +0.10])
             lotOffset + new Vector3(-0.08f, -0.10f,  0.08f),
             lotOffset + new Vector3( 0.08f, -0.10f,  0.08f),
             lotOffset + new Vector3( 0.00f,  0.10f,  0.08f),
             lotOffset + new Vector3(-0.08f, -0.10f, -0.08f),
             lotOffset + new Vector3( 0.08f, -0.10f, -0.08f),
             lotOffset + new Vector3( 0.00f,  0.10f, -0.08f),
-            // Hair extending behind skull Z and below chin Y
             lotOffset + new Vector3(-0.10f, -0.14f, -0.13f),
             lotOffset + new Vector3( 0.10f, -0.14f, -0.13f),
             lotOffset + new Vector3( 0.00f,  0.11f, -0.13f),
@@ -117,8 +114,8 @@ public class House05ChairSittingTests
             }
         }
 
-        // Cassandra (16) wears glasses (SPECS companion binding in her head suit):
-        // verify HEAD-HEAD= override does NOT clobber her glasses mesh's authored texture!
+        // Accessory meshes bound to a head suit (such as glasses via SPECS) must not have their authored
+        // textures overwritten by head texture overrides.
         var cassandra = Assert.IsType<XPerson>(bootstrap.World.ObjectById(16));
         var cassandraHeadMeshes = AvatarSceneGeometry.For(gameDir, bootstrap.Registry)
             .BuildHeadMeshes(cassandra, 1, 0, (_, _) => 0f, new LotCamera(0, 64, 64));
@@ -130,8 +127,8 @@ public class House05ChairSittingTests
     }
 
     [Theory]
-    [InlineData(21)] // Mortimer
-    [InlineData(16)] // Cassandra (starts in front porch corner (30, 22))
+    [InlineData(21)]
+    [InlineData(16)]
     public void House05_SimsCanTakeBathViaTubSecondarySubPart113(short simId)
     {
         var gameDir = LocateGameDirectory();

@@ -2,15 +2,14 @@ using SimsEngine.Formats;
 
 namespace SimsEngine.Simulation;
 
-/// <summary>Shared action eligibility and guard execution from Sims.exe FUN_00458485.
-/// The caller builds the candidate list; when a menu context is active, passing candidates become base choices unless their
-/// check tree emitted dynamic choices. Joining and action startup remain separate.</summary>
+/// <summary>Evaluates candidate action eligibility and executes guards, converting passing candidates to
+/// menu choices unless the check tree emitted dynamic choices.</summary>
 public static class InteractionTestEvaluator
 {
     public const int Evaluated = 4, Passed = 8, Hidden = 16;
 
-    /// <summary>Evaluates a candidate batch and restores the person's eight temporary values once at the end,
-    /// matching FUN_004583ff/00458449. Check-tree errors propagate instead of becoming unavailable interactions.</summary>
+    /// <summary>Evaluates a candidate interaction batch and restores the Sim's eight temporary values upon
+    /// completion.</summary>
     public static void Evaluate(SimulationWorld world, XPerson person, IReadOnlyList<ActionQueueSlot> actions, bool autonomy)
     {
         var savedTemps = person.Temporaries.ToArray();
@@ -33,7 +32,7 @@ public static class InteractionTestEvaluator
     {
         action.Flags = (action.Flags & ~Passed) | Evaluated;
         var target = action.Owner;
-        var interaction = target?.TypeRecord?.Interactions?.Interactions.FirstOrDefault(entry => entry.TtaIndex == action.RawDword10);
+        var interaction = world.EffectiveInteractions(target)?.Interactions.FirstOrDefault(entry => entry.TtaIndex == action.RawDword10);
         if (target is null || interaction is null) return;
         person[ObjectData.HideInteraction] = 0;
         var eligible = (target[ObjectData.Flags] & 0x200) == 0 && (!autonomy || target[ObjectData.LockoutCount] < 1);
@@ -41,8 +40,8 @@ public static class InteractionTestEvaluator
             (world.StateClass(person.StateValue) == 1 || (interaction.Flags & 0x20) == 0))
         {
             eligible = false;
-            // FUN_00458485 restores eligibility for categories 4/7 only when its avatar animation key
-            // has a positive (0, key) entry in the person's interaction scope.
+            // Category 4 and 7 objects require a positive visitor inventory entry in the Sim's interaction
+            // scope to be eligible.
             if (target[ObjectData.Category] is 4 or 7)
                 eligible = world.HasVisitorInventoryEntry(person);
         }
@@ -92,9 +91,8 @@ public static class InteractionTestEvaluator
                         $"interaction guard BHAV {interaction.GuardTree} for object {target.Id}, type {target.TypeRecord.Key}, " +
                         $"scope {scopeSource}, TTAB entry {interaction.TtaIndex}; " +
                         $"{world.CurrentExecutionLocation ?? "no current instruction"}: {error.Message}";
-                    // In Sims.exe treesim.s RunCheckTree (FUN_00458485 / FUN_00474b22), action guards run on an isolated
-                    // check thread. Any check failure or error simply causes the candidate interaction to be rejected (false)
-                    // without crashing or resetting the actor's active simulation thread.
+                    // Action guards run on an isolated thread where failures or errors reject the
+                    // interaction without disrupting the actor's thread.
                     world.InteractionGuardErrors.Add(new InteractionGuardError(person.Id, target.Id,
                         interaction.TtaIndex, interaction.GuardTree, error.Error, detail));
                     passed = false;
@@ -104,10 +102,20 @@ public static class InteractionTestEvaluator
                     var scopeSource = scope is SimsEngine.Content.BehaviorScope behaviorScope
                         ? behaviorScope.Private.Source
                         : scope.GetType().Name;
-                    throw new TreeRunException(error.Error,
+                    if (error.Error == TreeRunError.NestedRunSuspended)
+                    {
+                        throw new TreeRunException(error.Error,
+                            $"interaction guard BHAV {interaction.GuardTree} for object {target.Id}, type {target.TypeRecord.Key}, " +
+                            $"scope {scopeSource}, " +
+                            $"TTAB entry {interaction.TtaIndex}: {error.Message}");
+                    }
+                    var detail =
                         $"interaction guard BHAV {interaction.GuardTree} for object {target.Id}, type {target.TypeRecord.Key}, " +
-                        $"scope {scopeSource}, " +
-                        $"TTAB entry {interaction.TtaIndex}: {error.Message}");
+                        $"scope {scopeSource}, TTAB entry {interaction.TtaIndex}; " +
+                        $"{world.CurrentExecutionLocation ?? "no current instruction"}: InteractionGuardError:{error.Error}:{error.Message}";
+                    world.InteractionGuardErrors.Add(new InteractionGuardError(person.Id, target.Id,
+                        interaction.TtaIndex, interaction.GuardTree, unchecked((SimulationError)(short)error.Error), detail));
+                    passed = false;
                 }
                 finally
                 {
@@ -116,8 +124,8 @@ public static class InteractionTestEvaluator
                 }
             }
 
-            // FUN_00458485: when target and actor are in different rooms, override motive 13's delta to -minimum
-            // so FUN_004214d4 evaluates minimum + delta = 0 for the Room motive across rooms.
+            // When target and actor are in different rooms, sets motive 13 (Room) delta to negative minimum
+            // so the score evaluates to zero.
             if (target[ObjectData.Room] != person[ObjectData.Room])
                 checkTreeAds[13 * 3 + 2] = unchecked((short)-checkTreeAds[13 * 3 + 1]);
 

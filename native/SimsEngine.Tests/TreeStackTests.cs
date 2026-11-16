@@ -8,8 +8,6 @@ public class TreeStackTests
 {
     private const byte T = BhavInstruction.ReturnTrue, F = BhavInstruction.ReturnFalse;
 
-    /// <summary>Primitive opcode 0 answers with its first operand byte (as a signed result code) and records the
-    /// frame it ran in.</summary>
     private static (ushort Opcode, byte True, byte False, byte[] Operand) Prim(PrimitiveResult result, byte onTrue, byte onFalse) =>
         (0, onTrue, onFalse, [(byte)(sbyte)result, 0, 0, 0, 0, 0, 0, 0]);
 

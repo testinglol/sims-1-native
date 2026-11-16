@@ -15,7 +15,6 @@ internal sealed partial class LiveController
                 }
                 catch
                 {
-                    // Ignore transient brush clear errors.
                 }
             }
 
@@ -65,7 +64,6 @@ internal sealed partial class LiveController
         }
         catch
         {
-            // Ignore transient brush clear errors.
         }
 
         List<WallStrokeSegment> segments = [.. stroke.Completed];
@@ -267,7 +265,6 @@ internal sealed partial class LiveController
                 }
                 catch
                 {
-                    // Ignore transient brush clear errors.
                 }
             }
 
@@ -316,7 +313,6 @@ internal sealed partial class LiveController
         }
         catch
         {
-            // Ignore transient brush clear errors.
         }
 
         if ((!stroke.Deleting && Ui.Build.SelectedItem?.Id != stroke.Selection)
@@ -357,11 +353,36 @@ internal sealed partial class LiveController
         UpdateFloorPreview(point);
     }
 
+    private bool IsWallPortalPlacementTarget(BuySelection.SelectionTarget target) =>
+        (Ui.BuildMode && Ui.Build.ObjectTool is OriginalBuildObjectTool.Door or OriginalBuildObjectTool.Window or OriginalBuildObjectTool.Fireplace)
+        || (target.IsPlaced && target.PlacedObject?.CatalogCategory is 8 or 9 or 12);
+
+    private (GroundTile Tile, int? WallDirection)? ResolveObjectPlacementTarget(CGPoint point, BuySelection.SelectionTarget target)
+    {
+        if (IsWallPortalPlacementTarget(target)
+            && Renderer.WallAt(Simd(point), SimdCanvas) is { } wall
+            && wall.Level == Renderer.ViewLevel
+            && wall.Edge is null
+            && wall.Direction is >= 0 and <= 3)
+        {
+            return (new GroundTile(wall.X, wall.Y), wall.Direction);
+        }
+
+        return Renderer.GroundTileAt(Simd(point), SimdCanvas) is { } ground
+            ? (ground, null)
+            : null;
+    }
+
     private void UpdatePlacement(CGPoint point)
     {
+        var currentTarget = Ui.Buy.Selection.Target;
+        var resolvedTarget = currentTarget is { } activeTarget
+            ? ResolveObjectPlacementTarget(point, activeTarget)
+            : (Renderer.GroundTileAt(Simd(point), SimdCanvas) is { } fallbackTile ? (fallbackTile, (int?)null) : null);
+
         bool insufficientFunds = Ui.Buy.Selected is not null
             && (Ui.SelectedCatalogPrice ?? 0) > (Ui.Gameplay.State?.Budget ?? 0);
-        if (!insufficientFunds || Renderer.GroundTileAt(Simd(point), SimdCanvas) is null)
+        if (!insufficientFunds || resolvedTarget is null)
         {
             Ui.CatalogPopup.ShowPlacementError(null);
         }
@@ -376,8 +397,8 @@ internal sealed partial class LiveController
             || Renderer.Speed != 0
             || HasBlockingDialog
             || OverPanelControls(point)
-            || Ui.Buy.Selection.Target is not { } target
-            || Renderer.GroundTileAt(Simd(point), SimdCanvas) is not { } tile)
+            || currentTarget is not { } target
+            || resolvedTarget is not { } resolved)
         {
             if (_desiredPlacement is not null)
             {
@@ -387,12 +408,12 @@ internal sealed partial class LiveController
                 }
                 catch
                 {
-                    // Ignore transient placement clear errors.
                 }
             }
 
             _desiredPlacement = null;
             _checkedPlacement = null;
+            _snappedPlacementDirection = null;
             return;
         }
 
@@ -401,33 +422,49 @@ internal sealed partial class LiveController
         {
             _desiredPlacement = null;
             _checkedPlacement = null;
+            _snappedPlacementDirection = null;
             try
             {
                 Renderer.UpdatePlacement(null);
             }
             catch
             {
-                // Ignore transient placement clear errors.
             }
 
             return;
         }
 
+        if (resolved.WallDirection is int wallDir)
+        {
+            int primaryDir = wallDir switch { 1 => 1, 2 => 4, 3 => 16, _ => 64 };
+            int oppositeDir = wallDir switch { 1 => 16, 2 => 64, 3 => 1, _ => 4 };
+            if (Ui.Buy.Direction != primaryDir && Ui.Buy.Direction != oppositeDir)
+            {
+                int snappedDir = _desiredPlacement is { WallDirection: { } prevWall }
+                    && prevWall == wallDir
+                    && _desiredPlacement.Value.Direction == primaryDir
+                    ? oppositeDir
+                    : primaryDir;
+                Ui.Buy.Selection.SetDirection(snappedDir);
+            }
+        }
+
         var key = new PlacementKey(
             target,
-            tile,
+            resolved.Tile,
             Ui.Buy.Direction,
             Renderer.SceneRevisionNumber,
-            Renderer.ViewLevel);
+            Renderer.ViewLevel,
+            resolved.WallDirection);
         if (_desiredPlacement != key)
         {
+            _snappedPlacementDirection = null;
             try
             {
                 Renderer.UpdatePlacement(null);
             }
             catch
             {
-                // Ignore transient placement clear errors.
             }
         }
 
@@ -451,6 +488,10 @@ internal sealed partial class LiveController
             ["level"] = key.Level,
             ["direction"] = key.Direction,
         };
+        if (key.WallDirection is int wallDir)
+        {
+            parameters["wallDirection"] = wallDir;
+        }
         if (key.Target.IsPlaced && key.Target.PlacedObject is { } obj)
         {
             parameters["objectID"] = obj.Id;
@@ -466,7 +507,6 @@ internal sealed partial class LiveController
         }
     }
 
-    /// <summary>Updates the renderer's per-frame flags from the modes.</summary>
     public void PrepareFrame()
     {
         SyncDisposePanel();
@@ -494,10 +534,8 @@ internal sealed partial class LiveController
         SyncFamilyPortraits();
     }
 
-    /// <summary>
-    /// Fetches one missing or stale member portrait at a time for the Create a Family slots: the host writes every
-    /// preview to the same file, so requests must not overlap.
-    /// </summary>
+    /// <summary>Requests member portraits sequentially for Create a Family slots because preview generation
+    /// shares a single output file and cannot overlap.</summary>
     private void SyncFamilyPortraits()
     {
         if (Ui.HouseholdCreation is not { ShowsFamilyPage: true } creation || Bridge is not { } bridge)
@@ -555,8 +593,6 @@ internal sealed partial class LiveController
     private static string Signature(
         (string Gender, string Age, string Skin, string HeadChoice, string BodyChoice) selection) =>
         $"{selection.Gender}|{selection.Age}|{selection.Skin}|{selection.HeadChoice}|{selection.BodyChoice}";
-
-    // MARK: Host events
 
     private void ChooseGenericSimsCallPerson(int personRecordIndex)
     {
@@ -994,6 +1030,16 @@ internal sealed partial class LiveController
                         PackContentPaths.JsonReadOptions);
                     if (preview is not null)
                     {
+                        if (pendingPlacement.Key.WallDirection is not null
+                            && preview.Direction is int snappedDir and (1 or 4 or 16 or 64))
+                        {
+                            _snappedPlacementDirection = (pendingPlacement.Key, snappedDir);
+                        }
+                        else
+                        {
+                            _snappedPlacementDirection = null;
+                        }
+
                         Renderer.UpdatePlacement(preview);
                     }
                 }
@@ -1089,8 +1135,8 @@ internal sealed partial class LiveController
                             Ui.Font,
                             Ui.Device);
                         Ui.PieMenu = pieMenu;
-                        // 0048d6b6 & 005eb881: a newly opened root menu starts centered on its anchor (warping the cursor if clamped
-                        // inside the viewport, and re-applying on mouse release if macOS suppressed the warp during the button-down grab).
+                        // Centers newly opened root pie menus on their anchor, warping the cursor to match
+                        // if clamping keeps the menu within viewport bounds.
                         pieMenu.Prepare(_canvas, Scale);
                         if (pieMenu.Layout?.Center is { } center)
                         {
@@ -1201,7 +1247,8 @@ internal sealed partial class LiveController
                     PrewarmHouseholdAppearanceCatalog();
                 }
 
-                // An empty or community lot waits paused in Simless build mode; occupied lots start at the requested speed.
+                // Empty or community lots begin paused in build mode without Sims, while occupied lots
+                // resume at the configured simulation speed.
                 if ((_currentHouse ?? 0) > 0
                     && Options.Speed is int speed
                     && _pendingHouseholdCreation is null
@@ -1231,8 +1278,8 @@ internal sealed partial class LiveController
 
             if (type == "response" && id is not null && _pendingSaleRequests.Remove(id))
             {
-                // cGrabTool::SellObject (00487f4b.c:30-35): refund == 0 plays ui_archtool_delete (00492cca.c);
-                // refund != 0 plays ui_object_moneyback (00492c99.c).
+                // Plays a deletion sound if the refunded amount is zero, or a money refund sound when value
+                // is returned.
                 if (ok)
                 {
                     int refund = evt.JsonDict("result")?.JsonInt("refund") ?? 0;
@@ -1265,17 +1312,16 @@ internal sealed partial class LiveController
                 SyncDisposePanel();
                 _desiredPlacement = null;
                 _checkedPlacement = null;
+                _snappedPlacementDirection = null;
                 try
                 {
                     Renderer.UpdatePlacement(null);
                 }
                 catch
                 {
-                    // Ignore transient placement clear errors.
                 }
             }
 
-            // Legacy non-native hosts refuse speed changes while a blocking dialog is open; NativeSimulationServer tracks dialogResumeSpeed natively.
             if (type == "response" && evt.JsonString("operation") == "dialogResponse" && ok)
             {
                 _checkedPlacement = null;
@@ -1440,7 +1486,6 @@ internal sealed partial class LiveController
                 _audio?.StopLoadLoop();
             }
 
-            // UI sounds fail quietly while the host plays no audio.
             if (evt.JsonBool("ok") == false && evt.JsonString("operation") != "audioEvent")
             {
                 if (Ui.GameDialog is not null)
@@ -1547,7 +1592,6 @@ internal sealed partial class LiveController
             }
             else if (pending.FirstOrDefault() is { } firstOutfit && (firstOutfit.Kind == 6 || firstOutfit.Kind == 9))
             {
-                // Wardrobe and pet choice are carousels owned by the picker overlay, not generic dialogs.
                 if (_localDialogToken is null)
                 {
                     Ui.GameDialog = null;
@@ -1562,7 +1606,8 @@ internal sealed partial class LiveController
             }
             else if (Ui.HouseholdCreation is not null)
             {
-                // The host cannot answer its prompts (the help-system question) before a family exists; they wait for the lot.
+                // Help prompts cannot be resolved before a family exists, deferring them until the lot is
+                // loaded.
                 if (_localDialogToken is null)
                 {
                     Ui.GameDialog = null;
@@ -1572,7 +1617,8 @@ internal sealed partial class LiveController
             {
                 if (Ui.GameDialog?.Dialog.Token != first.Token && _localDialogToken is null)
                 {
-                    // A blocking game dialog closes the pie menu, while the object held at the Buy cursor stays held.
+                    // A blocking dialog closes active pie menus while preserving any object currently held
+                    // by the Buy cursor.
                     if (first.Blocking)
                     {
                         if (_awaitingLotSwitchChange)
@@ -1721,7 +1767,8 @@ internal sealed partial class LiveController
             }
         }
 
-        // The first state can arrive before the scene; a paused lot sends no other, so it waits for the scene to load.
+        // State updates arriving before the scene has loaded must wait for scene completion, as a paused
+        // lot does not send subsequent state ticks.
         if (Renderer.SceneRoot is { } root)
         {
             Ui.Update(state, root);
@@ -1861,8 +1908,8 @@ internal sealed partial class LiveController
         }
 
         _centresOnSelectedSim = false;
-        // cXObject::CenterHouseViewOnMe on the viewer's level: ScrollToCenter takes the tile point lifted by
-        // (1/3 * 6 * 2 * sqrt(6)) * 2^(scale + 1) / 2 pixels, half a Sim's height at the current zoom.
+        // Centers the camera on an object by offsetting the tile position upward by half a Sim's height (8
+        // * sqrt(6) pixels scaled by zoom factor and interface scale).
         float lift = 8f * MathF.Sqrt(6f) * Renderer.Zoom.Factor() * Renderer.UIScale;
         Renderer.Pan += viewport.Size / 2f - (point - new Vector2(0f, lift));
         if (EffectiveRoofsVisible)
@@ -1874,8 +1921,6 @@ internal sealed partial class LiveController
                 new Dictionary<string, object?>(StringComparer.Ordinal) { ["visible"] = false });
         }
     }
-
-    // MARK: - Neighborhood, Select a Family, Create a Family and wardrobe (ported from the macOS app delegate)
 
     private string NeighborhoodSettingPath =>
         Path.Combine(
@@ -1905,7 +1950,6 @@ internal sealed partial class LiveController
         }
     }
 
-    /// <summary>FUN_004f73fa / FUN_00516284: returning to the neighborhood from a sub-neighborhood lot opens that expansion's map.</summary>
     private int NeighborhoodModeForCurrentLot() => (_currentHouse ?? Options.House ?? 0) switch
     {
         >= 21 and <= 30 => 2,
@@ -2013,7 +2057,6 @@ internal sealed partial class LiveController
             includeWebScenes: includeWebScenes).ConfigureAwait(false);
     }
 
-    /// <summary>Exports and shows the neighborhood map, with its music on the frontend audio host.</summary>
     public void LoadBaseNeighborhood(int mode = 1, bool reopenFamilyPicker = false)
     {
         if (_loadingNeighborhood || _editingNeighborhood)
@@ -2026,8 +2069,8 @@ internal sealed partial class LiveController
         int targetNeighborhood = _currentNeighborhood;
         _loadingNeighborhood = true;
         Renderer.LiveMode = false;
-        // Only show the cold startup splash (`setup.bmp` + `loadloop.wav`) on initial launch; when returning from a lot
-        // (`004fb1a5`, `004f5bb5`), keep the frozen lot visible under the hourglass cursor until the neighborhood map arrives.
+        // Shows the startup splash only on initial launch; returning from a lot retains the frozen lot view
+        // under an hourglass cursor until the neighborhood map is loaded.
         if (!_hasCompletedInitialLoad && Ui.Neighborhood is null && Ui.HouseholdCreation is null)
         {
             Renderer.DrawsLot = false;
@@ -2042,7 +2085,6 @@ internal sealed partial class LiveController
                 }
                 catch
                 {
-                    // Keep splash silent if audio device cannot open.
                 }
             }
         }
@@ -2168,7 +2210,6 @@ internal sealed partial class LiveController
         }
     }
 
-    /// <summary>Leaves the lot for the neighborhood screen corresponding to the current lot, optionally saving the manual slot first.</summary>
     public void ReturnToNeighborhood(bool saving, int? mode = null)
     {
         try
@@ -2299,7 +2340,8 @@ internal sealed partial class LiveController
         return (title, message);
     }
 
-    /// <summary>Base-neighborhood lot selection: occupied lots open their household; vacant residential lots open Select a Family.</summary>
+    /// <summary>Opens the household for occupied lots, or opens the family picker when clicking vacant
+    /// residential lots.</summary>
     private void SelectNeighborhoodHouse(int house)
     {
         if (Ui.Neighborhood is not { } neighborhood || Ui.FamilyPicker is not null || Ui.Credits is not null)
@@ -2341,7 +2383,8 @@ internal sealed partial class LiveController
         {
             if (neighborhood.Mode == 7 && house is >= 90 and <= 92)
             {
-                // FUN_00552a75: vacant Magic Town residential lots in Creepy Hollow show STR# 133 entries 0 and 1 unless a family is being moved in.
+                // Vacant Magic Town residential lots display string table 133 prompts unless a family is
+                // actively being moved in.
                 var (title, message) = MagicTownStrings(
                     table: 133,
                     titleIndex: 0,
@@ -2359,7 +2402,8 @@ internal sealed partial class LiveController
         OpenNeighborhoodHouse(house, createHousehold: false);
     }
 
-    /// <summary>Original rezone flow: evict the family, bulldoze the house, then choose Residential or Community (STR# 131, 250, 251).</summary>
+    /// <summary>Rezones a lot by evicting the family, bulldozing the house, and prompting to select
+    /// residential or community zoning using string tables 131, 250, and 251.</summary>
     private void BeginRezone(int house)
     {
         if (Ui.Neighborhood is not { } neighborhood || !neighborhood.HasLot(house))
@@ -2424,7 +2468,8 @@ internal sealed partial class LiveController
         {
             string current = Strings.ZoningType(neighborhood.ZoningIndex(house));
             string message = OriginalUIStrings.Format(Strings.RezoneMessage(), [current]);
-            // Yes chooses Residential, No chooses Community; Cancel leaves the zoning unchanged.
+            // Confirms lot rezoning where selecting Yes sets Residential, No sets Community, and Cancel
+            // aborts.
             PresentLocalConfirmation(
                 Strings.RezoneTitle(),
                 message,
@@ -2448,7 +2493,7 @@ internal sealed partial class LiveController
     private void ConfirmEvict(int house, OriginalNeighborhoodOverlay neighborhood)
     {
         int mode = neighborhood.Mode;
-        // The original refuses before any other check when the lot's family is away on vacation (0x00552c63).
+        // Prevents lot eviction or bulldozing when the residing family is away on vacation.
         if (neighborhood.IsOnVacation(house))
         {
             PresentLocalFeedback(Strings.VacationEvictTitle(), Strings.VacationEvictMessage());
@@ -2460,7 +2505,7 @@ internal sealed partial class LiveController
         {
             if (hasHouse)
             {
-                // A vacant lot's house can be bulldozed in place, as the original does (STR# 131 entries 0 and 1).
+                // Bulldozes an unoccupied lot's house directly using string table 131 confirmation entries.
                 ConfirmBulldoze(house, mode, evictFirst: false);
                 return;
             }
@@ -2489,8 +2534,8 @@ internal sealed partial class LiveController
                 self.PlayUISound("ui_nhood_bdoze_evict");
                 if (hasHouse)
                 {
-                    // FUN_00552c63 / FUN_0056044b: when an occupied lot also has a house, confirming eviction immediately
-                    // prompts whether to also bulldoze the house; cancelling the second prompt keeps the house and only evicts.
+                    // Evicting an occupied lot with a house immediately prompts whether to bulldoze the
+                    // house, preserving the structure if the second prompt is cancelled.
                     self.ConfirmBulldoze(house, mode, evictFirst: true);
                 }
                 else
@@ -2552,7 +2597,7 @@ internal sealed partial class LiveController
 
     private void ChooseBannerAction(BannerAction action)
     {
-        // While a travel map is choosing a destination, only Return (stay home) answers it.
+        // While a travel dialog is active, only the return action is permitted to cancel and stay home.
         if (_activeNeighborhoodDialog is not null && action != BannerAction.ReturnHome)
         {
             PlayUISound("ui_nhood_error");
@@ -2563,7 +2608,6 @@ internal sealed partial class LiveController
         switch (action)
         {
             case BannerAction.ReturnHome:
-                // On a travel map the return button answers the travel dialog with "stay home".
                 if (_activeNeighborhoodDialog is not null)
                 {
                     RespondToNeighborhood(-1);
@@ -2634,7 +2678,8 @@ internal sealed partial class LiveController
 
             case BannerAction.SelectFamily:
             {
-                // The original opens Select a Family without a lot: Create New Family fills the bin, Move In picks a lot next.
+                // Opening the family picker directly allows creating families into the family bin or
+                // selecting a family before choosing a lot.
                 if (Ui.Neighborhood is not { } neighborhood || (neighborhood.Mode != 1 && neighborhood.Mode != 7))
                 {
                     PlayUISound("ui_nhood_error");
@@ -2655,11 +2700,8 @@ internal sealed partial class LiveController
         }
     }
 
-    /// <summary>
-    /// The Import button: offers each <c>.FAM</c> file in the Import folder in turn, as the original's import dialog walks the
-    /// folder (0x00560d21). Yes imports it (a family with a house moves onto it, its earlier family going to the bin); No
-    /// moves on to the next file.
-    /// </summary>
+    /// <summary>Iterates through <c>.FAM</c> files in the Import folder, prompting to import each family
+    /// onto its lot (sending any existing family to the bin) or advance to the next file.</summary>
     private void OfferImport(int index)
     {
         if (Ui.Neighborhood is not { } neighborhood || index < 0 || index >= neighborhood.Imports.Count)
@@ -2691,7 +2733,6 @@ internal sealed partial class LiveController
 
                 if (code == 0)
                 {
-                    // The original's own message, which the executable holds in English only.
                     self.ReloadNeighborhood(
                         edit: $"import:{index}",
                         mode: neighborhood.Mode,
@@ -2704,7 +2745,6 @@ internal sealed partial class LiveController
             });
     }
 
-    /// <summary>Previous/Next: open the adjacent installed neighborhood and remember it for the profile.</summary>
     private void SwitchNeighborhood(bool forward)
     {
         if (Ui.Neighborhood is not { } neighborhood || neighborhood.Mode != 1)

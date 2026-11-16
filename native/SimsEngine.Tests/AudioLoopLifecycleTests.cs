@@ -2,7 +2,6 @@ using SimsEngine.Simulation;
 
 namespace SimsEngine.Tests;
 
-/// <summary>Unit tests for A15 audio looping lifecycle, sustained playback, owner termination, and object removal cleanup.</summary>
 public class AudioLoopLifecycleTests
 {
     [Fact]
@@ -15,13 +14,11 @@ public class AudioLoopLifecycleTests
             if (cmd is not null) messages.Add(cmd);
         });
 
-        // Start a looping sound for object 5
         var played = audio.PlayForSimulationObject("water_fountain_loop", 5, true, true);
         Assert.True(played);
         Assert.Contains("play", messages);
         Assert.Equal(1, audio.ActiveVoiceCount);
 
-        // Tick several times: looping voice must not expire
         for (int i = 0; i < 10; i++)
         {
             audio.Tick();
@@ -45,7 +42,6 @@ public class AudioLoopLifecycleTests
             }
         });
 
-        // Start 3 sounds for owner 10, and 1 for owner 20
         audio.PlayForSimulationObject("loop_hum_1", 10, true, true);
         audio.PlayForSimulationObject("loop_hum_2", 10, true, true);
         audio.PlayForSimulationObject("loop_hum_3", 10, true, true);
@@ -53,7 +49,6 @@ public class AudioLoopLifecycleTests
 
         Assert.Equal(4, audio.ActiveVoiceCount);
 
-        // Stop all sounds for owner 10
         audio.RemoveOwner(10);
 
         Assert.Equal(3, stoppedVoices.Count);
@@ -75,7 +70,6 @@ public class AudioLoopLifecycleTests
         audio.PlayForSimulationObject("appliance_loop", 15, true, true);
         Assert.Equal(1, audio.ActiveVoiceCount);
 
-        // In a simulation world where object 15 does not exist, Tick(world) must clean it up
         var world = new SimulationWorld();
         Assert.Null(world.ObjectById(15));
 

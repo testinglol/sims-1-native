@@ -106,7 +106,6 @@ public sealed class Wave10TerrainSmoothTests
         Assert.Equal(1, tool.Raise(30, 30, 2));
         Assert.Equal(4, tool.Pending);
 
-        // Iteration 0 modifies (20, 20) and neighbours; iteration 1 hits wall at (22, 20) and must roll back iteration 0.
         walls[22, 20][0] = 1;
         var wallRng = DeterministicJitterSequence((0, 0), (2, 0), (0, 0), (0, 0), (0, 0), (0, 0), (0, 0));
         Assert.Equal(0, tool.SmoothRaise(20, 20, 1, wallRng));
@@ -117,7 +116,6 @@ public sealed class Wave10TerrainSmoothTests
         Assert.Equal((byte)0, terrain.Height(19, 20));
         Assert.Equal((byte)2, terrain.Height(30, 30));
 
-        // Clear wall, place floor at (22, 20), and verify the same complete rollback.
         walls[22, 20][0] = 0;
         floors[22, 20] = 1;
         var floorRng = DeterministicJitterSequence((0, 0), (2, 0), (0, 0), (0, 0), (0, 0), (0, 0), (0, 0));
@@ -143,7 +141,6 @@ public sealed class Wave10TerrainSmoothTests
         Assert.Equal(1, tool.Raise(30, 30, 2));
         Assert.Equal(10, tool.Pending);
 
-        // Iteration 0 uses 6 * 5 = 30 (total pending 40 <= 40); iteration 1 exceeds 40 and rolls back the whole stroke.
         var rng = DeterministicJitterSequence((0, 0), (2, 0), (0, 0), (0, 0), (0, 0), (0, 0), (0, 0));
         Assert.Equal(0, tool.SmoothRaise(20, 20, 1, rng));
         Assert.True(tool.InsufficientFunds);

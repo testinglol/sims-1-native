@@ -31,12 +31,10 @@ public class AudioParityTests
             Assert.Equal("VOX", female.Group);
             Assert.Equal("VOX", child.Group);
 
-            // Demographic suffix checks: 'm', 'f', and 'k'
             Assert.Contains("gigglem", male.RelativePath, StringComparison.OrdinalIgnoreCase);
             Assert.Contains("gigglef", female.RelativePath, StringComparison.OrdinalIgnoreCase);
             Assert.Contains("gigglek", child.RelativePath, StringComparison.OrdinalIgnoreCase);
 
-            // Distinct audio files for each demographic
             Assert.NotEqual(male.RelativePath, female.RelativePath);
             Assert.NotEqual(male.RelativePath, child.RelativePath);
             Assert.NotEqual(female.RelativePath, child.RelativePath);
@@ -58,34 +56,28 @@ public class AudioParityTests
         {
             var bank = new SoundBank(gameDir, tempDir);
 
-            // Superstar / Studio Town (Mode 5)
             var superstar = bank.Resolve("station_superstar");
             Assert.NotNull(superstar);
             Assert.Equal("MUSIC", superstar.Group);
             Assert.Contains("sep6_", superstar.RelativePath, StringComparison.OrdinalIgnoreCase);
 
-            // Makin' Magic / Magic Town (Mode 7)
             var magicTown = bank.Resolve("music_magictown");
             Assert.NotNull(magicTown);
             Assert.Equal("MUSIC", magicTown.Group);
             Assert.Contains("sep7_", magicTown.RelativePath, StringComparison.OrdinalIgnoreCase);
 
-            // Vacation Island (Mode 11)
             var vacation = bank.Resolve("station_vacation");
             Assert.NotNull(vacation);
             Assert.Equal("MUSIC", vacation.Group);
 
-            // Downtown (Mode 10)
             var dt = bank.Resolve("station_dtnhood");
             Assert.NotNull(dt);
             Assert.Equal("MUSIC", dt.Group);
 
-            // Unleashed / Old Town (Mode 4 / 12)
             var unleashed = bank.Resolve("station_unleashed");
             Assert.NotNull(unleashed);
             Assert.Equal("MUSIC", unleashed.Group);
 
-            // Base Neighborhood (Mode 3)
             var nhood = bank.Resolve("bkground_nhood1");
             Assert.NotNull(nhood);
             Assert.Equal("MUSIC", nhood.Group);
@@ -107,7 +99,6 @@ public class AudioParityTests
         {
             var bank = new SoundBank(gameDir, tempDir);
 
-            // Consecutive calls to Resolve for mode music should advance through playlist tracks
             var track1 = bank.Resolve("bkground_buy1");
             var track2 = bank.Resolve("bkground_buy1");
             var track3 = bank.Resolve("bkground_buy1");
@@ -116,7 +107,6 @@ public class AudioParityTests
             Assert.NotNull(track2);
             Assert.NotNull(track3);
 
-            // All must be distinct audio files representing sequential rotation
             Assert.NotEqual(track1.RelativePath, track2.RelativePath);
             Assert.NotEqual(track2.RelativePath, track3.RelativePath);
             Assert.NotEqual(track1.RelativePath, track3.RelativePath);
@@ -138,7 +128,6 @@ public class AudioParityTests
         {
             var bank = new SoundBank(gameDir, tempDir);
 
-            // Valid demographics: m, f, k
             var male = bank.ResolveVoice("vox_laugh_giggle", 'm', 1);
             var female = bank.ResolveVoice("vox_laugh_giggle", 'f', 1);
             var child = bank.ResolveVoice("vox_laugh_giggle", 'k', 1);
@@ -151,7 +140,6 @@ public class AudioParityTests
             Assert.Contains("gigglef", female.RelativePath, StringComparison.OrdinalIgnoreCase);
             Assert.Contains("gigglek", child.RelativePath, StringComparison.OrdinalIgnoreCase);
 
-            // Case-insensitivity: 'M', 'F', 'K'
             var maleUpper = bank.ResolveVoice("vox_laugh_giggle", 'M', 1);
             var femaleUpper = bank.ResolveVoice("vox_laugh_giggle", 'F', 1);
             var childUpper = bank.ResolveVoice("vox_laugh_giggle", 'K', 1);
@@ -164,7 +152,7 @@ public class AudioParityTests
             Assert.Equal(female.RelativePath, femaleUpper.RelativePath);
             Assert.Equal(child.RelativePath, childUpper.RelativePath);
 
-            // Unknown / invalid demographics fallback to adult male ('m')
+            // Unknown or invalid demographic codes fall back to adult male ('m') during voice resolution.
             var unknownZ = bank.ResolveVoice("vox_laugh_giggle", 'z', 1);
             var unknownQ = bank.ResolveVoice("vox_laugh_giggle", '?', 1);
             var unknown0 = bank.ResolveVoice("vox_laugh_giggle", '0', 1);
@@ -180,11 +168,10 @@ public class AudioParityTests
             Assert.Equal(male.RelativePath, unknown0.RelativePath);
             Assert.Equal(male.RelativePath, unknownEx.RelativePath);
 
-            // Child fallback when 'k' voice is missing:
-            // "vox_flirtee_giggle" only has 'f' and 'm' patches, no 'k' patches in Sims 1 assets.
+            // When child voice assets are missing for an event, voice resolution falls back to available
+            // female or male variations.
             var childFallback = bank.ResolveVoice("vox_flirtee_giggle", 'k', 1);
             Assert.NotNull(childFallback);
-            // Must have fallen back to female ('f') or male ('m')
             Assert.True(
                 childFallback.RelativePath.Contains("gigglef", StringComparison.OrdinalIgnoreCase) ||
                 childFallback.RelativePath.Contains("gigglem", StringComparison.OrdinalIgnoreCase));
@@ -206,30 +193,24 @@ public class AudioParityTests
         {
             var bank = new SoundBank(gameDir, tempDir);
 
-            // 1. Initial resolution of male variation 1
             var m1 = bank.ResolveVoice("vox_laugh_giggle", 'm', 1);
             Assert.NotNull(m1);
             Assert.Contains("gigglem", m1.RelativePath, StringComparison.OrdinalIgnoreCase);
 
-            // 2. Resolve female variation 1
             var f1 = bank.ResolveVoice("vox_laugh_giggle", 'f', 1);
             Assert.NotNull(f1);
             Assert.Contains("gigglef", f1.RelativePath, StringComparison.OrdinalIgnoreCase);
 
-            // 3. Resolve child variation 1
             var k1 = bank.ResolveVoice("vox_laugh_giggle", 'k', 1);
             Assert.NotNull(k1);
             Assert.Contains("gigglek", k1.RelativePath, StringComparison.OrdinalIgnoreCase);
 
-            // 4. Resolve child variation 2
             var k2 = bank.ResolveVoice("vox_laugh_giggle", 'k', 2);
             Assert.NotNull(k2);
             Assert.Contains("gigglek", k2.RelativePath, StringComparison.OrdinalIgnoreCase);
 
-            // 5. Generic Resolve (non-voice event)
             var generic = bank.Resolve("vox_laugh_giggle");
 
-            // 6. Re-query all voices and verify cache isolation (no overwrite or collision)
             var m1Recheck = bank.ResolveVoice("vox_laugh_giggle", 'm', 1);
             var f1Recheck = bank.ResolveVoice("vox_laugh_giggle", 'f', 1);
             var k1Recheck = bank.ResolveVoice("vox_laugh_giggle", 'k', 1);
@@ -240,7 +221,6 @@ public class AudioParityTests
             Assert.Equal(k1.RelativePath, k1Recheck!.RelativePath);
             Assert.Equal(k2.RelativePath, k2Recheck!.RelativePath);
 
-            // Ensure distinctness
             Assert.NotEqual(m1.RelativePath, f1.RelativePath);
             Assert.NotEqual(f1.RelativePath, k1.RelativePath);
             Assert.NotEqual(m1.RelativePath, k1.RelativePath);
@@ -267,7 +247,6 @@ public class AudioParityTests
         {
             var bank = new SoundBank(gameDir, tempDir);
 
-            // 1. Expansion mode event mappings
             var superstar = bank.Resolve("station_superstar");
             Assert.NotNull(superstar);
             Assert.Equal("MUSIC", superstar.Group);
@@ -304,13 +283,11 @@ public class AudioParityTests
             Assert.NotNull(magicBuy);
             Assert.Equal("MUSIC", magicBuy.Group);
 
-            // 2. Round-robin playlist rotation with wrap-around
             var rotDir = Path.Combine(Path.GetTempPath(), $"sims-music-rot-fresh-{Guid.NewGuid():N}");
             try
             {
                 var rotBank = new SoundBank(gameDir, rotDir);
 
-                // Mode 5 (Superstar) has 6 tracks.
                 var superstarTracks = new List<string>();
                 for (int i = 0; i < 6; i++)
                 {
@@ -319,23 +296,18 @@ public class AudioParityTests
                     superstarTracks.Add(track.RelativePath);
                 }
 
-                // Verify all 6 tracks are distinct
                 Assert.Equal(6, superstarTracks.Distinct().Count());
 
-                // Call #7 must wrap around and return track index 0
                 var wrappedTrack1 = rotBank.Resolve("station_superstar");
                 Assert.NotNull(wrappedTrack1);
                 Assert.Contains("_0_", wrappedTrack1.RelativePath);
                 Assert.Equal(superstarTracks[0], wrappedTrack1.RelativePath);
 
-                // Call #8 must wrap around to track index 1
                 var wrappedTrack2 = rotBank.Resolve("station_superstar");
                 Assert.NotNull(wrappedTrack2);
                 Assert.Contains("_1_", wrappedTrack2.RelativePath);
                 Assert.Equal(superstarTracks[1], wrappedTrack2.RelativePath);
 
-                // Mode 19 (Magic Town Credits) has only 1 track.
-                // Verify multiple consecutive queries succeed and wrap cleanly without error.
                 var c1 = rotBank.Resolve("music_magictown_credits");
                 var c2 = rotBank.Resolve("music_magictown_credits");
                 var c3 = rotBank.Resolve("music_magictown_credits");
@@ -369,13 +341,10 @@ public class AudioParityTests
                 if (msg is not null) messages.Add(msg);
             });
 
-            // 1. Rapid fire on speaker 42 within 3.0s window
-            // Call 1 at t=0
             var p1 = audio.PlayForSimulationObject("vox_talk_neutral", ownerID: 42, pan: false, zoom: false, voiceTypeOverride: 'm');
             Assert.True(p1);
             Assert.Single(messages);
 
-            // Call 2 at ~100ms
             Thread.Sleep(100);
             var p2 = audio.PlayForSimulationObject("vox_talk_neutral", ownerID: 42, pan: false, zoom: false, voiceTypeOverride: 'm');
             if (p2)
@@ -386,7 +355,6 @@ public class AudioParityTests
                 Assert.NotEqual(f1, f2);
             }
 
-            // Call 3 at ~1.0s (still within 3.0s window)
             Thread.Sleep(900);
             var p3 = audio.PlayForSimulationObject("vox_talk_neutral", ownerID: 42, pan: false, zoom: false, voiceTypeOverride: 'm');
             if (p3)
@@ -395,10 +363,8 @@ public class AudioParityTests
                 Assert.NotNull(fLast);
             }
 
-            // 2. Wait until MRU 3.0s window expires (>3.1s from last call)
             Thread.Sleep(3150);
 
-            // Call after 3.1s window expiry: must start fresh with variation 1
             var prevCount = messages.Count;
             var pAfterTimeout = audio.PlayForSimulationObject("vox_talk_neutral", ownerID: 42, pan: false, zoom: false, voiceTypeOverride: 'm');
             Assert.True(pAfterTimeout);
@@ -406,7 +372,7 @@ public class AudioParityTests
 
             var fTimeout = messages.Last().GetType().GetProperty("file")?.GetValue(messages.Last())?.ToString();
             var fInitial = messages[0].GetType().GetProperty("file")?.GetValue(messages[0])?.ToString();
-            Assert.Equal(fInitial, fTimeout); // Fresh sequence plays variation 1 again!
+            Assert.Equal(fInitial, fTimeout);
         }
         finally
         {
@@ -426,20 +392,16 @@ public class AudioParityTests
                 if (msg is not null) messages.Add(msg);
             });
 
-            // Set demographics per speaker ID
             audio.SetSpeakerDemographic(71, 'f');
             audio.SetSpeakerDemographic(72, 'k');
             audio.SetSpeakerDemographic(73, 'm');
 
-            // Speaker 71 plays (female)
             var p71_1 = audio.PlayForSimulationObject("vox_talk_neutral", ownerID: 71, pan: false, zoom: false);
             Assert.True(p71_1);
 
-            // Speaker 72 plays immediately (child) — must NOT be affected by speaker 71's history
             var p72_1 = audio.PlayForSimulationObject("vox_talk_neutral", ownerID: 72, pan: false, zoom: false);
             Assert.True(p72_1);
 
-            // Speaker 73 plays immediately (male) — must NOT be affected by speaker 71 or 72
             var p73_1 = audio.PlayForSimulationObject("vox_talk_neutral", ownerID: 73, pan: false, zoom: false);
             Assert.True(p73_1);
 
@@ -449,12 +411,10 @@ public class AudioParityTests
             var f72 = messages[1].GetType().GetProperty("file")?.GetValue(messages[1])?.ToString();
             var f73 = messages[2].GetType().GetProperty("file")?.GetValue(messages[2])?.ToString();
 
-            // Distinct demographics used for each speaker
             Assert.Contains("_f1", f71);
             Assert.Contains("_k1", f72);
             Assert.Contains("_m1", f73);
 
-            // Now speaker 71 plays again immediately -> triggers duplicate alternation for speaker 71 only
             var p71_2 = audio.PlayForSimulationObject("vox_talk_neutral", ownerID: 71, pan: false, zoom: false);
             if (p71_2)
             {
@@ -462,7 +422,6 @@ public class AudioParityTests
                 Assert.Contains("_f2", f71_2);
             }
 
-            // Speaker 72 plays a DIFFERENT event -> not suppressed or alternated
             var p72_diff = audio.PlayForSimulationObject("vox_laugh_giggle", ownerID: 72, pan: false, zoom: false);
             Assert.True(p72_diff);
             var f72_diff = messages.Last().GetType().GetProperty("file")?.GetValue(messages.Last())?.ToString();
@@ -489,11 +448,9 @@ public class AudioParityTests
                 if (msg is not null) messages.Add(msg);
             }, game: gameDir);
 
-            // Female laugh has 2 variations in original assets: vox_laugh_gigglef1 and vox_laugh_gigglef2
             var fPlayed1 = audio.PlayForSimulationObject("vox_laugh_giggle", ownerID: 55, pan: false, zoom: false, voiceTypeOverride: 'f');
             Assert.True(fPlayed1);
 
-            // Immediate duplicate female laugh alternates to variation 2
             var fPlayed2 = audio.PlayForSimulationObject("vox_laugh_giggle", ownerID: 55, pan: false, zoom: false, voiceTypeOverride: 'f');
             Assert.True(fPlayed2);
 
@@ -506,13 +463,12 @@ public class AudioParityTests
             Assert.Contains("gigglef", fFile1, StringComparison.OrdinalIgnoreCase);
             Assert.Contains("gigglef", fFile2, StringComparison.OrdinalIgnoreCase);
 
-            // Male laugh has only 1 variation in original assets: vox_laugh_gigglem1
             var mPlayed1 = audio.PlayForSimulationObject("vox_laugh_giggle", ownerID: 66, pan: false, zoom: false, voiceTypeOverride: 'm');
             Assert.True(mPlayed1);
             var countAfterM1 = messages.Count;
 
-            // Immediate duplicate male laugh falls back to ChooseNonRepeatingIndex (which plays the single variation)
-            // rather than returning null and dropping 1-variation sounds on repeat.
+            // Immediate repeats of single-variation voice events replay the only available variation
+            // instead of returning null.
             var mPlayed2 = audio.PlayForSimulationObject("vox_laugh_giggle", ownerID: 66, pan: false, zoom: false, voiceTypeOverride: 'm');
             Assert.True(mPlayed2);
             Assert.Equal(countAfterM1 + 1, messages.Count);
@@ -534,7 +490,6 @@ public class AudioParityTests
         {
             using var bank = new SoundBank(gameDir, tempDir);
 
-            // 1. ExpansionPack.far (Livin' Large) & Downloads/**/*.far
             var bedCoin = bank.Resolve("Bed_CoinDrop");
             Assert.NotNull(bedCoin);
 
@@ -544,7 +499,7 @@ public class AudioParityTests
             var hamster = bank.Resolve("Hamster_Attack");
             Assert.NotNull(hamster);
 
-            // 2. Pet VOX events resolve directly without appending 'm'/'f'/'k'
+            // Pet voice events resolve directly by cue name without appending demographic suffixes.
             var dogBark = bank.ResolveVoice("voxdog_barkb", 'm');
             Assert.NotNull(dogBark);
             Assert.Equal("VOX", dogBark.Group);
@@ -553,7 +508,6 @@ public class AudioParityTests
             Assert.NotNull(catMew);
             Assert.Equal("VOX", catMew.Group);
 
-            // 3. Events ending in "vox" and generic_fm_smartlists
             Assert.True(bank.IsDemographicVoxEvent("clown_picture_vox"));
             Assert.True(bank.IsDemographicVoxEvent("sick_cough_mild_sitting"));
             var coughF = bank.ResolveVoice("sick_cough_mild_sitting", 'f');
@@ -562,12 +516,10 @@ public class AudioParityTests
             Assert.NotNull(coughM);
             Assert.NotEqual(coughF.RelativePath, coughM.RelativePath);
 
-            // 4. Mode 0 (live) and Mode 7 (options) have no music directory (return null)
             Assert.Null(bank.Resolve("bkground_live"));
             Assert.Null(bank.Resolve("bkground_option"));
             Assert.Null(bank.Resolve("bkground_options"));
 
-            // 5. Radio, TV, and Piano stations resolve actual tracks
             var radioClass = bank.Resolve("radio_class");
             Assert.NotNull(radioClass);
             Assert.Equal("MUSIC", radioClass.Group);
@@ -612,7 +564,6 @@ public class AudioParityTests
                 StopOwnerSounds = owner => audio.RemoveOwner(owner)
             };
 
-            // Sim has Id=100; place Shower (Id=42) at 1-based StackObjectKey=2 (2 != 42).
             var sim = world.Add(new SimsEngine.Simulation.XPerson(100, PrimitiveTestWorld.Definition(SimsEngine.Simulation.XPerson.PersonType)));
             var shower = world.Add(new SimsEngine.Simulation.XObject(42, PrimitiveTestWorld.Definition()));
             short showerStackKey = 2;
@@ -620,7 +571,6 @@ public class AudioParityTests
             Assert.Same(shower, world.ObjectByStackObject(sim, showerStackKey));
             Assert.NotEqual(shower.Id, showerStackKey);
 
-            // 1. Start loop via StackObject (flags=2, StackObjectKey=3 -> resolves XObject.Id=42), stop via `me` on shower (word0=0 -> me.Id=42).
             var simFrame = new SimsEngine.Simulation.StackFrame(stackObject: showerStackKey, [], []) { Table = scope };
             var simContext = new SimsEngine.Simulation.TreeContext(world, sim, simFrame);
             byte[] playOnStackObj = [10, 0, 0, 0, 2, 0, 0, 0];
@@ -633,7 +583,6 @@ public class AudioParityTests
             Assert.Equal(SimsEngine.Simulation.PrimitiveResult.True, SimsEngine.Simulation.StopAllSoundsPrimitive.Execute(showerContext, stopOnMe));
             Assert.Equal(0, audio.ActiveVoiceCount);
 
-            // 2. Start loop via `me` on shower (flags=0 -> me.Id=42), stop via StackObject from sim (word0=1, StackObjectKey=3 -> shower.Id=42).
             byte[] playOnMe = [10, 0, 0, 0, 0, 0, 0, 0];
             Assert.Equal(SimsEngine.Simulation.PrimitiveResult.True, SimsEngine.Simulation.PlaySoundEventPrimitive.Execute(showerContext, playOnMe));
             Assert.Equal(1, audio.ActiveVoiceCount);
@@ -642,7 +591,6 @@ public class AudioParityTests
             Assert.Equal(SimsEngine.Simulation.PrimitiveResult.True, SimsEngine.Simulation.StopAllSoundsPrimitive.Execute(simContext, stopOnStackObj));
             Assert.Equal(0, audio.ActiveVoiceCount);
 
-            // 3. Missing/zero StackObject (StackObjectKey=0) does not attach positional sound to owner 0 or stop unrelated owners.
             var nullStackFrame = new SimsEngine.Simulation.StackFrame(stackObject: 0, [], []) { Table = scope };
             var nullStackContext = new SimsEngine.Simulation.TreeContext(world, sim, nullStackFrame);
             Assert.Equal(SimsEngine.Simulation.PrimitiveResult.True, SimsEngine.Simulation.PlaySoundEventPrimitive.Execute(nullStackContext, playOnStackObj));
@@ -674,7 +622,6 @@ public class AudioParityTests
                 SuppressActiveDuplicates = false
             };
 
-            // Legitimate continuous object/station loops MUST resolve IsLoop = true
             string[] expectedLoops =
             [
                 "fire_burning",
@@ -696,11 +643,9 @@ public class AudioParityTests
                 Assert.True(res.IsLoop, $"Expected '{cue}' to be looped (resolved file: {res.RelativePath})");
             }
 
-            // fireplace_loop must resolve the crackling fireplace_loop patch (1819), not the 1s fireplace_on strike (3328)
             var fireplace = bank.Resolve("fireplace_loop")!;
             Assert.Contains("fireplace_loop", fireplace.RelativePath, StringComparison.OrdinalIgnoreCase);
 
-            // One-shot cues (including "amb" substrings like bamboo/screamb, animation "_loop_start"/"_loopa", footsteps, UI, doors, stings, VOX) MUST NOT loop
             string[] expectedOneShots =
             [
                 "door_bamboo_open",
@@ -722,7 +667,6 @@ public class AudioParityTests
                 }
             }
 
-            // Verify HitAudioRuntime.PlayForSimulationObject does NOT force loop=true on "amb" or "_loop" one-shot events
             events.Clear();
             if (bank.Resolve("door_bamboo_open") is not null)
             {
@@ -741,7 +685,6 @@ public class AudioParityTests
                 }
             }
 
-            // Re-triggering the same looped cue on the same owner deduplicates, and RemoveOwner stops it cleanly
             events.Clear();
             Assert.True(audio.PlayForSimulationObject("fire_burning_small", ownerID: 88, pan: true, zoom: true));
             Assert.True(audio.PlayForSimulationObject("fire_burning_small", ownerID: 88, pan: true, zoom: true));
@@ -750,7 +693,6 @@ public class AudioParityTests
             audio.RemoveOwner(88);
             Assert.Contains(events, e => e.GetType().GetProperty("command")?.GetValue(e)?.ToString() == "stop");
 
-            // External neighborhood owner (-25) non-positional ambient loop (river_loop) tracks owner -25 so RemoveOwner(-25) stops it
             events.Clear();
             Assert.True(audio.Play("river_loop", ownerID: -25));
             Assert.True(audio.Play("river_loop", ownerID: -25));
@@ -775,9 +717,6 @@ public class AudioParityTests
         {
             using var bank = new SoundBank(gameDir, tempDir);
 
-            // Track 1912 (footstep_hard) and Track 1913 (footstep_terrain) execute two-part HIT subroutines
-            // (tkd_FootstepHard -> opcode 0x3f -> tkd__FootstepHard -> reg5 = 219/220) and collide numerically
-            // with HouseParty.hot [GlobalHitList] 1912/1913 (stripper_dance_end_voxm* / stripper_dance_punch_voxm*).
             (string Cue, string ExpectedSubstring)[] footsteps =
             [
                 ("footstep_hard", "feet_hard"),

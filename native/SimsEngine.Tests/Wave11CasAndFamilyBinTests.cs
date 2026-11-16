@@ -83,15 +83,10 @@ public sealed class Wave11CasAndFamilyBinTests
             };
             var neighborsByGuid = neighbors.ToDictionary(n => n.Guid, n => n);
 
-            // Maxis unhoused bin family: HouseNumber == 0, Flags == 0, Budget == 20000, Value == 0
             var maxisFamily = Family.CreateNew(1, 0, [maxisGuid], 20_000).WithValue(0);
-            // Legacy Family.CreateNew unhoused family: HouseNumber == 0, Flags == 0, Budget == 20000, Value == 20000
             var legacyFamily = Family.CreateNew(2, 0, [legacyGuid], 20_000);
-            // Strays: Flags == 0x18 (bit 3 set) with pet
             var strayPetFamily = Family.CreateNew(3, 0, [strayPetGuid], 20_000).WithValue(0).WithFields(flags: 0x18u);
-            // Non-pet family with bit 3 set (Flags == 0x18) must still stay excluded by (Flags & 8) == 0
             var hiddenFamily = Family.CreateNew(4, 0, [strayFlaggedHumanGuid], 20_000).WithValue(0).WithFields(flags: 0x18u);
-            // Housed family: HouseNumber == 1
             var housedFamily = Family.CreateNew(5, 1, [housedGuid], 15_000).WithValue(5_000).WithFields(flags: 1u);
 
             Assert.True(NeighborhoodExport.IsPetsOnly(strayPetFamily, neighborsByGuid));
@@ -145,8 +140,6 @@ public sealed class Wave11CasAndFamilyBinTests
             var skinsDir = Path.Combine(tempRoot, "GameData", "Skins");
             Directory.CreateDirectory(skinsDir);
 
-            // Include unisex child head/body alongside gender-specific child assets and adult .cmx head+outfit,
-            // repeating an appearance name across two .cmx files to verify deterministic deduplication.
             File.WriteAllText(
                 Path.Combine(skinsDir, "first.cmx"),
                 BuildCmx("c001uc_unisex", "b001ucchd_01", "c002fc_girl", "b002fcchd_01", "c099fa_cmx", "b099fafit_cmx"));
@@ -223,7 +216,6 @@ public sealed class Wave11CasAndFamilyBinTests
             return table;
         }
 
-        // 1) Adult male (fat build, lgt skin) updating a template StringTable while preserving [4..7]
         var templateSeed = Enumerable.Repeat(string.Empty, 30).ToArray();
         templateSeed[3] = "HEAD";
         templateSeed[4] = "Top";
@@ -262,7 +254,6 @@ public sealed class Wave11CasAndFamilyBinTests
         Assert.Equal("HmRC,HAND=huaclgt", maleStrings[22]);
         Assert.Equal("fmfat_01,BODY=fmfatlgt_01", maleStrings[27]);
 
-        // 2) Adult female (fit build, drk skin) with null templateTable
         var femaleBytes = HouseholdAppearance.BuildCharacterBodyStrings(
             templateTable: null,
             game: string.Empty,
@@ -290,7 +281,6 @@ public sealed class Wave11CasAndFamilyBinTests
         Assert.Equal("HfRC,HAND=huacdrk", femaleStrings[22]);
         Assert.Equal("fffit_01,BODY=fffitdrk_01", femaleStrings[27]);
 
-        // 3) Child female (med skin) matching shipped User00011.iff STR# 200 layout
         var childBytes = HouseholdAppearance.BuildCharacterBodyStrings(
             templateTable: null,
             game: string.Empty,

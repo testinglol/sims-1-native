@@ -2,9 +2,9 @@ using SimsEngine.Formats;
 
 namespace SimsEngine.World;
 
-/// <summary>One level's wall grid (Arry 2, or 102 upstairs) as the lot stores it: an 8-byte record per tile. Byte 0 holds
-/// the segment bits (1 the edge towards the -x neighbour, 2 the edge towards -y, 0x10 and 0x20 the diagonals), bytes 2
-/// and 3 the styles of those two edges, bytes 4 and 5 their patterns, byte 7 a diagonal's pattern.</summary>
+/// <summary>Represents a lot level wall grid (Arry 2 or 102) stored as 8-byte tile records. Byte 0 contains
+/// segment bitmasks (0x01 for -x, 0x02 for -y, 0x10 and 0x20 for diagonals), bytes 2-3 store edge styles,
+/// bytes 4-5 store edge patterns, and byte 7 stores diagonal pattern.</summary>
 public sealed class LotWalls
 {
     public const int Size = 64;

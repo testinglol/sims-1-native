@@ -1,11 +1,10 @@
 using System.Buffers.Binary;
 using System.IO.Compression;
 
-/// <summary>Object artwork: a small PNG codec, the TS1 SPR2 sprite format and a palette quantizer, so object sprites can
-/// be exported for painting and compiled back with their depth buffers.</summary>
 internal static class SpriteArt
 {
-    /// <summary>One decoded sprite frame: RGBA pixels and a depth byte per pixel (255 where transparent).</summary>
+    /// <summary>A decoded sprite frame with RGBA pixels and a depth byte per pixel, where 255 indicates
+    /// transparency.</summary>
     internal sealed class Frame
     {
         public required int Width;
@@ -17,9 +16,7 @@ internal static class SpriteArt
 
     private const int MaximumDimension = 2048;
 
-    // ---- SPR2 ----
-
-    /// <summary>Decodes a SPR2 chunk body. <paramref name="palette"/> returns the RGB triplets of a PALT chunk.</summary>
+    /// <summary>Decodes a SPR2 chunk body using RGB triplets provided by the referenced PALT chunk.</summary>
     internal static (uint DefaultPalette, List<Frame> Frames) DecodeSprite(byte[] data, Func<ushort, byte[]?> palette)
     {
         var version = Read32(data, 0);
@@ -126,7 +123,8 @@ internal static class SpriteArt
         return frame;
     }
 
-    /// <summary>Encodes frames as a TS1 SPR2 chunk (version 1000, one palette for every frame).</summary>
+    /// <summary>Encodes frames as a SPR2 chunk using version 1000 with a single shared palette for all
+    /// frames.</summary>
     internal static byte[] EncodeSprite(IReadOnlyList<Frame> frames, ushort paletteID, byte[] palette)
     {
         var lookup = new Dictionary<int, byte>();
@@ -227,7 +225,8 @@ internal static class SpriteArt
         return frame.Depth[pixel] > 0 ? 1 : 6;
     }
 
-    /// <summary>Median-cut palette of at most 255 colors over every visible pixel; entry 255 stays free for transparency.</summary>
+    /// <summary>Generates a median-cut palette of up to 255 colors across all visible pixels, reserving
+    /// palette entry 255 for transparency.</summary>
     internal static byte[] Quantize(IEnumerable<Frame> frames)
     {
         var counts = new Dictionary<int, int>();
@@ -243,7 +242,6 @@ internal static class SpriteArt
         {
             var splittable = boxes.Where(box => box.Count > 1).ToList();
             if (splittable.Count == 0) break;
-            // Split the box with the widest weighted channel range at its weighted median.
             var (box, channel, _) = splittable.Select(box =>
             {
                 var ranges = Enumerable.Range(0, 3).Select(channel => box.Max(item => Channel(item.Color, channel)) - box.Min(item => Channel(item.Color, channel))).ToArray();
@@ -271,15 +269,13 @@ internal static class SpriteArt
             for (var channel = 0; channel < 3; channel++)
                 palette[index * 3 + channel] = weight == 0 ? (byte)0 : (byte)Math.Round(box.Sum(item => (double)Channel(item.Color, channel) * item.Count) / weight);
         }
-        // The unused transparent entry is magenta, as in the original palettes.
+        // Sets the unused transparent palette entry to magenta.
         palette[765] = 255;
         palette[767] = 255;
         return palette;
     }
 
     private static int Channel(int color, int channel) => color >> (16 - channel * 8) & 0xFF;
-
-    // ---- PNG ----
 
     internal static byte[] WritePng(int width, int height, byte[] pixels, bool gray)
     {
@@ -329,7 +325,6 @@ internal static class SpriteArt
         return crc ^ 0xFFFFFFFF;
     }
 
-    /// <summary>Reads an 8-bit, non-interlaced PNG of any color type as RGBA.</summary>
     internal static (int Width, int Height, byte[] Rgba) ReadPng(byte[] data, string name)
     {
         if (data.Length < 8 || !data.AsSpan(0, 8).SequenceEqual(new byte[] { 0x89, (byte)'P', (byte)'N', (byte)'G', 13, 10, 26, 10 }))
@@ -424,7 +419,8 @@ internal static class SpriteArt
         return toLeft <= toUp && toLeft <= toCorner ? left : toUp <= toCorner ? up : corner;
     }
 
-    /// <summary>Depth for pixels a painter made visible: the depth of the nearest originally visible pixel.</summary>
+    /// <summary>Fills depth for newly visible pixels using the depth of the nearest originally visible
+    /// pixel.</summary>
     internal static void FillDepth(Frame frame, byte[] originalDepth, byte[] originalRgba)
     {
         var count = frame.Width * frame.Height;

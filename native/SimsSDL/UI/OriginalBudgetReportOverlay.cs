@@ -3,11 +3,8 @@ using SimsSDL;
 
 namespace SimsSDL.UI;
 
-/// <summary>
-/// The live-lot budget dialog (<c>cWinBudgetDlg</c>, <c>005020aa.c</c>, <c>00502c7a.c</c>, <c>00502eb1.c</c>,
-/// <c>005032cb.c</c>, <c>0050337c.c</c>), backed by <c>cpanel\Backgrounds\budgetback.bmp</c>,
-/// <c>cpanel\Buttons\budgetok.bmp</c>, and <c>UIText.iff</c> <c>STR# 146</c> (<c>0x92</c>).
-/// </summary>
+/// <summary>Renders the live-lot budget report dialog using background and button assets from the control
+/// panel and localized line items from string table 146 in <c>UIText.iff</c>.</summary>
 public sealed class OriginalBudgetReportOverlay
 {
     public sealed record ReportValues(
@@ -48,9 +45,8 @@ public sealed class OriginalBudgetReportOverlay
     private CGRect _lastOKRect = new(291, 345, 217, 52);
     private List<CGRect> _lastRowRects = [];
 
-    /// <summary>
-    /// DAT_00dc73d8 (<c>DAT_006cc300</c> in base <c>005020aa.c</c>): indentation level per row (<c>x = 30 + indent * 12</c>).
-    /// </summary>
+    /// <summary>Defines the indentation level for each budget line item, where column x-offsets scale by 12
+    /// pixels per indent level starting at 30 pixels.</summary>
     private static readonly int[] RowIndents =
     [
         0, 0, 0, 1, 1, 0, 0, 1, 1, 1,
@@ -68,7 +64,6 @@ public sealed class OriginalBudgetReportOverlay
         _device = device;
         _strings = strings;
 
-        // 004ff397.c:106 DAT_006f2a98 = UIGraphics/Fonts/variablesans_09.ffn (leading zero in UIGraphics.far).
         Font9 = TryLoadFont(content, "UIGraphics/Fonts/variablesans_09.ffn") ?? font;
         _font10 = font;
         _font12 = TryLoadFont(content, "UIGraphics/Fonts/variablesans_12.ffn") ?? font;
@@ -173,7 +168,6 @@ public sealed class OriginalBudgetReportOverlay
         return (defaultX, defaultY);
     }
 
-    /// <summary>DAT_00dc7388 (<c>PTR_DAT_006cc2b0</c> in <c>005020aa.c</c>): font per row (0..19).</summary>
     private SimsBitmapFont RowFont(int row) => row switch
     {
         0 => _font18,
@@ -211,7 +205,6 @@ public sealed class OriginalBudgetReportOverlay
 
     public void EndPress() => PressedOK = false;
 
-    /// <summary>Handles Return / Escape dismissal for <c>cWinBudgetDlg</c> (<c>005020aa.c</c>).</summary>
     public bool Key(string key)
     {
         if (key is not ("\r" or "\n" or "\u001b")) return false;
@@ -238,7 +231,6 @@ public sealed class OriginalBudgetReportOverlay
     {
         var parts = new List<OriginalGameplayOverlay.Part>();
 
-        // Build row contents matching FUN_005020aa lines 161-349:
         var rows = new RowData[20];
         for (var r = 0; r < 20; r++)
         {
@@ -283,8 +275,8 @@ public sealed class OriginalBudgetReportOverlay
         }
         rows[15].Col0 = _strings.BudgetLabel(28, "Cash Flow");
 
-        // Populate expense/income columns (FUN_005020aa lines 293-325):
-        // Note: FUN_005031e9 / FUN_0050322b store -value so expenses become negative and incomes remain positive!
+        // Populates budget columns, storing expense values as negative amounts and income values as
+        // positive amounts.
         void SetAmounts(int row, int index)
         {
             var t3 = -(index >= 0 && index < values.ThreeDay.Count ? values.ThreeDay[index] : 0);
@@ -295,14 +287,14 @@ public sealed class OriginalBudgetReportOverlay
             rows[row].Col2 = FormatSimoleons(td);
         }
 
-        SetAmounts(3, 1);  // Job
-        SetAmounts(4, 2);  // Miscellaneous Income
-        SetAmounts(7, 4);  // Bills Paid
-        SetAmounts(8, 3);  // Food
-        SetAmounts(9, 5);  // Repair/Cleaning/Gardening
-        SetAmounts(11, 6); // Household Items
-        SetAmounts(12, 7); // Architecture/Landscaping
-        SetAmounts(13, 0); // Miscellaneous Expenses
+        SetAmounts(3, 1);
+        SetAmounts(4, 2);
+        SetAmounts(7, 4);
+        SetAmounts(8, 3);
+        SetAmounts(9, 5);
+        SetAmounts(11, 6);
+        SetAmounts(12, 7);
+        SetAmounts(13, 0);
 
         var sumThreeDay = values.ThreeDay.Take(8).Sum();
         var sumToday = values.Today.Take(8).Sum();
@@ -323,7 +315,6 @@ public sealed class OriginalBudgetReportOverlay
         var worthTemplate = _strings.BudgetLabel(34, "Household Net Worth: %s");
         rows[18].Col0 = worthTemplate.Replace("%s", FormatSimoleons(values.NetWorth), StringComparison.Ordinal);
 
-        // FUN_005032cb & FUN_005020aa lines 350-380: compute max column widths across non-centered rows.
         double maxCol0 = 0;
         double maxCol1 = 0;
         double maxCol2 = 0;
@@ -338,24 +329,23 @@ public sealed class OriginalBudgetReportOverlay
             maxCol2 = Math.Max(maxCol2, w2);
         }
 
-        // FUN_0050337c: rowWidth = maxCol0 + maxCol1 + maxCol2 + 0x78 (120)
+        // Computes dialog width as the sum of all three column widths plus 120 pixels of internal padding,
+        // clamped to a 400-pixel minimum.
         var rowWidth = Math.Max(400, maxCol0 + maxCol1 + maxCol2 + 120);
-        // FUN_005031b0 & FUN_005020aa lines 138-149, 381-382: each row's height is its own font's lineHeight,
-        // stacked sequentially from marginTop to row[19].MaxY, plus marginBottom.
         double totalRowsHeight = 0;
         foreach (var row in rows) totalRowsHeight += row.Font.LineHeight;
 
         var dialogWidth = _marginLeft + rowWidth + _marginRight;
         var dialogHeight = _marginTop + totalRowsHeight + _marginBottom;
 
-        // FUN_0053a478 lines 191-206: center dialog in the lot viewport above the 150px control panel (or full canvas).
+        // Centers the dialog horizontally on screen and vertically within the visible lot viewport above
+        // the bottom control panel.
         var viewportHeight = Math.Max(dialogHeight, canvas.Height - 100);
         var panelX = Math.Floor((canvas.Width - dialogWidth) / 2);
         var panelY = Math.Max(8, Math.Floor((viewportHeight - dialogHeight) / 2));
         var panel = new CGRect(panelX, panelY, dialogWidth, dialogHeight);
         _lastPanelRect = panel;
 
-        // FUN_00502c7a lines 29-35: 9-slice draw of budgetback.bmp (cell size = width / 3, height / 3).
         var sliceW = Math.Floor(_background.Size.Width / 3);
         var sliceH = Math.Floor(_background.Size.Height / 3);
         var edgeW = Math.Min(sliceW, Math.Floor(panel.Width / 3));
@@ -378,12 +368,9 @@ public sealed class OriginalBudgetReportOverlay
             }
         }
 
-        // FUN_004ff397 lines 26-30, 69-74: global font default color DAT_006f2a44 = RGB(195, 205, 205),
-        // pressed DAT_006f2a4c = RGB(0, 255, 255), hover DAT_006f2a48 = RGB(255, 255, 255).
         (byte R, byte G, byte B) textColor = (195, 205, 205);
         (byte R, byte G, byte B) pressedTextColor = (0, 255, 255);
         (byte R, byte G, byte B) hoverTextColor = (255, 255, 255);
-        // DAT_00dfa8e4 (`DAT_006f2a5c` in base `00502eb1.c`): negative currency color RGB(209, 0, 0).
         (byte R, byte G, byte B) negativeRed = (209, 0, 0);
 
         var rowRects = new List<CGRect>(20);
@@ -405,10 +392,8 @@ public sealed class OriginalBudgetReportOverlay
             }
             else
             {
-                // FUN_00502eb1 lines 34-36:
-                // col0X = rowRect.minX + 30 + indent * 12
-                // col1X = rowRect.minX + maxCol0 + 60
-                // col2X = rowRect.minX + maxCol0 + maxCol1 + 90
+                // Positions row columns with a 30px left margin plus indent scaling, followed by 30px gaps
+                // after each calculated maximum column width.
                 if (!string.IsNullOrEmpty(row.Col0))
                 {
                     var img = OriginalGameplayOverlay.Text(row.Col0, row.Font, _device, textColor);
@@ -433,8 +418,8 @@ public sealed class OriginalBudgetReportOverlay
         }
         _lastRowRects = rowRects;
 
-        // FUN_005020aa lines 383-387: OK button (budgetok.bmp, 4-frame horizontal sheet, 217x52 per frame;
-        // falls back to 3-sliced WinBtn.bmp >=100x33 if budgetok.bmp is absent).
+        // Renders the OK button using the 4-frame 217x52 sheet from <c>budgetok.bmp</c>, falling back to a
+        // 3-slice button when the sheet is unavailable.
         var okCaption = _strings.BudgetLabel(2, "OK");
         var captionFont = _usesTileButtonFallback ? _font12 : _font20;
         var btnW = _usesTileButtonFallback
@@ -486,8 +471,7 @@ public sealed class OriginalBudgetReportOverlay
                 new Vector4(uvBase, 0f, 0.25f, 1f)));
         }
 
-        // FUN_005020aa lines 31-32, 54-63, 150-159 & FUN_005e4104:
-        // state 0 (normal) = (0, 0), state 1 (pressed) = (+2, +2), state 2 (hover) = (0, 0), state 3 (disabled) = (0, 0).
+        // Offsets button text by (+2, +2) pixels when pressed to simulate mechanical button depth.
         if (!string.IsNullOrEmpty(okCaption))
         {
             var captionColor = PressedOK ? pressedTextColor : (HoveredOK ? hoverTextColor : textColor);
@@ -498,7 +482,6 @@ public sealed class OriginalBudgetReportOverlay
             parts.Add(new OriginalGameplayOverlay.Part(okText, new CGRect(tx, ty, okText.Size.Width, okText.Size.Height)));
         }
 
-        // Row hover tooltip (FUN_005020aa lines 201-210, 216-224, 226-277)
         if (quickTips && HoveredRow is { } hoveredRow &&
             hoveredRow >= 0 && hoveredRow < rowRects.Count &&
             _rowTooltips.TryGetValue(hoveredRow, out var tip))
@@ -513,7 +496,6 @@ public sealed class OriginalBudgetReportOverlay
             }
             catch
             {
-                // Ignore transient tooltip rasterization errors during hover.
             }
         }
 

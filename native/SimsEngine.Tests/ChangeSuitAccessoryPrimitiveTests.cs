@@ -7,7 +7,8 @@ namespace SimsEngine.Tests;
 
 public sealed class ChangeSuitAccessoryPrimitiveTests
 {
-    // Index, mode and flags. Bytes 3 to 7 are not read, so they hold a marker value.
+    // The change suit accessory operand reads the index at byte 0, mode at byte 1, and flags at byte 2,
+    // leaving bytes 3 through 7 unread.
     private static byte[] Operand(byte index, byte mode, byte flags) => [index, mode, flags, 0xEE, 0xEE, 0xEE, 0xEE, 0xEE];
 
     private static SimulationError Fails(Action action) => Assert.Throws<SimulationException>(action).Error;
@@ -165,7 +166,6 @@ public sealed class ChangeSuitAccessoryPrimitiveTests
         Assert.Equal(0, me[PersonData.CostumeTrunkOffsetHouseParty]);
         Assert.Equal(9, me[PersonData.CurrentOutfit]);
 
-        // The outfit is now 9, so the second draw needs another outfit to take the draw branch again.
         me[PersonData.CurrentOutfit] = 2;
         Assert.Equal(PrimitiveResult.True, ChangeSuitAccessoryPrimitive.Execute(context, Operand(9, 1, 0)));
         Assert.Equal(0, me[PersonData.CostumeTrunkOffsetHouseParty]);

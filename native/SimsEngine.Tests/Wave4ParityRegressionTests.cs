@@ -95,7 +95,6 @@ public sealed class Wave4ParityRegressionTests
                 return JsonDocument.Parse(File.ReadAllText(scenePath));
             }
 
-            // Initial walls-down export on floor 1 in Build Mode so all lowered portals on the active story are cut.
             Assert.True(server.Handle("""{"id":"1","op":"walls","mode":"down"}"""));
             Assert.True(server.Handle("""{"id":"2","op":"view","editing":true,"doorWindowTool":false}"""));
             var initialEvents = DrainEvents();
@@ -104,15 +103,12 @@ public sealed class Wave4ParityRegressionTests
             int PortalObjectSpriteCount(JsonDocument sceneDoc) =>
                 sceneDoc.RootElement.GetProperty("sprites").EnumerateArray().Count(s => s.GetProperty("objectID").GetInt32() > 0);
 
-            // Selecting Window Tool (category 9) enables FUN_004cebce() == 1 (showLoweredPortals = true).
             Assert.True(server.Handle("""{"id":"3","op":"catalogPage","category":9,"offset":0,"count":4}"""));
             var windowToolEvents = DrainEvents();
             using var windowToolScene = LoadLatestScene(windowToolEvents);
             Assert.True(PortalObjectSpriteCount(windowToolScene) > PortalObjectSpriteCount(baselineFloor1Scene),
                 "Expected Window Tool to expose lowered HideForCutaway door/window portals on floor 1.");
 
-            // Switching to Stair Tool on Story 2 (level=2, doorWindowTool=false) updates both in ONE scene export,
-            // and the subsequent catalogPage(category=10) does NOT emit a second redundant scene export.
             Assert.True(server.Handle("""{"id":"4","op":"level","value":2,"roofs":false,"doorWindowTool":false}"""));
             var stairLevelEvents = DrainEvents();
             Assert.Equal(1, stairLevelEvents.Count(e => e.TryGetProperty("scene", out _)));
@@ -122,7 +118,6 @@ public sealed class Wave4ParityRegressionTests
             var stairCatalogEvents = DrainEvents();
             Assert.Equal(0, stairCatalogEvents.Count(e => e.TryGetProperty("scene", out _)));
 
-            // Switching from Door Tool (category 8) to Hand Tool (view editing=true, doorWindowTool=false) clears portals immediately.
             Assert.True(server.Handle("""{"id":"6","op":"catalogPage","category":8,"offset":0,"count":4}"""));
             var doorToolEvents = DrainEvents();
             using var doorToolScene = LoadLatestScene(doorToolEvents);
@@ -136,7 +131,6 @@ public sealed class Wave4ParityRegressionTests
 
             Assert.Equal(PortalObjectSpriteCount(stairScene), PortalObjectSpriteCount(handToolScene));
 
-            // Roofs toggle with explicit top story renders both stories + roof in a single export.
             Assert.True(server.Handle("""{"id":"8","op":"level","value":1,"roofs":false}"""));
             _ = DrainEvents();
             Assert.True(server.Handle("""{"id":"9","op":"roofs","visible":true,"level":2,"doorWindowTool":false}"""));

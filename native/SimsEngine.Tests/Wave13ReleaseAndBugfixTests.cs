@@ -77,7 +77,6 @@ public sealed class Wave13ReleaseAndBugfixTests
         var other = context.World.Add(new XObject(2, PrimitiveTestWorld.Definition(0)));
         context.World.SetObjectPosition(other, new ObjectPosition(12 * 16 + 8, 10 * 16 + 8, 0));
 
-        // Mode 2: Turn Towards Stack Object (other at +X => East = direction 2)
         byte[] opTowards = [2, 0, 0xEE, 0xEE, 2, 0, 0xEE, 0xEE];
         Assert.Equal(PrimitiveResult.Stop, LookTowardsPrimitive.Execute(context, opTowards));
 
@@ -99,7 +98,6 @@ public sealed class Wave13ReleaseAndBugfixTests
         Assert.Equal(origin, me.Position);
         Assert.Equal((short)2, me[ObjectData.Direction]);
 
-        // Mode 3: Turn Away From Stack Object (East=2 -> away is West=6)
         context.Frame.Waiting = false;
         byte[] opAway = [3, 0, 0xEE, 0xEE, 2, 0, 0xEE, 0xEE];
         Assert.Equal(PrimitiveResult.Stop, LookTowardsPrimitive.Execute(context, opAway));
@@ -123,16 +121,14 @@ public sealed class Wave13ReleaseAndBugfixTests
         var person = (XPerson)context.Me;
         var anchor = context.World.Add(new XObject(2, PrimitiveTestWorld.Definition()));
         context.World.SetObjectPosition(anchor, new ObjectPosition(10 * 16 + 8, 10 * 16 + 8, 1));
-        anchor[ObjectData.Direction] = 4; // South
+        anchor[ObjectData.Direction] = 4;
 
-        // Destination East (+1 tile) from anchor origin: facing toward anchor (-2) is West (6), away (-1) is East (2).
         var destEast = new ObjectPosition(11 * 16 + 8, 10 * 16 + 8, 1);
         var slotToward = new RoutingSlotRequest { Facing = -2, Flags = 0 };
         var slotAway = new RoutingSlotRequest { Facing = -1, Flags = 0 };
 
         Assert.Equal(6, RouteExecutor.RelativeArrivalFacing(context.World, person, anchor, slotToward, destEast, null));
         Assert.Equal(2, RouteExecutor.RelativeArrivalFacing(context.World, person, anchor, slotAway, destEast, null));
-        // Coincident destination falls back to anchor's own direction (or opposite for -1).
         Assert.Equal(4, RouteExecutor.RelativeArrivalFacing(context.World, person, anchor, slotToward, anchor.Position, null));
         Assert.Equal(0, RouteExecutor.RelativeArrivalFacing(context.World, person, anchor, slotAway, anchor.Position, null));
     }
@@ -189,7 +185,6 @@ public sealed class Wave13ReleaseAndBugfixTests
             Assert.NotSame(homeWorld, server.World);
             Assert.NotNull(server.World!.UiTextFile);
 
-            // Simulate 300 ticks (~10s @ 30 Hz) on Old Town House70 and assert zero uncaught crashes or simulationError.
             var completed = server.BatchRun(300);
             var tickEvents = DrainEvents(outputStream, writer);
             Assert.Equal(300, completed);
@@ -238,7 +233,6 @@ public sealed class Wave13ReleaseAndBugfixTests
             server.BatchRun(1);
             DrainEvents(outputStream, writer);
 
-            // Visiting House70: view & mode clamp editing/buy/build off, and every edit RPC fails.
             Assert.True(server.Handle("""{"id":"v1","op":"view","editing":true,"doorWindowTool":true}"""));
             var v1Resp = ResponseFor(DrainEvents(outputStream, writer), "v1");
             Assert.True(v1Resp.GetProperty("ok").GetBoolean());
@@ -268,7 +262,6 @@ public sealed class Wave13ReleaseAndBugfixTests
                 Assert.Contains("away lot", resp.GetProperty("error").GetString(), StringComparison.OrdinalIgnoreCase);
             }
 
-            // Return home -> Buy/Build unlocks immediately.
             server.World!.PendingLotSwitch = new SimulationWorld.LotSwitchRequest(-1, travellerGuid, familyNumber);
             server.BatchRun(1);
             DrainEvents(outputStream, writer);
@@ -284,7 +277,6 @@ public sealed class Wave13ReleaseAndBugfixTests
             Assert.True(vHomeResp.GetProperty("ok").GetBoolean());
             Assert.True(vHomeResp.GetProperty("result").GetProperty("editingView").GetBoolean());
 
-            // Simless community lot build/buy opened directly from neighborhood remains allowed.
             Assert.True(server.Handle("""{"id":"close","op":"closeLot","save":false}"""));
             DrainEvents(outputStream, writer);
             Assert.True(server.Handle("""{"id":"open70","op":"openLot","house":70}"""));

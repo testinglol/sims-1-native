@@ -2,41 +2,28 @@ using SimsEngine.Content;
 
 namespace SimsEngine.Simulation;
 
-/// <summary>The interface state Mac Tut_CheckForEvents (Sims.exe FUN_00476675) reads each time cDDDSimsView::Simulate
-/// runs.</summary>
 public sealed record TutorialUiState
 {
-    /// <summary>A house is loaded and the control panel is in live mode (CPState::GetCPMode is 0).</summary>
     public bool Live { get; init; }
-    /// <summary>The enabled live popup client's name ("motives", "job", "rel", "skill", "per.ity", or another
-    /// name), or null when no live popup client is enabled.</summary>
+    /// <summary>Specifies the active live-mode popup panel identifier, such as motives, job, rel, skill, or
+    /// per.ity.</summary>
     public string? Popup { get; init; }
-    /// <summary>The image id (Res_CPanel.h) of the last button that sent its command, when that button has one.</summary>
     public int? LastButtonImage { get; init; }
-    /// <summary>The object id of the Sim whose portrait button sent the last command, or 0.</summary>
     public short LastButtonPerson { get; init; }
-    /// <summary>The house view's rotation (DAT_006e54d8+0x84).</summary>
     public int Rotation { get; init; }
-    /// <summary>How many times the house view's offsets were set (the HouseViewer::SetOffsets counter).</summary>
     public int Scrolls { get; init; }
-    /// <summary>The image ids of the main window's buttons whose state (cTSWinBtn +0xd8) is not 0.</summary>
     public IReadOnlyCollection<int> SetButtons { get; init; } = [];
 }
 
-/// <summary>Mac Tut_CheckForEvents and Sims.exe FUN_00476675. The tutorial owner's "query wait event" tree leaves the
-/// awaited event kind in Temp0 (its BCON 4097 "ui events") and the event data in Temp1; a matching interface state runs
-/// "got wait event".</summary>
+/// <summary>Monitors tutorial progression by querying the controller tree, which returns the awaited UI
+/// event type in Temp 0 and parameter in Temp 1 to trigger the corresponding event handler.</summary>
 public sealed class TutorialEvents
 {
     public const int ControllerGuid = unchecked((int)0xC3249A1D);
 
-    /// <summary>The value the rotation (kind 6) and scroll (kind 7) cases wait to change (lbl_105BEEC0, DAT_006c4da8);
-    /// -1 when none is held.</summary>
     public int Watched { get; private set; } = -1;
     private (short Kind, string? Popup)? deliveredPopup;
 
-    /// <summary>Neighborhood::LoadHouse creates the original tutorial controller out of world when tutorials
-    /// are enabled, neighborhood word +0x12a is below 3, and simulator global 26 is nonzero.</summary>
     public static XObject? EnsureController(SimulationWorld world, bool tutorialDisabled = false)
     {
         if (tutorialDisabled || world.NeighborhoodData[1] >= 3 || world[SimulationGlobal.IsTutorialHouseNoYes] == 0 ||
@@ -60,13 +47,8 @@ public sealed class TutorialEvents
         _ => false,
     };
 
-    /// <summary>Simulator global 12 takes the last button's image id (0 when there is no last button); the owner's
-    /// query tree then names the awaited event, and a match delivers it in the same owner scope.</summary>
     public bool Check(SimulationWorld world, TutorialUiState ui)
     {
-        // Tut_CheckForEvents rewrites global 12 on every poll from the last button's image ID, defaulting to zero
-        // when the last control has no numeric image. In particular, a person button must not leave a prior
-        // universal-button ID in this global.
         world[SimulationGlobal.LastGZButtonID] = (short)(ui.LastButtonImage ?? 0);
         var owner = world.TutorialOwner;
         if (owner?.TypeRecord?.BehaviorScope is not BehaviorScope scope) return false;
@@ -87,11 +69,6 @@ public sealed class TutorialEvents
                 matched = ui.LastButtonImage == data;
                 break;
             case 5:
-                // Mac resolves the event's neighbor ID to its portrait, then compares that portrait with the
-                // person button that sent the last command (TutorialEffects.s case 5). The Windows routine
-                // searches the main-window tree for the button carrying the same per-person image ID. Match the
-                // clicked Sim's neighbor ID here; TypeRecordKey identifies the shared Sim object definition and
-                // can be identical across different people.
                 matched = ui.LastButtonPerson != 0 && world.Neighbors.ContainsKey(data) &&
                     world.ObjectById(ui.LastButtonPerson) is XPerson person && person[PersonData.NeighborId] == data;
                 break;

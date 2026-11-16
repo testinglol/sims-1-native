@@ -1,8 +1,5 @@
 namespace SimsSDL.Client;
 
-/// <summary>
-/// Identifies the app bundles and distributions that launch SimsEngine. QA bundles use the production identifier as a prefix.
-/// </summary>
 public static class SimulationEngineSelection
 {
     public static bool IsNativePreview(string? bundleIdentifier)
@@ -36,7 +33,6 @@ public static class SimulationEngineSelection
             return true;
         }
 
-        // Standalone macOS/Windows distributions place a self-contained SimsSimulation host beside the app or inside Resources/workspace.
         var exePath = executablePath ?? Environment.ProcessPath;
         var exeDir = ResolveDirectory(exePath);
         if (!string.IsNullOrEmpty(exeDir))

@@ -3,10 +3,7 @@ using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Threading.Channels;
 
-/// <summary>
-/// Audio for the screens that run before a lot is loaded (loading screen and neighborhood maps). It speaks the same
-/// JSON-lines protocol as <see cref="SimulationServer"/>, limited to its audio commands, and has no simulation.
-/// </summary>
+/// <summary>Provides audio playback for pre-lot screens such as the loading screen and neighborhood view.</summary>
 internal sealed class FrontendAudioServer(TextWriter output, string session, string profile, string? game = null, byte languageCode = 1)
 {
     private static readonly JsonSerializerOptions Json = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
@@ -78,7 +75,8 @@ internal sealed class FrontendAudioServer(TextWriter output, string session, str
                     result = new { enabled = audio.Enabled };
                     break;
                 case "audioEvent":
-                    // Only unowned events and the neighborhood ambience owner exist before a lot is loaded.
+                    // Pre-lot audio only accepts unowned sound events and the neighborhood ambience owner
+                    // ID.
                     int? owner = request.TryGetProperty("ownerID", out var ownerValue) ? ownerValue.GetInt16() : null;
                     if (owner.HasValue && owner != -25 && owner != HitAudioRuntime.NeighborhoodOwnerID) throw new ArgumentException("Invalid audio owner");
                     result = new { played = audio!.Play(request.GetProperty("name").GetString()!, null, owner) };

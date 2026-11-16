@@ -4,6 +4,8 @@ import json
 import re
 import subprocess
 import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent / "checks"))
 from check_sdl_metal_bindings import check
 
 directory = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parents[1] / "native/SimsSDL/Shaders"

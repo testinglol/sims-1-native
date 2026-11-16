@@ -3,11 +3,8 @@ using SimsEngine.Formats;
 
 namespace SimsEngine.Tests;
 
-/// <summary>SKN (text) and BMF (binary) meshes in the order Sims.exe's writer FUN_0059ac03 lists them, on hand-built data.</summary>
 public class MeshFileTests
 {
-    /// <summary>Two bones. Bone 0 owns real vertices 0 and 1 and has one blend copy of vertex 2; bone 1 owns vertex 2. The
-    /// mesh has two triangles over the three real vertices and the one blend copy (vertex 3).</summary>
     private static byte[] Sample(bool text)
     {
         var writer = new CharacterWriter(text);
@@ -16,7 +13,8 @@ public class MeshFileTests
         writer.Int(2).Ints(0, 1, 2).Ints(1, 2, 3);
         writer.Int(2).Ints(0, 0, 2, 0, 1).Ints(1, 2, 1, -1, 0);
         writer.Int(3).Floats(0, 0).Floats(1, 0).Floats(0, 1);
-        // Text writes the vertex, then the weight; binary writes the weight, then the vertex.
+        // In mesh blend vertex lists, text format writes the vertex index before the weight, while binary
+        // format writes the weight before the vertex index.
         writer.Int(1);
         if (text) writer.Ints(2, 16384);
         else writer.Ints(16384, 2);
@@ -63,8 +61,6 @@ public class MeshFileTests
     [Fact]
     public void BinaryBlendIsWeightThenVertexAndBindingsWithNoVerticesMayBeMinusOne()
     {
-        // One real vertex (uv count 1). Bone 0 has no real vertices (first index -1) and one blend; the blend is written
-        // weight first (16384), then its vertex (0).
         var writer = new CharacterWriter(false).Str("n").Str("t").Int(1).Str("only").Int(0).Int(1).Ints(0, -1, 0, 0, 1)
             .Int(1).Floats(0, 0).Int(1).Ints(16384, 0).Int(1).Floats(0, 0, 0, 0, 0, 1);
         var mesh = Mesh.ReadBinary(writer.ToArray(), "blend.bmf");
@@ -75,7 +71,6 @@ public class MeshFileTests
     [Fact]
     public void BlendCopyingAVertexThatIsNotRealIsRejected()
     {
-        // The vertex is the second value in binary (7), past the one real vertex.
         var writer = new CharacterWriter(false).Str("n").Str("t").Int(1).Str("only").Int(0).Int(1).Ints(0, 0, 1, 0, 1)
             .Int(1).Floats(0, 0).Int(1).Ints(16384, 7).Int(1).Floats(0, 0, 0, 0, 0, 1);
         var error = Assert.Throws<ResourceFormatException>(() => Mesh.ReadBinary(writer.ToArray(), "blend.bmf"));

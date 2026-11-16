@@ -4,7 +4,6 @@ namespace SimsSDL;
 
 internal sealed partial class LiveController
 {
-    /// <summary>Rebuilds the base neighborhood map, optionally applying an evict/delete edit in the host process first.</summary>
     private void ReloadNeighborhood(
         string? edit,
         int mode = 1,
@@ -40,8 +39,8 @@ internal sealed partial class LiveController
         ulong requestGen = _neighborhoodLoadGeneration;
         int requestedNeighborhood = targetNeighborhood ?? _currentNeighborhood;
         _loadingNeighborhood = true;
-        // Sims.exe (004f73fa -> 004f5bb5 / 004f5dde / 004f5f8d / 004f613c / 004f62eb) keeps the current neighborhood screen
-        // visible with the hourglass cursor while switching sub-neighborhood maps rather than showing the startup splash screen.
+        // Retains the current neighborhood view under an hourglass cursor while switching sub-neighborhood
+        // maps instead of showing the startup splash screen.
         _ = ReloadNeighborhoodCoreAsync(
             edit,
             mode,
@@ -179,9 +178,6 @@ internal sealed partial class LiveController
         }
     }
 
-    // MARK: Web
-
-    /// <summary>The banner's Web button: writes the neighborhood's web pages from the game's templates and opens them.</summary>
     private void ExportNeighborhoodWebPages(bool open = true, int? fallbackMode = null)
     {
         if (_exportingWebPages)
@@ -289,7 +285,6 @@ internal sealed partial class LiveController
                 destination,
                 Content.Language);
             Log($"Web pages written to {destination}");
-            // Scripted runs write the pages without starting a browser.
             if (!open || Options.Script is not null)
             {
                 return;
@@ -303,11 +298,8 @@ internal sealed partial class LiveController
         }
     }
 
-    /// <summary>
-    /// Render the lot snapshots consumed by the original neighborhood web templates. Sims.exe exports the thumbnail,
-    /// exterior and floor views from each occupied residential HouseViewer; the native manifest supplies the matching
-    /// scene snapshots, and this renders them through the same SDL lot renderer used by the live view.
-    /// </summary>
+    /// <summary>Renders thumbnail, exterior, and floor snapshots for occupied residential lots using the
+    /// lot renderer to populate neighborhood web export templates.</summary>
     private Dictionary<int, NeighborhoodWebExport.HouseViews> RenderWebHouseViews(
         IReadOnlyList<(int House, string Thumbnail, string Exterior, string Floor1, string? Floor2)> requests)
     {
@@ -366,8 +358,6 @@ internal sealed partial class LiveController
         return result;
     }
 
-    // MARK: Credits
-
     private void OpenCredits()
     {
         try
@@ -386,11 +376,8 @@ internal sealed partial class LiveController
         }
     }
 
-    /// <summary>
-    /// The window's close button and the Quit buttons (cSimsApp::Quit, FUN_004f29ba). Open credits close instead; inside a lot whose
-    /// saving is enabled one Yes/No/Cancel prompt offers to save (Yes quits only after the save succeeds, No quits unsaved);
-    /// everywhere else a Yes/No question confirms.
-    /// </summary>
+    /// <summary>Handles quit requests by dismissing open credits, prompting to save on active lots with
+    /// save capabilities, or displaying a standard confirmation dialog elsewhere.</summary>
     public void ConfirmQuit()
     {
         if (Ui.GameDialog is not null)
@@ -454,7 +441,6 @@ internal sealed partial class LiveController
         }
     }
 
-    /// <summary>Leaving the credits restores the map's music, as the original does.</summary>
     private void CloseCredits()
     {
         Ui.Credits = null;
@@ -463,8 +449,6 @@ internal sealed partial class LiveController
             PlayFrontendMusic(music);
         }
     }
-
-    // MARK: Select a Family
 
     private void OpenFamilyPicker(int house, IReadOnlyList<OriginalFamilyPickerOverlay.Family> families)
     {
@@ -492,7 +476,6 @@ internal sealed partial class LiveController
         }
     }
 
-    /// <summary>Closes Select a Family; returning to the map restores its music as the original does.</summary>
     private void CloseFamilyPicker(bool returnsToMap = true)
     {
         Ui.FamilyPicker = null;
@@ -525,7 +508,8 @@ internal sealed partial class LiveController
                     return;
                 }
 
-                // Create a Family runs on a lot; prefer any vacant residential lot and fall back to an existing residential lot.
+                // Create a Family executes on a lot, preferring an unoccupied residential lot and falling
+                // back to any existing residential lot.
                 static int? FirstMatchingLot(IEnumerable<int> range, Func<int, bool> predicate)
                 {
                     foreach (int candidate in range)
@@ -627,10 +611,8 @@ internal sealed partial class LiveController
         }
     }
 
-    /// <summary>
-    /// Move In: checks the family's funds (and Magic Town MagiCoins for residential lots 90–92 per 00556352.c:26-31, 77-88)
-    /// against the lot price, then asks Purchase House? (STR# 132) and moves it in.
-    /// </summary>
+    /// <summary>Validates family funds (and MagiCoins for Magic Town lots 90–92) against the lot cost, then
+    /// displays the purchase confirmation prompt from string table 132.</summary>
     private void OfferLot(int house, OriginalFamilyPickerOverlay.Family family, OriginalNeighborhoodOverlay neighborhood)
     {
         int price = neighborhood.Price(house) ?? int.MaxValue;
@@ -660,8 +642,6 @@ internal sealed partial class LiveController
                 self.OpenNeighborhoodHouse(house, createHousehold: false, retainNeighborhood: true);
             });
     }
-
-    // MARK: Create a Family
 
     private void OpenHouseholdCreationInDaemon(
         int lot,
@@ -785,7 +765,7 @@ internal sealed partial class LiveController
         _returnToFamilyPickerAfterHouseholdCreation = false;
         if (house == 7)
         {
-            Renderer.SetZoom(LotZoom.Far);
+            Renderer.SetZoom(LotZoom.Far, instant: true);
         }
 
         if (!createHousehold && _daemonMode && _bridgeConnected && Bridge is not null)
@@ -1000,7 +980,6 @@ internal sealed partial class LiveController
         RestoreNeighborhoodAfterHouseholdCreation(reloadMode, reopenFamilyPicker);
     }
 
-    /// <summary>Puts back the neighborhood map that was showing before a lot was opened for a new or moving family.</summary>
     private void RestoreNeighborhoodAfterHouseholdCreation(int? reloadMode = null, bool reopenFamilyPicker = false)
     {
         bool reopenOnCancel = _returnToFamilyPickerAfterHouseholdCreation;
@@ -1352,7 +1331,6 @@ internal sealed partial class LiveController
         Log($"create a family on lot {lot}");
     }
 
-    /// <summary>Opens Create a Family once the empty lot is running, and moves a chosen family in.</summary>
     private void ApplyHouseholdState(IReadOnlyDictionary<string, JsonElement> state)
     {
         int? house = state.JsonInt("house");
@@ -1379,8 +1357,6 @@ internal sealed partial class LiveController
             _pendingFamilyMoveIn = (moveIn.House, moveIn.Family, request);
         }
     }
-
-    // MARK: Travel maps
 
     private void RespondToNeighborhood(int house)
     {
@@ -1422,7 +1398,6 @@ internal sealed partial class LiveController
                     isReturnHome: false)
                 : null;
             _pendingTravelSelection = house > 0 ? (house, plannedScreen) : null;
-            // cWinNeighborhoodUL::Shutdown saves the filter mode before the picker closes.
             if (UsesNativeEngine && Ui.Neighborhood?.TravelFilterMode is int filter)
             {
                 _ = Send("travelFilter", new Dictionary<string, object?> { ["filter"] = filter });
@@ -1556,8 +1531,6 @@ internal sealed partial class LiveController
         };
     }
 
-    // MARK: Wardrobe
-
     private void OpenOutfitPicker(GameDialog dialog)
     {
         DismissMenu();
@@ -1585,7 +1558,8 @@ internal sealed partial class LiveController
 
         if (evt.JsonBool("ok") != true || names.Count == 0)
         {
-            // Nothing to choose from: answer with the original cancel result so the Sim is not left waiting.
+            // Returns a cancellation result when no wardrobe choices are available so the Sim does not
+            // remain waiting.
             if (evt.JsonString("error") is { } reason)
             {
                 Log($"Outfit choices: {reason}");
@@ -1669,13 +1643,11 @@ internal sealed partial class LiveController
         }
         catch
         {
-            // Fall back to full path when link resolution fails.
         }
 
         return fullPath;
     }
 
-    /// <summary>Loads the appearance preview the host wrote into its session directory and hands it to the renderer.</summary>
     private void LoadAppearancePreview(IReadOnlyDictionary<string, JsonElement> evt, int key = 0)
     {
         if (evt.JsonBool("ok") != true
@@ -1751,9 +1723,8 @@ internal sealed partial class LiveController
         Renderer.ClearAppearancePreview();
     }
 
-    // MARK: Frontend audio
-
-    /// <summary>Starts the audio-only host used by the neighborhood maps while no lot is loaded.</summary>
+    /// <summary>Starts the audio host responsible for playing neighborhood music and ambient sound while no
+    /// lot is loaded.</summary>
     private void StartFrontendAudio()
     {
         if (_daemonMode)
@@ -1795,7 +1766,6 @@ internal sealed partial class LiveController
             }
             catch
             {
-                // Host may already have exited.
             }
         });
         host.Event = evt => RunOnMainThread(() =>
@@ -1816,7 +1786,6 @@ internal sealed partial class LiveController
                     }
                     catch
                     {
-                        // Ignore transient host send failures during shutdown.
                     }
 
                     self._frontendAudioReady = true;
@@ -1830,7 +1799,6 @@ internal sealed partial class LiveController
                         }
                         catch
                         {
-                            // Ignore transient send failure for queued startup events.
                         }
                     }
 
@@ -1913,7 +1881,6 @@ internal sealed partial class LiveController
         }
     }
 
-    /// <summary>Starts a music event on the frontend host unless it is already the current track.</summary>
     private void PlayFrontendMusic(string name)
     {
         if (_daemonMode)
@@ -1937,7 +1904,6 @@ internal sealed partial class LiveController
         SendFrontendAudio("audioEvent", new Dictionary<string, object?> { ["name"] = name });
     }
 
-    /// <summary>Sends an audio request to the neighborhood audio host, holding it until the host has started.</summary>
     private void SendFrontendAudio(string operation, IReadOnlyDictionary<string, object?> parameters)
     {
         if (_daemonMode)
@@ -1963,7 +1929,6 @@ internal sealed partial class LiveController
             }
             catch
             {
-                // Ignore transient errors if the audio host is stopping.
             }
         }
         else if (_pendingFrontendAudio.Count < 32)
@@ -1985,9 +1950,6 @@ internal sealed partial class LiveController
         _frontendMusic = null;
     }
 
-    // MARK: Input on the full-screen screens
-
-    /// <summary>Clicks on the family picker, the neighborhood map and Create a Family; returns whether one of them took it.</summary>
     private bool ClickNeighborhoodScreens(CGPoint point)
     {
         if (Ui.Neighborhood is not null && Ui.Credits is { } credits)
@@ -2048,7 +2010,6 @@ internal sealed partial class LiveController
         return !HasActiveLot;
     }
 
-    /// <summary>Keys for the full-screen screens; null when none is showing.</summary>
     private bool? ScreenKey(Key key)
     {
         if (Ui.OutfitPicker is { } outfitPicker)
@@ -2106,7 +2067,7 @@ internal sealed partial class LiveController
                 case Key.Home: code = "\uf729"; break;
                 case Key.End: code = "\uf72b"; break;
                 case Key.Character or Key.Function:
-                    return true; // Typed text arrives through text(_:).
+                    return true;
                 default:
                     return true;
             }
@@ -2182,8 +2143,6 @@ internal sealed partial class LiveController
 
         return null;
     }
-
-    // MARK: Host responses
 
     private void NeighborhoodResponse(string id, bool ok, IReadOnlyDictionary<string, JsonElement> evt)
     {
@@ -2281,7 +2240,8 @@ internal sealed partial class LiveController
                 && selections.TryGetValue(key, out var memberSelection)
                 && string.Equals(Signature(memberSelection), _pendingHouseholdPreviewSignature, StringComparison.Ordinal))
             {
-                // A failed portrait is not retried: the slot keeps its name.
+                // Failed portrait generation requests are not retried, retaining the slot name without an
+                // image.
                 _familyPortraits[key] = _pendingHouseholdPreviewSignature;
                 try
                 {
@@ -2318,7 +2278,8 @@ internal sealed partial class LiveController
             _pendingHouseholdCreationRequest = null;
             if (ok && _householdCreationUnhoused)
             {
-                // The family is in the bin: leave the host lot unsaved and reload the map so Select a Family lists it.
+                // Leaves the temporary creation lot unsaved and reloads the neighborhood map so the family
+                // bin displays the newly created family.
                 bool reopenPicker = _returnToFamilyPickerAfterHouseholdCreation;
                 OriginalNeighborhoodOverlay? previous = _neighborhoodBeforeHouseholdCreation;
                 int targetMode = previous?.Mode ?? NeighborhoodModeForCurrentLot();
@@ -2352,7 +2313,7 @@ internal sealed partial class LiveController
                 {
                     if (lot == 7)
                     {
-                        Renderer.SetZoom(LotZoom.Far);
+                        Renderer.SetZoom(LotZoom.Far, instant: true);
                     }
 
                     if (Bridge is { } activeBridge)
@@ -2437,7 +2398,6 @@ internal sealed partial class LiveController
                 _neighborhoodHouseSelected = null;
                 if (selection?.Screen is { } screen)
                 {
-                    // 00441311.c:86,139,276,279,329,376 -> show cWinTravelLoadScreen right after the travel picker closes.
                     Ui.TravelLoadScreen = screen;
                     Ui.Loading = true;
                     _switchingLot = true;
@@ -2519,12 +2479,8 @@ internal sealed partial class LiveController
         }
     }
 
-    // MARK: - Auto Snapshot and Live PIP (cDDDSimsView::DoPictureInPicture, cWinPictureInPicture)
-
-    /// <summary>
-    /// Applies the Special Effect events the host sends with its state. The first state only sets the baseline, so events
-    /// of a session that was already running are not replayed.
-    /// </summary>
+    /// <summary>Initializes Special Effect events against baseline simulation state so that pre-existing
+    /// events are not replayed on connect.</summary>
     private void ApplyPictureInPicture(IReadOnlyDictionary<string, JsonElement> state)
     {
         List<Dictionary<string, JsonElement>> events = state.JsonArray("pictureInPicture") ?? [];
@@ -2570,11 +2526,8 @@ internal sealed partial class LiveController
         return null;
     }
 
-    /// <summary>
-    /// DoPictureInPicture (004d39b5.c): with the force bit set and an object, the view centres on it (Auto-Centering on)
-    /// or the error sound plays and no snapshot is taken; the Auto Snapshot option then decides whether the event is
-    /// photographed. Otherwise cWinPictureInPicture opens (bit 0, 00525256.c) or closes for that object (005254b4.c).
-    /// </summary>
+    /// <summary>Processes picture-in-picture events by centering on the target object or opening the
+    /// picture-in-picture window, and triggers auto-snapshots if enabled.</summary>
     private void HandlePictureInPicture(IReadOnlyDictionary<string, JsonElement> evt)
     {
         int objectID = evt.JsonInt("objectId") ?? 0;
@@ -2618,15 +2571,12 @@ internal sealed partial class LiveController
         }
         else if (objectID == 0 || _pictureInPicture?.ObjectID == objectID)
         {
-            // cWinPictureInPicture::CloseForObject (005254b4.c:5): closes only when the open PiP matches objectID.
             ClosePictureInPicture();
         }
     }
 
-    /// <summary>
-    /// cWinPictureInPicture::OpenForObject (00525256.c): shows an off-screen event at the bottom-right above the control
-    /// panel; duration 0 leaves it open until clicked or closed.
-    /// </summary>
+    /// <summary>Displays off-screen events in the picture-in-picture window positioned at the bottom-right
+    /// above the control panel, remaining visible indefinitely if duration is zero.</summary>
     private void OpenPictureInPicture(
         int objectID,
         int milliseconds,
@@ -2690,10 +2640,8 @@ internal sealed partial class LiveController
         Ui.PictureInPictureClosePressed = false;
     }
 
-    /// <summary>
-    /// cWinPictureInPicture::TSPaint (00525621.c): rebuilds the image on every paint with Live PIP on; with it off the
-    /// image is built once when the window opens and then stays static.
-    /// </summary>
+    /// <summary>Updates the capture state for picture-in-picture, rebuilding every frame when Live PIP is
+    /// active or capturing only an initial static frame when disabled.</summary>
     private void UpdatePictureInPictureCaptureState()
     {
         _pipNeedsCapture = false;
@@ -2730,11 +2678,8 @@ internal sealed partial class LiveController
         _pipNeedsCapture = true;
     }
 
-    /// <summary>
-    /// cWinPictureInPicture::BuildImage (00525664.c, 004b32e9.c): renders a dedicated off-screen lot view centered on the
-    /// target object at its requested zoom (1..3 or current zoom) into the 100/200/300 PiP frame, and optionally records
-    /// an Auto Snapshot into PhotoAlbum on first build.
-    /// </summary>
+    /// <summary>Renders an off-screen view centered on the target object at requested zoom levels into the
+    /// picture-in-picture frame, capturing an initial photo album snapshot if enabled.</summary>
     private void CapturePictureInPictureFrame()
     {
         if (_pictureInPicture is not { } window || Renderer.Scene is null)
@@ -2750,9 +2695,10 @@ internal sealed partial class LiveController
             ? (LotZoom)window.Zoom
             : Renderer.Zoom;
 
-        LotZoom savedZoom = Renderer.Zoom;
+        (LotZoom Zoom, float VisualFactor) savedZoomState = Renderer.SaveVisualZoom();
         Vector2 savedPan = Renderer.Pan;
         bool savedLiveMode = Renderer.LiveMode;
+        bool savedSuppressInset = Renderer.SuppressControlPanelInset;
         List<UIDraw> savedOverlay = Renderer.Overlay;
         (int Index, Dictionary<int, Vector4> Rects)? savedPreviewPlacement = Renderer.PreviewPlacement;
         bool savedShowsPlacement = Renderer.ShowsPlacement;
@@ -2764,9 +2710,10 @@ internal sealed partial class LiveController
         byte[]? renderedPixels;
         try
         {
-            Renderer.Zoom = targetZoom;
+            Renderer.SnapVisualZoom(targetZoom);
             Renderer.Pan = Vector2.Zero;
-            Renderer.LiveMode = false;
+            Renderer.LiveMode = savedLiveMode;
+            Renderer.SuppressControlPanelInset = true;
             Renderer.Overlay = [];
             Renderer.PreviewPlacement = null;
             Renderer.ShowsPlacement = false;
@@ -2781,7 +2728,8 @@ internal sealed partial class LiveController
             else if (TargetPosition(window.ObjectID) is { } pos
                 && Renderer.ScreenPoint(pos.X, pos.Y, pipCanvas) is { } point)
             {
-                // FUN_00525a55: lifts tile origin by half a Sim/wall height at the PiP zoom.
+                // Lifts the target tile position by half a wall height (8 * sqrt(6) pixels scaled by zoom
+                // and interface scale) to center objects in picture-in-picture.
                 float lift = 8f * MathF.Sqrt(6f) * targetZoom.Factor() * Renderer.UIScale;
                 Renderer.Pan += pipCanvas / 2f - (point - new Vector2(0f, lift));
             }
@@ -2814,9 +2762,10 @@ internal sealed partial class LiveController
         }
         finally
         {
-            Renderer.Zoom = savedZoom;
+            Renderer.RestoreVisualZoom(savedZoomState);
             Renderer.Pan = savedPan;
             Renderer.LiveMode = savedLiveMode;
+            Renderer.SuppressControlPanelInset = savedSuppressInset;
             Renderer.Overlay = savedOverlay;
             Renderer.PreviewPlacement = savedPreviewPlacement;
             Renderer.ShowsPlacement = savedShowsPlacement;
@@ -2873,10 +2822,8 @@ internal sealed partial class LiveController
         }
     }
 
-    /// <summary>
-    /// The area DoPictureInPicture photographs for forced events: 200 by 300 original pixels at near zoom (halved per zoom
-    /// step), centered on the object and sized by the interface scale, within the canvas.
-    /// </summary>
+    /// <summary>Calculates the picture-in-picture capture area for forced events, spanning 200 by 300 base
+    /// pixels at near zoom (halved per zoom step) centered on the target object.</summary>
     private CGRect? EventRect(int id)
     {
         if (Renderer.ScreenBounds(id, SimdCanvas) is not { } bounds)
@@ -2902,7 +2849,6 @@ internal sealed partial class LiveController
         return new CGRect(minX, minY, maxX - minX, maxY - minY);
     }
 
-    /// <summary>CenterHouseViewOnMe (0052559f.c / 00438a20): switches to the object's floor if needed and pans the lot view to center it.</summary>
     private void CentreView(int id)
     {
         if (TargetPosition(id) is { } pos

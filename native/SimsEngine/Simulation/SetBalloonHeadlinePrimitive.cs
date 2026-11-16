@@ -2,27 +2,8 @@ using SimsEngine.Formats;
 
 namespace SimsEngine.Simulation;
 
-/// <summary>The Set Balloon/Headline primitive (opcode 0x29), after Sims.exe 0x44b764 (traced from the decompilation;
-/// the balloon and string state are the host's). It shows a balloon or headline on an object, or clears it.
-/// <para>Operand: word 0 has bit 0 for the owner (0 the running object, 1 the stack object) and bits 1 to 15 for the local
-/// index of the object-type selector 2. Byte 2 is the balloon's text id, or the selector of the type balloon. Byte 3 is
-/// the string table of the text, with 4 meaning priority 2 (1 otherwise) and 7 meaning a type balloon. Word 4 is the
-/// balloon's value: 0 clears it, -1 makes it permanent. Byte 6 is the duration kind. Word 6 has bit 8 for the owner's
-/// flag, bit 9 for the label (table 1, index 3), bit 10 for the text flags, bit 11 for a timed value, and bit 12 for
-/// adding the running object's Temporaries[0] to the text id.</para>
-/// <para>Order: a stack owner that is missing raises "No stack object present when required." (21). An owner with no
-/// balloon record answers true. Then the priority is claimed (<see cref="ISimulationHost.ClaimBalloon"/>); a claim that
-/// a higher priority refuses answers true. A value of 0 clears the state and answers true. The text id gets the
-/// temporary when bit 12 is set. A type balloon (byte 3 of 7) then picks its object by selector: 0 is the stack
-/// object's id in the running object's table, 1 is the list value of the stack object's id, and 2 is the local at
-/// (word 0 >> 1) in the running object's table. Selector 2 raises "Local out of range." (51) for an index past the
-/// locals. A missing object, a missing list value or an object without a type record ends the primitive with true. Any
-/// other selector also answers true. A text balloon (any other byte 3) answers true when there is no text to show.</para>
-/// <para>The common tail then sets the duration, the label (when bit 9 is set) and the flag, sets the state (a value of
-/// -1 is permanent; a value otherwise is timed when bit 11 is set), refreshes the display and notifies the owner's
-/// object table. The primitive answers true.</para>
-/// <para>Inferred: Sims.exe also tests the text id against -1; a byte cannot hold that, so the test is left out. A
-/// negative local index passes Sims.exe's bounds test and reads before the locals; the port raises error 51 for it.</para>
+/// <summary>Displays or clears a thought balloon or headline icon above an object. Supports text-based
+/// balloons and type-based object icon balloons with configurable priority, duration, and persistence.
 /// </summary>
 public static class SetBalloonHeadlinePrimitive
 {
@@ -43,8 +24,7 @@ public static class SetBalloonHeadlinePrimitive
         var flags = operand[6] | operand[7] << 8;
         if (host is null)
         {
-            // cXObject::TrySetBalloon operates on the first record in the same +0x148 SpriteSlot vector that native
-            // ticking and Sleep use. IconGroup.s resolves ordinary text icons to SPR# resources in Sprites.iff.
+            // Attaches balloon display to the object's first runtime sprite slot.
             if (owner.RuntimeSlots.Count == 0) return PrimitiveResult.True;
             var slot = owner.RuntimeSlots[0];
             if (slot.ReadWord(0x10) != 0 && priority < slot.ReadWord(0x34)) return PrimitiveResult.True;
@@ -88,7 +68,7 @@ public static class SetBalloonHeadlinePrimitive
             else if ((flags & 0x800) != 0) slot.ActivateForLoops(value);
             else slot.ActivateForTicks(value);
             world.DisplayRefreshRequested = true;
-            // ClearIdleStatus writes -2 to the object's clock-manager wait word after a successful Set Balloon.
+            // Clears the object's idle status by setting its clock manager wait ticks to -2.
             if (owner.ClockManagerIndex > 0)
                 world.ClockManager.SetWaitTicksAt(owner.ClockManagerIndex, -2);
             return PrimitiveResult.True;
@@ -162,8 +142,6 @@ public static class SetBalloonHeadlinePrimitive
         return alternative is null ? typeKey : unchecked((int)alternative.Guid);
     }
 
-    /// <summary>The type balloon's three selectors (byte 2). Answers false when there is nothing to show, which ends the
-    /// primitive with true, as Sims.exe's early returns do.</summary>
     private static bool ShowTypeBalloon(in TreeContext context, ISimulationHost host, XObject owner, short word0, byte selector)
     {
         var (_, me, frame) = context;
@@ -189,8 +167,6 @@ public static class SetBalloonHeadlinePrimitive
         }
     }
 
-    /// <summary>The alternative type of the object's type record, shown on the owner (FUN_004573f9, then FUN_0046e105).
-    /// An object without a type record shows nothing (inferred).</summary>
     private static bool ShowAlternative(ISimulationHost host, XObject owner, XObject? entry)
     {
         if (entry?.TypeRecord is not { } type) return false;

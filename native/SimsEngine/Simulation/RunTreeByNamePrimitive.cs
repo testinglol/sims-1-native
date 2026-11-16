@@ -1,26 +1,7 @@
 namespace SimsEngine.Simulation;
 
-/// <summary>The Run Tree By Name primitive (opcode 0x1c), after Sims.exe FUN_0044ba66.
-/// <para>Operand: the string table id (a short at byte 0), the string-scope flag (byte 2 bit 0), the one-based string number (an unsigned byte at
-/// byte 4) and the mode (byte 5). Sims.exe FUN_004705f2 treats string number 1 as the first entry; the port's string table API is zero-based, so the number is decremented for lookup. FUN_0044ba66 reads local strings from the current code owner's private file, or its semi-global file for semi-global code, and reads global strings when the flag is set. The lookup tree itself comes from the stack object's behavior scope.</para>
-/// <para>Behavior, in the handler's order:</para>
-/// <list type="number">
-/// <item>A frame that is waiting (<see cref="StackFrame.Waiting"/>, set by a mode 2 call that is still running) answers
-/// the result of the tree it started (<see cref="TreeStack.LastResult"/>), without decoding the operand.</item>
-/// <item>An empty or missing name answers false.</item>
-/// <item>A mode other than 0, 1 or 2 raises error 44 (Bad parameter to call named tree).</item>
-/// <item>The stack object must exist (error 21 otherwise).</item>
-/// <item>The name is looked up as a tree id (FUN_00402246: private, semi-global, global; then a second flagged pass). An id of 0 answers false.</item>
-/// <item>Mode 0 and 1 run the tree to its return on the stack (FUN_00474b22) with the stack object's type scope and answer
-/// the tree's result. Mode 2 pushes the tree (vtable +0x34 with flag 0), marks the frame waiting and answers
-/// <see cref="PrimitiveResult.Again"/>; when the tree returns, the waiting frame reads the result in step 1.</item>
-/// </list>
-/// <para>Modes 0 and 1 differ only in the owner the handler checks, and both run the same nested tree, so the port treats
-/// them alike (inferred). The nested run clears <see cref="SimulationWorld.SelfRemovalEndsRun"/> the way FUN_00474b22
-/// does and restores it afterwards.</para>
-/// <para>The second label matching pass is inferred as case-insensitive; the final lookup flag's matching rule was
-/// not recoverable from the decompiled source. The type scope is the stack object's type record's
-/// <see cref="TypeRecord.BehaviorScope"/> (inferred); with none, the primitive answers false.</para></summary>
+/// <summary>Executes a behavior script resolved by name from a string table. Modes 0 and 1 run the resolved
+/// tree inline to completion, while mode 2 pushes the tree onto the execution stack asynchronously.</summary>
 public static class RunTreeByNamePrimitive
 {
     private const int ModeStackObject = 1;
@@ -35,8 +16,7 @@ public static class RunTreeByNamePrimitive
         var table = (short)(operand[0] | operand[1] << 8);
         var stringScopeFlag = operand[2] & 1;
         var stringNumber = operand[4];
-        // The stack object is resolved without its error so a missing one still answers false for an empty name, as
-        // the source reads the name first.
+        // Resolves the stack object without throwing immediately so an empty name evaluates to false first.
         var lookupObject = world.ObjectByStackObject(me, frame.StackObject);
         var name = stringNumber == 0 ? null :
             StringTableEntry(frame, world, lookupObject, me, table, stringScopeFlag, stringNumber - 1)
@@ -68,8 +48,8 @@ public static class RunTreeByNamePrimitive
             return PrimitiveResult.Again;
         }
 
-        // FUN_0044ba66 (0044ba66.c:64-86, 125-128): Mode 0 runs FUN_00474b22 on `this` (`me`), whereas Mode 1 sets the
-        // target runner (`*(int *)(unaff_EBP + 0xc)`) to `stackObject` and runs FUN_00474b22 with `stackObject` as `this`.
+        // Mode 0 runs the named tree with the caller as the active object, whereas mode 1 executes it with
+        // the stack object as the active object.
         if (mode == ModeStackObject)
         {
             return TreeRunner.RunWithParameters(world, stackObject, scope, treeId, stackObject.StackObjectKey, stackObject.Temporaries)

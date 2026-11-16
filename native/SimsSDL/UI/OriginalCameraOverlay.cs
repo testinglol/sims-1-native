@@ -217,9 +217,8 @@ public sealed class OriginalCameraOverlay
         CustomDimensions = PresetSize(index);
     }
 
-    /// <summary>
-    /// <c>FUN_004cfcfd</c>: clamps the frame to [160..640] x [120..480] and sets mode 3 unless it matches Small, Medium, or Large.
-    /// </summary>
+    /// <summary>Clamps the camera frame between 160x120 and 640x480 pixels, switching to custom frame mode
+    /// if dimensions differ from standard presets.</summary>
     public void ResizeCustomFrame(double dx, double dy)
     {
         var frameBase = _size == 3 ? CustomDimensions : PresetSize(_size);
@@ -246,10 +245,7 @@ public sealed class OriginalCameraOverlay
 
     public CGSize CurrentFrameSize => _size == 3 ? CustomDimensions : PresetSize(_size);
 
-    /// <summary>
-    /// The camera control (+0x168 in <c>FUN_005382a4</c>, resource 2034) is placed at the universal-local
-    /// (<c>DAT_006f4550</c>, <c>DAT_006f4554</c>) = (175, 95).
-    /// </summary>
+    /// <summary>Calculates the camera mode button rectangle relative to the universal control panel anchor.</summary>
     public CGRect ModeRect(CGSize canvas) => new(175, canvas.Height - 183 + 95, 29, 29);
 
     public Action? Hit(CGPoint point, CGSize canvas)
@@ -407,8 +403,8 @@ public sealed class OriginalCameraOverlay
             }
 
             var rect = PlacementTooltip.Rect(image.Size, new CGPoint(_tooltipAnchor.X, _tooltipAnchor.Y - 1), canvas);
-            // FUN_005d9f30 (005d9f30.c:80, 86-88): truncate unfurl height and keep tooltip hidden while height < 1
-            // so 0% progress never draws a 1px black border line.
+            // Truncates animation height and hides tooltips while height is below 1 pixel so zero progress
+            // does not render a stray border line.
             var height = Math.Floor(rect.Height * progress);
             if (height < 1.0)
             {
@@ -429,10 +425,8 @@ public sealed class OriginalCameraOverlay
         }
     }
 
-    /// <summary>
-    /// <c>FUN_0053a26b</c> blits <c>UniversalBack.tga</c> at <c>(0, top - 33)</c> and <c>CameraPatch.bmp</c>
-    /// (mode 4) at universal-local <c>(0xa5, 0x53) = (165, 83)</c>.
-    /// </summary>
+    /// <summary>Assembles the camera control panel background, compositing the universal backdrop with the
+    /// camera mode patch offset at (165, 83).</summary>
     public IReadOnlyList<OriginalGameplayOverlay.Part> PanelParts(CGSize canvas)
     {
         var top = canvas.Height - 150;
@@ -494,7 +488,6 @@ public sealed class OriginalCameraOverlay
                     }
                     catch
                     {
-                        // Ignore label rasterization failures cleanly.
                     }
                 }
 

@@ -3,11 +3,9 @@ using SimsEngine.Formats;
 
 namespace SimsEngine.World;
 
-/// <summary>The lot's roof settings, the pitch and the style name Sims.exe keeps in the roof layer (DAT_006f627c) and saves in
-/// the house record from version 49. FUN_0056f23d sets the pitch (clamped to 0..2, a change of 1e-6 or less is ignored) and
-/// FUN_0056f32e the style name (a different name replaces the layer); both rebuild the roof, and the roof panel's undo
-/// (cRoofUndoable, FUN_004906b1) swaps them back. A lot without a roof layer reads as pitch 0.5 and no style. The
-/// styles are the bitmaps of GameData/Roofs, named by file stem.</summary>
+/// <summary>Maintains lot roof pitch and style settings saved in the house record from version 49 onwards.
+/// Pitch is clamped to 0..2 and defaults to 0.5 with no style for older lots; style names correspond to
+/// bitmap files under GameData/Roofs.</summary>
 public sealed class LotRoof
 {
     public const float DefaultPitch = 0.5f;
@@ -25,7 +23,8 @@ public sealed class LotRoof
 
     public string Style { get; private set; }
 
-    /// <summary>Whether the lot stored a roof layer (a house record of version 49 or later).</summary>
+    /// <summary>Indicates whether the lot stored a roof layer, supported in house records of version 49 or
+    /// later.</summary>
     public bool Present { get; private set; }
 
     private static IffChunk? HouseChunk(IffFile lot) =>
@@ -40,7 +39,6 @@ public sealed class LotRoof
         return house.RoofPitch is { } pitch ? new LotRoof(pitch, house.RoofName ?? "", true) : new LotRoof(DefaultPitch, "", false);
     }
 
-    /// <summary>FUN_0056f23d: returns whether the pitch changed.</summary>
     public bool SetPitch(float pitch)
     {
         pitch = pitch > 0 ? Math.Min(pitch, MaxPitch) : 0;
@@ -50,7 +48,6 @@ public sealed class LotRoof
         return true;
     }
 
-    /// <summary>FUN_0056f32e: returns whether the style changed.</summary>
     public bool SetStyle(string style)
     {
         if (Present && string.Equals(style, Style, StringComparison.Ordinal)) return false;
@@ -59,7 +56,8 @@ public sealed class LotRoof
         return true;
     }
 
-    /// <summary>The roof styles installed under GameData/Roofs, as file stems in name order.</summary>
+    /// <summary>Lists installed roof style names from bitmap file stems under GameData/Roofs in
+    /// alphabetical order.</summary>
     public static IReadOnlyList<string> Styles(string game)
     {
         var data = Content.ObjectRegistry.Resolve(game, "GameData");
@@ -69,8 +67,6 @@ public sealed class LotRoof
             .Order(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
-    /// <summary>The installed style bitmap used by the procedural roof meshes. Enumerating stems also prevents a
-    /// saved style name from escaping GameData/Roofs.</summary>
     public static string? MaterialPath(string game, string style)
     {
         var data = Content.ObjectRegistry.Resolve(game, "GameData");
@@ -79,7 +75,8 @@ public sealed class LotRoof
             .FirstOrDefault(path => string.Equals(Path.GetFileNameWithoutExtension(path), style, StringComparison.OrdinalIgnoreCase));
     }
 
-    /// <summary>Writes the pitch and style into the lot's house record (upgrading pre-version-49 records to version 49), after the fields before them.</summary>
+    /// <summary>Writes roof pitch and style into the lot house record, upgrading records older than version
+    /// 49.</summary>
     public IffFile WriteTo(IffFile lot)
     {
         var chunk = HouseChunk(lot)

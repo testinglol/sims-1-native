@@ -4,11 +4,8 @@ using SimsSDL;
 
 namespace SimsSDL.UI;
 
-/// <summary>
-/// The original credits screen (<c>cWinCredits</c>, <c>0050af9d.c</c>, <c>0050b094.c</c>, <c>0050b4f9.c</c>, <c>0050b8d1.c</c>;
-/// <c>cCreditItem</c>, <c>0050ad4b.c</c>–<c>0050ae69.c</c>). Loads <c>GameData/Credits.iff</c> STR# blocks per installed
-/// product, newest expansion first, over the 9-sliced <c>PopupInfoTiles.bmp</c> frame with an <c>OK</c> system button.
-/// </summary>
+/// <summary>Renders the credits roll, loading string blocks from <c>GameData/Credits.iff</c> in reverse
+/// release order (newest expansion pack first) over a framed dialog background.</summary>
 public sealed class OriginalCreditsOverlay
 {
     public struct DrawItem
@@ -31,7 +28,8 @@ public sealed class OriginalCreditsOverlay
 
     private readonly record struct CreditItem(IReadOnlyList<CreditLinePair> Sublines, double LineHeight);
 
-    // Exact Sims.exe constants: 0.035 px/ms (35 px/s), 750 ms (0x2ee) interval, 1000 ms start delay, 400 ms (0x190) fade.
+    // Credits animation timing constants: 35 px/s scroll speed, 750ms item spacing, 1000ms initial delay,
+    // and 400ms fade duration.
     public static readonly CGRect CloseRect = new(350, 547, 100, 33);
     public const double ScrollSpeed = 35.0;
     public const double LineInterval = 0.75;
@@ -89,11 +87,9 @@ public sealed class OriginalCreditsOverlay
             return OriginalGameplayOverlay.CreateImage(device, raster.Width, raster.Height, raster.Rgba);
         }
 
-        // DAT_006f35fc = DAT_006f2aac = variablesans_14.ffn; SMCtrlMgr button uses DAT_006f2aa4 = variablesans_12.ffn.
         var creditsFont = LoadFont("UIGraphics/Fonts/variablesans_14.ffn");
         var buttonFont = LoadFont("UIGraphics/Fonts/variablesans_12.ffn");
 
-        // 0050b094.c:18 loads resource 0xbc0 = UIGraphics/cpanel/Backgrounds/PopupInfoTiles.bmp (36x36 9-slice).
         _outerFill = OriginalGameplayOverlay.CreateImage(device, 1, 1, [0, 0, 0, 255]);
         var bgBitmap = new SimsBitmap(content.Read("UIGraphics/cpanel/Backgrounds/PopupInfoTiles.bmp"));
         _backgroundTile = OriginalGameplayOverlay.CreateImage(device, bgBitmap.Width, bgBitmap.Height, bgBitmap.Rgba, magenta: true);
@@ -114,7 +110,6 @@ public sealed class OriginalCreditsOverlay
         }
         catch
         {
-            // Fall back to base credits block if root directory cannot be enumerated.
         }
 
         var tables = OriginalUIStrings.CreditBlocks(content);
@@ -133,7 +128,6 @@ public sealed class OriginalCreditsOverlay
             return pair;
         }
 
-        // Horizontal text band is x = 16 .. (800 - 16) = 768px wide (0050b094.c:32-39).
         const int wrapWidth = 768;
         double lineH = creditsFont.LineHeight;
         var builtItems = new List<CreditItem>();
@@ -180,8 +174,8 @@ public sealed class OriginalCreditsOverlay
         }
         _items = builtItems;
 
-        // 0050b094.c:19-31 creates SMCtrlMgr system button 0 (Shared/Sys/WinBtn.bmp, 260x33 -> 4x 65x33, cap = 32)
-        // with UIText STR# 152[0] "OK" at x = (w - btnW)/2, y = h - btnH - 20 (547 on 600p).
+        // Configures the credits dismissal button using a 4-frame 65x33 button sheet and string table 152
+        // entry 0, centered horizontally 20 pixels from the bottom.
         byte[]? sysData = null;
         try
         {
@@ -214,21 +208,16 @@ public sealed class OriginalCreditsOverlay
 
     private static (double Left, double Top, double Factor) Transform(CGSize canvas, float uiScale = 1f)
     {
-        double cap = Math.Max(0.25, (double)uiScale);
-        double factor = Math.Max(0.001, Math.Min(cap, Math.Min(canvas.Width / 800.0, canvas.Height / 600.0)));
+        _ = uiScale;
+        double factor = Math.Max(0.001, Math.Min(canvas.Width / 800.0, canvas.Height / 600.0));
         double left = (canvas.Width - 800.0 * factor) / 2.0;
         double top = (canvas.Height - 600.0 * factor) / 2.0;
         return (left, top, factor);
     }
 
-    /// <summary>
-    /// Evaluates <c>cCreditItem</c> state (<c>0050ad4b.c</c>, <c>0050adab.c</c>, <c>0050ae69.c</c>) at <paramref name="elapsed"/> seconds:
-    /// <list type="bullet">
-    /// <item>State 1 (0..&lt;0.4s): stationary at y = 400, fading in 0 -> 1 in RGB(195, 205, 205).</item>
-    /// <item>State 2 (y = 400 -> 100 at 35 px/s): 100% opacity, brightening smoothly to pure white RGB(255, 255, 255) at midpoint y = 250 and back to RGB(195, 205, 205) at y = 100.</item>
-    /// <item>State 3 (0..&lt;0.4s after reaching y = 100): stationary at y = 100, fading out 1 -> 0.</item>
-    /// </list>
-    /// </summary>
+    /// <summary>Evaluates credit line animation state at the given elapsed time: fades in while stationary
+    /// at y=400, scrolls upward to y=100 while brightening to pure white at the vertical midpoint (y=250),
+    /// and fades out while stationary at y=100.</summary>
     private static (double Y, float BaseAlpha, float Spotlight)? ItemState(int index, double elapsed)
     {
         double age = elapsed - StartDelay - index * LineInterval;
@@ -260,9 +249,8 @@ public sealed class OriginalCreditsOverlay
         return (TopY, (float)(1.0 - fadeOutAge / FadeDuration), 0f);
     }
 
-    /// <summary>
-    /// True once every credit item (including trailing spacer items) has finished State 3 (<c>0050b8d1.c:170</c>).
-    /// </summary>
+    /// <summary>Indicates whether all credit items and trailing spacer items have finished scrolling and
+    /// faded out.</summary>
     public bool IsFinished
     {
         get
@@ -322,7 +310,8 @@ public sealed class OriginalCreditsOverlay
 
         var whole = new Vector4(0f, 0f, 1f, 1f);
 
-        // 800x600 9-sliced PopupInfoTiles.bmp (36x36 -> 12px border, 0050b8d1.c:105-115, 005607f3.c:96-100) over black margins.
+        // Renders the 800x600 background frame using 12px borders derived from the 36x36 9-slice tiles over
+        // letterboxed margins.
         var draws = new List<DrawItem>();
         if (left > 0.0 || top > 0.0)
         {
@@ -373,7 +362,6 @@ public sealed class OriginalCreditsOverlay
             }
         }
 
-        // System OK button (WinBtn.bmp 4x 65x33, cap = 32px, centered at y = 547, 0050b094.c:19-31).
         var okRect = _okButtonRect;
         float frame = HoveredClose ? 2f : 0f;
         double frameWidth = _systemButton.Size.Width / 4.0;
@@ -430,9 +418,6 @@ public sealed class OriginalCreditsOverlay
         HoveredClose = Contains(Controls(canvas, uiScale)[0].Rect, point);
     }
 
-    /// <summary>
-    /// Whether a click lands on the exit button.
-    /// </summary>
     public bool Click(CGPoint point, CGSize canvas, float uiScale = 1f) =>
         Contains(Controls(canvas, uiScale)[0].Rect, point);
 

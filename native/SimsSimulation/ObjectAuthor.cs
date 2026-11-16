@@ -6,12 +6,8 @@ using System.Text.Json.Serialization;
 using Microsoft.Xna.Framework;
 using SimsEngine.Formats;
 
-/// <summary>
-/// Compiles a JSON object description into a pack holding new IFF objects. Each object starts from an installed original
-/// object (its sprites, draw groups, slots and behaviors) and gets its own GUIDs, catalog text, price, definition fields,
-/// SimAntics behaviors and interactions. Template chunks the document does not touch are copied byte for byte; changed
-/// definition fields are patched in place so every other OBJD field keeps its original value.
-/// </summary>
+/// <summary>Compiles object specifications into IFF packages by cloning base templates and patching
+/// modified definition fields, resources, and behaviors.</summary>
 internal static class ObjectAuthor
 {
     internal sealed record Document
@@ -25,62 +21,52 @@ internal static class ObjectAuthor
 
     internal sealed record ObjectSpec
     {
-        /// <summary>The IFF file name inside the pack, without extension.</summary>
         public required string File { get; init; }
-        /// <summary>An original object file, such as "flamingo.iff", looked up in GameData/Objects.</summary>
         public required string Template { get; init; }
-        /// <summary>The GUID of the original object to start from when the template file holds several.</summary>
         public JsonElement? TemplateObject { get; init; }
-        /// <summary>The GUID of the lead definition; allocate it with the pack tool's --reserve-object-guid.</summary>
         public required JsonElement Guid { get; init; }
-        /// <summary>GUIDs for the template's other definitions (multi-tile parts), in chunk order.</summary>
         public JsonElement[] TileGuids { get; init; } = [];
-        /// <summary>OBJD fields for non-lead tiles in tileGuids order.</summary>
         public Dictionary<string, int>[] TileFields { get; init; } = [];
-        /// <summary>Explicit signed tile offsets for a variable-size multi-tile object. Each entry clones one template tile part.</summary>
+        /// <summary>Signed grid tile offsets defining variable-size multi-tile object geometry cloned from
+        /// template tile parts.</summary>
         public TilePart[]? TileLayout { get; init; }
         public string? CatalogName { get; init; }
         public string? Description { get; init; }
-        /// <summary>Transparent PNG for the catalog BMP_, relative to the document.</summary>
         public string? CatalogIcon { get; init; }
         public int? Price { get; init; }
-        /// <summary>Definition fields by their OBJD name, such as RatingFun or LotCategories.</summary>
         public Dictionary<string, int> Fields { get; init; } = [];
         public bool ReplaceInteractions { get; init; }
-        /// <summary>Shifts the colors of the template's sprite palettes and catalog icon.</summary>
         public Recolor? Recolor { get; init; }
-        /// <summary>Catalog and interaction text for other languages, keyed by language name such as "French".</summary>
         public Dictionary<string, Translation> Translations { get; init; } = [];
-        /// <summary>Repainted sprite frames, as exported by --export-object-sprites.</summary>
         public SpriteImage[] Sprites { get; init; } = [];
-        /// <summary>Complete four-direction, three-zoom graphics, independent of a template's mirrored frames.</summary>
+        /// <summary>Defines complete four-rotation, three-zoom graphics sets independent of template frame
+        /// mirroring.</summary>
         public GraphicSet? Graphics { get; init; }
-        /// <summary>Clips added to or explicitly replacing entries in the object's adult and child animation tables.</summary>
         public AnimationEntry[] Animations { get; init; } = [];
-        /// <summary>Renames existing pie-menu entries without replacing their source action/test routines.</summary>
         public InteractionRename[] RenameInteractions { get; init; } = [];
-        /// <summary>Optional replacement routing points from the group's (0,0) tile, in SLOT subtiles (16 per tile).</summary>
+        /// <summary>Replacement routing target offsets relative to the origin tile, measured in
+        /// sixteenth-tile SLOT subtile units.</summary>
         public RoutingSlot[]? RoutingSlots { get; init; }
         public Behavior[] Behaviors { get; init; } = [];
-        /// <summary>Play an added object animation on one successful branch of an existing template routine.</summary>
         public AnimationHook[] AnimationHooks { get; init; } = [];
-        /// <summary>Dispatch Animate Sim XEVTs stored in a local, then return to the Animate Sim node.</summary>
+        /// <summary>Dispatches animation events stored in a local variable before returning execution to
+        /// the calling animation node.</summary>
         public AnimationEventHook[] AnimationEventHooks { get; init; } = [];
         public Interaction[] Interactions { get; init; } = [];
-        /// <summary>Versioned native BHAV extension capabilities emitted in the private NLCF resource.</summary>
+        /// <summary>Defines extension capabilities declared in the private NLCF resource chunk.</summary>
         public string[] NativeCapabilities { get; init; } = [];
-        /// <summary>Routine IDs whose calls in the template's routines are skipped, as if each call returned true.</summary>
         public int[] DropCalls { get; init; } = [];
-        /// <summary>A behavior from <see cref="Behaviors"/> that every definition runs on creation, before its own init.</summary>
         public string? InitBehavior { get; init; }
     }
 
     internal sealed record RoutingSlot
     {
         public required float[] Offset { get; init; }
-        /// <summary>Optional source SLOT route index. Sparse indices are preserved with unreachable filler entries.</summary>
+        /// <summary>Routing slot index within the SLOT chunk, using filler entries to preserve sparse slot
+        /// indices.</summary>
         public int? Index { get; init; }
-        /// <summary>Explicitly permits this stand point inside a multi-tile footprint, for source-backed walkable surfaces.</summary>
+        /// <summary>Allows a routing slot destination to sit inside a multi-tile object footprint for
+        /// walkable surfaces.</summary>
         public bool AllowInsideFootprint { get; init; }
         public int Facing { get; init; } = -2;
         public int Resolution { get; init; } = 16;
@@ -97,21 +83,15 @@ internal static class ObjectAuthor
 
     internal sealed record AnimationEntry
     {
-        /// <summary>The name behaviors use for it in an animate operand's animationID.</summary>
         public required string Name { get; init; }
-        /// <summary>The clip an adult plays, without ".anim", such as "a2o-flamingo-kick".</summary>
         public required string Adult { get; init; }
-        /// <summary>The clip a child plays; defaults to the adult's.</summary>
         public string? Child { get; init; }
-        /// <summary>Replace this existing animation-table index instead of appending.</summary>
         public int? Index { get; init; }
     }
 
     internal sealed record AnimationHook
     {
-        /// <summary>Existing private BHAV ID to extend.</summary>
         public int Routine { get; init; }
-        /// <summary>Instruction whose successful branch reaches the appended animation.</summary>
         public int Instruction { get; init; }
         public string Branch { get; init; } = "true";
         public required string Animation { get; init; }
@@ -119,15 +99,10 @@ internal static class ObjectAuthor
 
     internal sealed record AnimationEventHook
     {
-        /// <summary>Existing private BHAV that contains the Animate Sim node.</summary>
         public int Routine { get; init; }
-        /// <summary>Alternative to Routine for a BHAV authored in this document.</summary>
         public string? RoutineName { get; init; }
-        /// <summary>Animate Sim instruction whose false edge receives stored XEVTs.</summary>
         public int Instruction { get; init; }
-        /// <summary>Local index selected by the Animate Sim operand's StoreEventInLocal flag.</summary>
         public int Local { get; init; }
-        /// <summary>Event value and an authored private behavior to call for that event.</summary>
         public required AnimationEventCase[] Events { get; init; }
     }
 
@@ -146,7 +121,8 @@ internal static class ObjectAuthor
     internal sealed record Behavior
     {
         public required string Name { get; init; }
-        /// <summary>Existing private routine to replace. Preserve its argument/local capacity and instruction count for saved frames.</summary>
+        /// <summary>Identifies an existing private routine to replace while preserving its argument and
+        /// local capacity and instruction count for saved stack frames.</summary>
         public int? ReplaceRoutine { get; init; }
         public int Args { get; init; }
         public int Locals { get; init; }
@@ -156,14 +132,10 @@ internal static class ObjectAuthor
     internal sealed record Instruction
     {
         public string? Label { get; init; }
-        /// <summary>A primitive by its engine name, such as "expression" or "animate sim".</summary>
         public string? Primitive { get; init; }
-        /// <summary>A validated native interaction-lifecycle operation (requires the matching private NLCF capability).</summary>
         public string? NativeOperation { get; init; }
-        /// <summary>A behavior to call: one of this object's behaviors by name, or a BHAV ID.</summary>
         public JsonElement? Call { get; init; }
         public short[]? Args { get; init; }
-        /// <summary>A raw opcode with <see cref="OperandHex"/>, for primitives without an operand model.</summary>
         public int? Opcode { get; init; }
         public string? OperandHex { get; init; }
         public Dictionary<string, JsonElement>? Operand { get; init; }
@@ -188,13 +160,10 @@ internal static class ObjectAuthor
 
     internal sealed record Recolor
     {
-        /// <summary>Degrees added to the hue.</summary>
         public double Hue { get; init; }
         public double Saturation { get; init; } = 1;
         public double Lightness { get; init; } = 1;
-        /// <summary>Only colors whose hue lies in this range, in degrees; the range may wrap through 0.</summary>
         public double[]? HueRange { get; init; }
-        /// <summary>Colors with less saturation, such as grays and wood, keep their color.</summary>
         public double MinimumSaturation { get; init; }
     }
 
@@ -202,20 +171,17 @@ internal static class ObjectAuthor
     {
         public string? CatalogName { get; init; }
         public string? Description { get; init; }
-        /// <summary>Pie-menu text keyed by the interaction's name in the document.</summary>
         public Dictionary<string, string> Interactions { get; init; } = [];
     }
 
     internal sealed record SpriteImage
     {
-        /// <summary>The SPR2 chunk ID.</summary>
         public int Sprite { get; init; }
         public int Frame { get; init; }
-        /// <summary>A PNG relative to the document; resizing requires spriteOffset and depth.</summary>
         public required string Image { get; init; }
-        /// <summary>An optional grayscale PNG of depth values (0 nearest); without it, painted pixels take the nearest original depth.</summary>
+        /// <summary>Optional grayscale depth image where 0 represents the nearest distance. When omitted,
+        /// painted pixels inherit the nearest original sprite depth.</summary>
         public string? Depth { get; init; }
-        /// <summary>Explicit DGRP screen offset for resized frames, [x,y]. Requires depth.</summary>
         public int[]? SpriteOffset { get; init; }
     }
 
@@ -223,10 +189,9 @@ internal static class ObjectAuthor
     {
         public required int[] Groups { get; init; }
         public required GraphicView[] Views { get; init; }
-        /// <summary>Additional complete twelve-view poses, selected through ObjectData.Graphic.</summary>
         public GraphicVariant[] Variants { get; init; } = [];
-        /// <summary>Draw groups written with all twelve views and no sprites, for the tiles of a multi-tile object
-        /// whose art one tile draws whole.</summary>
+        /// <summary>Defines draw groups containing all twelve views but no sprites, used for secondary
+        /// tiles of a multi-tile object whose graphic is drawn entirely by a single tile.</summary>
         public int[] EmptyGroups { get; init; } = [];
     }
 
@@ -243,9 +208,9 @@ internal static class ObjectAuthor
         public required string Image { get; init; }
         public required string Depth { get; init; }
         public required int[] SpriteOffset { get; init; }
-        /// <summary>Optional DGRP object offset [x,y,z] in 1/16 tile; moves the sprite's depth interval with its anchor.</summary>
+        /// <summary>Specifies an optional draw group object offset [x, y, z] in sixteenths of a tile,
+        /// shifting the sprite depth interval along with its anchor.</summary>
         public float[]? ObjectOffset { get; init; }
-        /// <summary>Additional depth-tested images drawn with this pose, used for baked object effects.</summary>
         public GraphicLayer[]? Layers { get; init; }
     }
 
@@ -1206,7 +1171,6 @@ internal static class ObjectAuthor
         return JsonSerializer.Deserialize<Document>(File.ReadAllBytes(source), Json) ?? throw new InvalidDataException("Invalid object document");
     }
 
-    /// <summary>Read-only summary of object definitions, catalog interactions and SimAntics instructions in an IFF.</summary>
     internal static object Inspect(string path)
     {
         return InspectChunks(Path.GetFileName(path), ReadIff(File.ReadAllBytes(path)));
@@ -1349,8 +1313,8 @@ internal static class ObjectAuthor
             if (name is "GUID1" or "GUID2" or "Price" or "TreeTableID" or "CatalogStringsID" or "MasterID" or "SubIndex" || FieldIndex(name) < 0)
                 throw new InvalidDataException($"Definition field {name} cannot be set");
         var dropped = DropCalls(chunks, spec.DropCalls);
-        // A synthesized tile layout may clone one template part many times. Calls in the retained template's BHAVs
-        // still target its original tile GUID, so map that old GUID to the first authored instance deterministically.
+        // When cloning a template part across a tile layout, existing routine calls still reference the
+        // original tile GUID, requiring a deterministic mapping to the first authored instance.
         var behaviorGuidMap = definitions.GroupBy(chunk => ReadField(chunk, "GUID1") | (uint)ReadField(chunk, "GUID2") << 16)
             .ToDictionary(group => group.Key, group => assigned[group.First()]);
         var retargeted = RetargetBehaviors(chunks, behaviorGuidMap);
@@ -1400,7 +1364,8 @@ internal static class ObjectAuthor
 
         EnsureCatalogResources(spec, chunks, lead, translations);
 
-        // Catalog text: string 0 is the name and 1 the description, in every language the template carries.
+        // In catalog text resources, string 0 contains the object name and string 1 contains the
+        // description for each language.
         if (spec.CatalogName != null || spec.Description != null || translations.Any(item => item.Text.CatalogName != null || item.Text.Description != null))
         {
             var catalogID = ReadField(lead, "CatalogStringsID");
@@ -1417,7 +1382,6 @@ internal static class ObjectAuthor
             catalog.Data = SerializeStrings(strings);
         }
 
-        // Repainted frames come first so a recolor also applies to them.
         if (spec.CatalogIcon is { } iconPath) ApplyCatalogIcon(iconPath, chunks, ReadField(lead, "CatalogStringsID"), baseDirectory);
         var painted = (spec.Sprites ?? []).Length > 0 ? ApplySprites(spec.Sprites!, chunks, baseDirectory) : null;
         var graphics = spec.Graphics is { } graphicSet ? ApplyGraphicSet(graphicSet, chunks, baseDirectory) : null;
@@ -1460,10 +1424,9 @@ internal static class ObjectAuthor
             }
             if (definitions.Count > 1)
             {
-                // SLOT coordinates and SubIndex values are both expressed in
-                // sixteenths of a tile here. A multi-tile interaction target
-                // must leave the footprint plus a small actor-clearance margin;
-                // otherwise its BHAV has to make the object non-solid to Sims.
+                // Slot offsets and tile sub-indices are measured in sixteenths of a tile. Multi-tile
+                // interaction targets must extend beyond the physical footprint by an actor-clearance
+                // margin unless the object is non-solid.
                 const double tileHalfExtent = 8;
                 const double actorClearance = 3.2;
                 var occupiedTiles = definitions.Select(definition =>
@@ -1485,9 +1448,8 @@ internal static class ObjectAuthor
                             $"Routing slot {index} lies within a multi-tile footprint or its actor-clearance margin; move it outside instead of disabling object collision");
                 }
             }
-            // Each physical part can receive the interaction. SLOT offsets are
-            // relative to that part; subtract its original signed SubIndex so
-            // every part resolves the same point in the object's footprint.
+            // Interaction slot offsets are relative to each part. Subtracting the part's signed tile
+            // sub-index ensures every component resolves to the same world location within the footprint.
             foreach (var definition in definitions)
             {
                 var slotID = (ushort)Enumerable.Range(1, ushort.MaxValue).First(id => !chunks.Any(chunk => chunk.Type == "SLOT" && chunk.Id == id));
@@ -1507,7 +1469,6 @@ internal static class ObjectAuthor
         }
         var animations = AddAnimations(spec, lead, chunks);
 
-        // Behaviors take free private IDs; calls between them resolve by name.
         var behaviorIDs = new Dictionary<string, ushort>(StringComparer.Ordinal);
         var nextID = (ushort)Math.Max(0x1000, chunks.Where(chunk => chunk.Type == "BHAV" && chunk.Id is >= 0x1000 and < 0x2000)
             .Select(chunk => chunk.Id + 1).DefaultIfEmpty(0x1000).Max());
@@ -1554,7 +1515,6 @@ internal static class ObjectAuthor
             var namesChunk = chunks.FirstOrDefault(chunk => chunk.Type == "TTAs" && chunk.Id == tableID);
             if (tableChunk == null)
             {
-                // Some decorative templates have no tree table; give every definition a new one.
                 tableID = (ushort)Math.Max(0x80, chunks.Where(chunk => chunk.Type is "TTAB" or "TTAs").Select(chunk => chunk.Id + 1).DefaultIfEmpty(0x80).Max());
                 foreach (var definition in definitions) WriteField(definition, "TreeTableID", tableID);
                 tableChunk = new Chunk { Type = "TTAB", Id = tableID, Flags = 0x10, Label = lead.Label, Data = [] };
@@ -1645,11 +1605,9 @@ internal static class ObjectAuthor
         return (WriteIff(chunks), summary);
     }
 
-    /// <summary>
-    /// A custom tile layout's lead OBJD is the logical master; only its children make up the placed footprint.
-    /// When the author explicitly supplies visible draw groups, at least one child must reference one if the master
-    /// references that art. Catalog BMP_ resources remain attached to the lead and are unaffected by this world-art check.
-    /// </summary>
+    /// <summary>Validates that multi-tile object layouts correctly reference draw groups. The lead
+    /// definition serves as the logical master while its child parts form the placed footprint, with
+    /// catalog bitmaps remaining bound to the lead.</summary>
     internal static void ValidateTileLayoutGraphics(bool explicitTileLayout, bool explicitGraphics, IEnumerable<int> authoredArtGroups,
         (int BaseGraphicID, int NumGraphics) master, IEnumerable<(int BaseGraphicID, int NumGraphics)> physicalParts)
     {
@@ -1662,20 +1620,17 @@ internal static class ObjectAuthor
 
     private static bool ReferencesAuthoredArt((int BaseGraphicID, int NumGraphics) definition, HashSet<int> authoredArtGroups)
     {
-        // ObjectData.Graphic selects BaseGraphicID + offset; NumGraphics bounds the authored selection range.
-        // The unchecked ushort addition matches the resource-ID lookup used by the scene renderer.
+        // Object graphic selection resolves to BaseGraphicID plus an offset bounded by NumGraphics, using
+        // 16-bit addition to match draw group resource lookups.
         var count = Math.Max(1, definition.NumGraphics);
         for (var offset = 0; offset < count; offset++)
             if (authoredArtGroups.Contains(unchecked((ushort)(definition.BaseGraphicID + offset)))) return true;
         return false;
     }
 
-    /// <summary>
-    /// Expands a template's linked tile group to the requested offsets. Sims 1 stores each part's offset as signed
-    /// bytes in OBJD.SubIndex (X in the high byte, Y in the low byte); the VM creates every non-lead definition in
-    /// that group's IFF when the lead is placed. Repeatedly clone one template tile so large authored objects are not
-    /// limited to the template's original part count.
-    /// </summary>
+    /// <summary>Expands a linked tile group to requested offsets. Tile offsets are stored as signed bytes
+    /// in the object definition sub-index field with X in the high byte and Y in the low byte,
+    /// instantiating all non-lead parts when the master is placed.</summary>
     private static List<Chunk> ExpandTileLayout(Chunk lead, List<Chunk> definitions, TilePart[] layout, List<Chunk> chunks)
     {
         if (layout.Length is 0 or > 4095) throw new InvalidDataException("tileLayout must contain between 1 and 4095 parts");
@@ -1716,9 +1671,9 @@ internal static class ObjectAuthor
             };
             WriteField(clone, "SubIndex", (ushort)(((byte)part.X << 8) | (byte)part.Y));
             chunks.Add(clone);
-            // A cloned tile may use OBJf entry points. OBJf is keyed by the
-            // OBJD chunk ID, so cloning only OBJD leaves UsesFnTable tiles
-            // without an entry table and crashes on Init/placement preview.
+            // Object function tables (OBJf) are keyed by the object definition chunk ID; cloning an object
+            // definition that uses function tables without its paired OBJf causes missing entry table
+            // failures on initialization.
             if (donorFunctionTable != null)
             {
                 chunks.Add(new Chunk
@@ -1735,11 +1690,6 @@ internal static class ObjectAuthor
         return expanded;
     }
 
-    /// <summary>
-    /// Inserts Animate Sim on a known successful return branch, without replacing the source routine or changing its
-    /// other paths. Hooks deliberately require a ReturnTrue pointer: a source-specific recipe must identify the exact
-    /// stage-completion instruction rather than broadly intercepting every successful exit.
-    /// </summary>
     private static object[] ApplyAnimationHooks(AnimationHook[] hooks, List<Chunk> chunks, Dictionary<string, ushort> animations)
     {
         if (hooks.Length == 0) return [];
@@ -1787,12 +1737,9 @@ internal static class ObjectAuthor
         return results.ToArray();
     }
 
-    /// <summary>
-    /// Dispatches Animate Sim XEVTs through event-specific private BHAVs. On an XEVT, Animate Sim returns false after
-    /// storing the event in its selected local. Each appended comparison routes matching event values to a callback;
-    /// both callback returns and unknown event values resume the same Animate Sim node, which drains any queued events
-    /// before eventually taking its original true completion edge.
-    /// </summary>
+    /// <summary>Dispatches animation events through event-specific private routines. When an animation
+    /// event occurs, Animate Sim returns false after storing the event code in the selected local variable,
+    /// resuming until all events drain and the true branch is taken upon completion.</summary>
     private static object[] ApplyAnimationEventHooks(AnimationEventHook[] hooks, List<Chunk> chunks,
         Dictionary<string, ushort> behaviorIDs)
     {
@@ -1830,7 +1777,8 @@ internal static class ObjectAuthor
                     throw new InvalidDataException($"Animation event hook names unknown behavior {item.Behavior}");
             }
 
-            // Instructions 253–255 are BHAV return/failure sentinels, leaving 253 authored nodes at most.
+            // Instruction indices 253 through 255 are reserved return sentinels (True, False, Error),
+            // limiting a behavior routine to 253 executable instructions.
             var required = checked(hook.Events.Length * 2);
             if (bhav.Instructions.Length + required > 253)
                 throw new InvalidDataException($"Animation event hook 0x{routineId:X4}:{hook.Instruction} exceeds the BHAV instruction limit");
@@ -1843,12 +1791,11 @@ internal static class ObjectAuthor
                 var callIndex = compareIndex + 1;
                 var nextCompare = index + 1 < hook.Events.Length ? callIndex + 1 : resume;
                 var eventValue = hook.Events[index].Value;
-                // Expression: Local[hook.Local] == Literal[eventValue]. The XEVT is a signed 16-bit value.
                 byte[] operand = [
                     (byte)hook.Local, 0,
                     (byte)eventValue, (byte)(eventValue >> 8),
                     0, 2,
-                    25, 7 // DataOwner.Local, DataOwner.Literal
+                    25, 7
                 ];
                 dispatch[index * 2] = new BHAVInstruction
                 {
@@ -1882,13 +1829,6 @@ internal static class ObjectAuthor
         return results.ToArray();
     }
 
-    /// <summary>
-    /// Skips the template's calls to the listed routines: every branch to such a call goes to the call's true branch instead,
-    /// as if the call had returned true. Vacation's Frost Fortress, for one, calls global 423 "Allow on Vacation Only" from its
-    /// main and removes itself from any other lot. The calls stay in place, unreachable, so the routines keep their layout.
-    /// A call that starts a routine becomes an always-true expression instead. Returns the number of calls skipped. A listed
-    /// ID that is never called is rejected.
-    /// </summary>
     private static int DropCalls(List<Chunk> chunks, int[] routines)
     {
         foreach (var routine in routines)
@@ -1906,14 +1846,11 @@ internal static class ObjectAuthor
             bool Skipped(int index) => index < count && routines.Contains(Opcode(index));
             int Target(int pointer)
             {
-                // Follow a chain of skipped calls; a loop of them is left to the original call.
                 for (var steps = 0; steps < count && Skipped(pointer); steps++) pointer = chunk.Data[start + pointer * 12 + 2];
                 return pointer;
             }
             if (count > 0 && Skipped(0))
             {
-                // Nothing can jump past a routine's first instruction, so a call there becomes an expression that is always
-                // true (Literal 0 == Literal 0) and continues where the call's true branch went (the igloo's load tree).
                 found.Add(Opcode(0));
                 dropped++;
                 var first = chunk.Data.AsSpan(start, 12);
@@ -1934,13 +1871,6 @@ internal static class ObjectAuthor
         return dropped;
     }
 
-    /// <summary>
-    /// Makes every definition run the named behavior when it is created, then its own init (function table entry 0, or the
-    /// definition's BHAV_Init field when it has no table). One wrapper routine is added per distinct init. Vacation's igloo
-    /// and Frost Fortress, for one, never set "cannot be stolen" (flag 8 of FlagField2), since no burglar visits a vacation
-    /// lot; on a home lot the thief's "can item be stolen" (NPC Controller 4115) would carry them off. Returns the number of
-    /// definitions changed.
-    /// </summary>
     private static int WrapInit(List<Chunk> chunks, List<Chunk> definitions, string name, Dictionary<string, ushort> behaviorIDs, HashSet<ushort> existing, ref ushort nextID)
     {
         if (!behaviorIDs.TryGetValue(name, out var behavior)) throw new InvalidDataException($"initBehavior {name} is not one of the object's behaviors");
@@ -1949,7 +1879,9 @@ internal static class ObjectAuthor
         foreach (var definition in definitions)
         {
             var table = ReadField(definition, "UsesFnTable") != 0 ? chunks.FirstOrDefault(chunk => chunk.Type == "OBJf" && chunk.Id == definition.Id) : null;
-            // OBJf: pad, version, magic, count (4 bytes each), then (condition, action) pairs; entry 0 is init.
+            // Object function table chunks (OBJf) consist of 4-byte padding, version, magic, and entry
+            // count fields, followed by condition-action action routine pairs where index 0 defines
+            // initialization.
             if (table != null && (table.Data.Length < 20 || BinaryPrimitives.ReadUInt32LittleEndian(table.Data.AsSpan(12)) == 0)) table = null;
             var init = table != null ? BinaryPrimitives.ReadUInt16LittleEndian(table.Data.AsSpan(18)) : ReadField(definition, "BHAV_Init");
             if (!wrappers.TryGetValue(init, out var wrapper))
@@ -1977,12 +1909,6 @@ internal static class ObjectAuthor
         return changed;
     }
 
-    /// <summary>
-    /// Points the template's own routines at the new GUIDs. An object that finds itself or its parts by type (Test Object
-    /// Type, Set to Next of a type, Create Object Instance; the Frost Fortress's "Get Control Piece", for one) would
-    /// otherwise look for the original object and fail. Operands are patched in place so the routines keep their version.
-    /// Returns the number of instructions changed.
-    /// </summary>
     private static int RetargetBehaviors(List<Chunk> chunks, Dictionary<uint, uint> guids)
     {
         var changed = 0;
@@ -1996,7 +1922,9 @@ internal static class ObjectAuthor
             {
                 var instruction = chunk.Data.AsSpan(start + index * 12, 12);
                 var opcode = BinaryPrimitives.ReadUInt16LittleEndian(instruction);
-                // 31 Set to Next (only its Object of Type search reads the GUID), 32 Test Object Type, 42 Create Object Instance.
+                // SimAntics primitives that reference object GUIDs in their operands are opcode 31 (Set to
+                // Next, search type 4), opcode 32 (Test Object Type), and opcode 42 (Create Object
+                // Instance).
                 if (opcode is not (31 or 32 or 42) || (opcode == 31 && (instruction[8] & 0x7F) != 4)) continue;
                 if (!guids.TryGetValue(BinaryPrimitives.ReadUInt32LittleEndian(instruction[4..]), out var guid)) continue;
                 BinaryPrimitives.WriteUInt32LittleEndian(instruction[4..], guid);
@@ -2006,10 +1934,6 @@ internal static class ObjectAuthor
         return changed;
     }
 
-    /// <summary>
-    /// Picks the template object to copy: its lead definition and, for a multi-tile object, every part sharing its master
-    /// ID. Definitions and catalog strings of the file's other objects are dropped so their original GUIDs never load twice.
-    /// </summary>
     private static (Chunk Lead, List<Chunk> Definitions) SelectObject(ObjectSpec spec, List<Chunk> chunks)
     {
         var all = chunks.Where(chunk => chunk.Type == "OBJD").ToList();
@@ -2028,7 +1952,6 @@ internal static class ObjectAuthor
         else if (leads.Count == 1) selected = leads[0];
         else throw new InvalidDataException($"Template {spec.Template} holds several objects; choose one with templateObject: {string.Join(", ", leads.Select(chunk => $"0x{Guid(chunk):X8} ({chunk.Label})"))}");
         var definitions = Group(selected);
-        // Parts are listed in their original chunk order, lead first.
         definitions.Remove(selected);
         definitions.Insert(0, selected);
         var catalogs = definitions.Select(chunk => ReadField(chunk, "CatalogStringsID")).ToHashSet();
@@ -2036,11 +1959,9 @@ internal static class ObjectAuthor
         return (selected, definitions);
     }
 
-    /// <summary>
-    /// Appends the document's clips to the object's animation tables: STR# AnimationTableID for adults and the next ID for
-    /// children (129 and 130 when the definition names none), the tables Animate Sim reads with its Object source. Both
-    /// tables get the same index, so one animate instruction plays the right clip for either age. Returns each name's index.
-    /// </summary>
+    /// <summary>Appends animation clips to the object's string tables: AnimationTableID for adults and ID +
+    /// 1 for children (defaulting to 129 and 130). Keeping indices aligned allows a single animation
+    /// instruction to resolve the appropriate clip for either age.</summary>
     private static Dictionary<string, ushort> AddAnimations(ObjectSpec spec, Chunk lead, List<Chunk> chunks)
     {
         var indices = new Dictionary<string, ushort>(StringComparer.Ordinal);
@@ -2068,7 +1989,7 @@ internal static class ObjectAuthor
         var adult = Table(adultID, out var adultChunk);
         var child = Table((ushort)(adultID + 1), out var childChunk);
         int Length(STR table) => table.LanguageSets[0]?.Strings.Length ?? 0;
-        // Index 0 of an animation table is never played; keep the tables aligned from the first free index of either.
+        // Index 0 of an animation string table is reserved and never played.
         var next = Math.Max(1, Math.Max(Length(adult), Length(child)));
         var used = new HashSet<int>();
         foreach (var animation in spec.Animations)
@@ -2203,13 +2124,12 @@ internal static class ObjectAuthor
         if (capabilities.Length != 1 || capabilities[0] != "rink.v1")
             throw new InvalidDataException($"Unsupported native capability set: {string.Join(",", capabilities)}");
         if (chunks.Any(chunk => chunk.Type == "NLCF")) throw new InvalidDataException("Template already contains reserved NLCF capability resource");
-        // NLCF is a repository-private extension resource, distinct from all Sims IFF resource types.
-        // Body format: ASCII S1LC, schema byte 1, supported-operation bit mask 0b1111, two reserved zero bytes.
+        // NLCF chunk bodies consist of the ASCII magic 'S1LC', a 1-byte schema version, a bit mask of
+        // supported operations, and two reserved zero bytes.
         chunks.Add(new Chunk { Type = "NLCF", Id = 0, Flags = 0x10, Label = "Native lifecycle rink.v1",
             Data = [0x53, 0x31, 0x4c, 0x43, 1, 15, 0, 0] });
     }
 
-    /// <summary>Compiles an authored catalog PNG to the original BMP_ format.</summary>
     private static void ApplyCatalogIcon(string relative, List<Chunk> chunks, ushort id, string? baseDirectory)
     {
         if (baseDirectory == null || Path.IsPathRooted(relative) || string.IsNullOrWhiteSpace(relative))
@@ -2220,8 +2140,8 @@ internal static class ObjectAuthor
             throw new InvalidDataException("Catalog icon is missing, outside the document directory or too large");
         var (width, height, rgba) = SpriteArt.ReadPng(File.ReadAllBytes(path), relative);
         if (width is < 1 or > 256 || height is < 1 or > 256) throw new InvalidDataException("Catalog icon must be at most 256x256");
-        // Original BMP_ resources contain ordinary BMP files. Preserve the original
-        // magenta transparency key; 24-bit rows are padded and stored bottom first.
+        // BMP_ resources store standard bottom-up 24-bit bitmaps with 4-byte row stride padding, using pure
+        // magenta as the transparent color key.
         var stride = (width * 3 + 3) & ~3;
         var data = new byte[54 + stride * height];
         data[0] = (byte)'B'; data[1] = (byte)'M';
@@ -2248,11 +2168,6 @@ internal static class ObjectAuthor
         chunk.Data = data;
     }
 
-    /// <summary>
-    /// Some original runtime-only objects (for example TrashPile.iff) have no catalog resources. When a port gives such
-    /// an object catalog text or art, allocate the paired CTSS/BMP_ resources instead of requiring a catalog-ready
-    /// template. The caller must provide a catalog icon so the new BMP_ is valid.
-    /// </summary>
     private static void EnsureCatalogResources(ObjectSpec spec, List<Chunk> chunks, Chunk lead, List<(STRLangCode Language, Translation Text)> translations)
     {
         var wantsCatalog = spec.CatalogName != null || spec.Description != null || spec.CatalogIcon != null ||
@@ -2274,7 +2189,6 @@ internal static class ObjectAuthor
             chunks.Add(new Chunk { Type = "BMP_", Id = id, Flags = 0x10, Label = "Authored catalog icon", Data = [] });
     }
 
-    /// <summary>Writes complete DGRP v20004 views using the original SPR2/PALT containers.</summary>
     private static object ApplyGraphicSet(GraphicSet set, List<Chunk> chunks, string? baseDirectory)
     {
         if (baseDirectory == null) throw new InvalidDataException("Graphics need a document directory");
@@ -2385,7 +2299,6 @@ internal static class ObjectAuthor
             sprite = spriteID, palette = paletteID, views = frames.Count };
     }
 
-    /// <summary>Replaces SPR2 frames, sharing one new palette per edited chunk.</summary>
     private static object ApplySprites(SpriteImage[] images, List<Chunk> chunks, string? baseDirectory)
     {
         if (images.Length > 4096) throw new InvalidDataException("Too many sprite images");
@@ -2429,7 +2342,8 @@ internal static class ObjectAuthor
                         foreach (var use in draw.Images.SelectMany(i => i.Sprites))
                             if (use.SpriteID == image.Sprite && use.SpriteFrameIndex == image.Frame)
                             {
-                                // Mirrored uses anchor the flipped frame, as in the shipped graphics.
+                                // Horizontally flipped sprite instances offset their anchor by subtracting
+                                // width and an extra pixel (-width - x - 1).
                                 use.SpriteOffset = new Vector2(use.Flip ? -width - offset[0] - 1 : offset[0], offset[1]);
                                 changed = true;
                             }
@@ -2472,11 +2386,6 @@ internal static class ObjectAuthor
         return colors;
     };
 
-    /// <summary>
-    /// Writes every SPR2 frame of an original object file as a color PNG and a grayscale depth PNG, with a sprites.json
-    /// manifest naming the draw groups and objects that use each frame. Paint the color PNGs and list them in an object's
-    /// "sprites" to compile them back.
-    /// </summary>
     internal static object ExportSprites(string template, string game, string destination)
     {
         var output = Path.GetFullPath(destination);
@@ -2531,8 +2440,9 @@ internal static class ObjectAuthor
         return new { directory = output, objects = objects.Length, frames = sprites.Count };
     }
 
-    /// <summary>Recolors every sprite palette (PALT) in the file and the lead's catalog icon. Sprites index into these
-    /// palettes, so their shading, transparency and depth are unchanged. Pure magenta, the icon's transparent key, is kept.</summary>
+    /// <summary>Recolors sprite palettes (PALT) and catalog icons in place. Because sprites reference
+    /// palette indices, shading and depth values remain unchanged while preserving the magenta transparency
+    /// key.</summary>
     private static object ApplyRecolor(Recolor recolor, List<Chunk> chunks, ushort iconID)
     {
         ValidateRecolor(recolor);
@@ -2550,9 +2460,8 @@ internal static class ObjectAuthor
         return new { palettes, paletteColors = changed, iconColors };
     }
 
-    /// <summary>Recolors a BMP in place: the palette of an indexed bitmap (so RLE and indices are untouched) or every pixel
-    /// of an uncompressed 24- or 32-bit one. With <paramref name="keepKey"/>, pure magenta stays transparent. Returns the
-    /// number of changed colors; anything that is not such a BMP is left alone and counts none.</summary>
+    /// <summary>Recolors a bitmap in place by adjusting the color table of indexed bitmaps or the pixels of
+    /// uncompressed 24-bit and 32-bit images, optionally preserving pure magenta transparency.</summary>
     internal static int RecolorBitmap(Recolor recolor, byte[] data, bool keepKey)
     {
         if (data.Length < 54 || data[0] != 'B' || data[1] != 'M') return 0;
@@ -2617,15 +2526,17 @@ internal static class ObjectAuthor
         };
         var match = lightness - chroma / 2;
         var result = new[] { rr + match, gg + match, bb + match }.Select(value => (byte)Math.Clamp(Math.Round(value * 255), 0, 255)).ToArray();
-        // Never produce the icon's transparent key by accident.
+        // Prevents non-transparent pixels from matching the magenta transparency key by adjusting green to
+        // 1 when recoloring produces (255, 0, 255).
         if (keepKey && result[0] == 255 && result[1] == 0 && result[2] == 255) result[1] = 1;
         var before = (data[offset + red], data[offset + green], data[offset + blue]);
         (data[offset + red], data[offset + green], data[offset + blue]) = (result[0], result[1], result[2]);
         return before != (result[0], result[1], result[2]);
     }
 
-    /// <summary>"next", "true", "false", "error", a label or an instruction index. A missing true branch goes to the
-    /// next instruction (or returns true after the last); a missing false branch is an error.</summary>
+    /// <summary>Resolves behavior branch pointers. An omitted true branch advances to the subsequent
+    /// instruction or returns true at the end of a routine, whereas an omitted false branch defaults to
+    /// error.</summary>
     private static byte Pointer(JsonElement? value, int index, int count, Dictionary<string, int> labels, bool truePath, string where)
     {
         var last = index == count - 1;
@@ -2665,7 +2576,6 @@ internal static class ObjectAuthor
         return (ushort)number;
     }
 
-    /// <summary>Fills an engine operand model from JSON, then checks that encoding it keeps every value.</summary>
     private static byte[] Operand(Type model, Dictionary<string, JsonElement> values, string where)
     {
         var operand = (VMPrimitiveOperand)Activator.CreateInstance(model)!;
@@ -2689,7 +2599,6 @@ internal static class ObjectAuthor
         return bytes;
     }
 
-    /// <summary>An animate operand may name one of the document's animations in animationID instead of giving its index.</summary>
     private static Dictionary<string, JsonElement> AnimationNames(Dictionary<string, JsonElement> values, Type model, Dictionary<string, ushort> animations, string where)
     {
         if (model != typeof(VMAnimateSimOperand)) return values;
@@ -2774,8 +2683,9 @@ internal static class ObjectAuthor
 
     private static string Label(string value) => new string(value.Where(character => character is >= ' ' and < '\u007f').Take(63).ToArray());
 
-    /// <summary>Sets one language's string. A language the template lacks starts as a copy of the default strings,
-    /// since the engine falls back to the default only when a language has no strings at all.</summary>
+    /// <summary>Sets a string for a specific language in a string table. The engine falls back to default
+    /// strings only when a language is completely absent, so missing languages must initialize from the
+    /// default set.</summary>
     private static void Set(STR strings, STRLangCode language, int index, string value)
     {
         var code = (int)language;
@@ -2789,7 +2699,6 @@ internal static class ObjectAuthor
         set.Strings[index].Comment ??= "";
     }
 
-    /// <summary>Sets a string in English and in every other language the table carries, growing the table as needed.</summary>
     private static void Set(STR strings, int index, string value)
     {
         for (var language = 0; language < strings.LanguageSets.Length; language++)
@@ -3265,7 +3174,6 @@ internal static class ObjectAuthor
             });
             cursor += size;
         }
-        // The resource map indexes the original layout; the engine does not need it, so it is not carried over.
         chunks.RemoveAll(chunk => chunk.Type == "rsmp");
         return chunks;
     }
@@ -3293,16 +3201,12 @@ internal static class ObjectAuthor
     private static bool Identifier(string value) => value != null && value.Length is >= 1 and <= 120 && char.IsAsciiLetterOrDigit(value[0]) &&
         value.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '.' or '_') && value is not ("." or "..");
 
-    /// <summary>Original object files, loose or inside the FAR archives of GameData/Objects, then of the installed
-    /// ExpansionPack folders (Vacation's snow forts, for example). Base objects win a shared name.</summary>
     private sealed class Templates(string game)
     {
         private readonly string objects = Path.Combine(game, "GameData", "Objects");
 
         public byte[] Read(string name)
         {
-            // "tso:NAME.iff" takes a The Sims Online object, joined with its sprite and tuning files, from the
-            // TSOClient/objectdata/objects folder named by SIMS_TSO_OBJECTS (see TsoInventory.Merged).
             if (name.StartsWith("tso:", StringComparison.OrdinalIgnoreCase))
             {
                 var tso = Environment.GetEnvironmentVariable("SIMS_TSO_OBJECTS");

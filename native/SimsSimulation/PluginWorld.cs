@@ -4,10 +4,6 @@ using SimsNative.Plugins;
 
 namespace SimsSimulation;
 
-/// <summary>
-/// The plugin view of a lot the native engine runs. Interaction enumeration and queueing use the same guarded menu
-/// candidates as the native client.
-/// </summary>
 internal sealed class PluginWorld(Func<SimulationWorld?> world, Func<short> house, Func<ushort?> family,
     Func<ObjectRegistry?> registry, Func<bool> paused) : IPluginSimulation, PluginHost.IPluginWorld
 {

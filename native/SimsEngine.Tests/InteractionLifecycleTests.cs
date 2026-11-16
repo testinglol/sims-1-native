@@ -23,13 +23,13 @@ public sealed class InteractionLifecycleTests
         var scope = Scope();
 
         var firstStack = Start(world, first, rink, scope);
-        Assert.True(firstStack.Run()); // acquire + attach, then Sleep stops the current tick
+        Assert.True(firstStack.Run());
         Assert.Equal(2, firstStack.Top!.Instruction);
         Assert.True(world.InteractionLifecycle.OwnsAction(rink, first, firstAction));
         Assert.Contains(InteractionLifecycle.SkateAttachment, first.InteractionAttachments);
 
         var cancelledStack = Start(world, cancelled, rink, scope);
-        Assert.True(cancelledStack.Run()); // busy acquire yields at opcode F0
+        Assert.True(cancelledStack.Run());
         Assert.Equal(0, cancelledStack.Top!.Instruction);
         Assert.Equal(1, world.InteractionLifecycle.WaiterCount(rink));
 
@@ -39,20 +39,20 @@ public sealed class InteractionLifecycleTests
         Assert.Equal(2, world.InteractionLifecycle.WaiterCount(rink));
 
         Assert.True(world.CancelInteractionAction(cancelled, cancelledAction));
-        Assert.True(cancelledStack.Run()); // cancellation branches false and pops; FIFO waiter is pruned
+        Assert.True(cancelledStack.Run());
         Assert.Empty(cancelledStack.Frames);
         Assert.Equal(1, world.InteractionLifecycle.WaiterCount(rink));
 
-        world.ApplyStartedInteractionAction(first, ActionQueueSlot.EmptyRecord()); // normal action transition finalizes exact UID
+        world.ApplyStartedInteractionAction(first, ActionQueueSlot.EmptyRecord());
         Assert.False(world.InteractionLifecycle.OwnsAction(rink, first, firstAction));
         Assert.DoesNotContain(InteractionLifecycle.SkateAttachment, first.InteractionAttachments);
 
-        Assert.True(nextStack.Run()); // the next FIFO action acquires at its original instruction
+        Assert.True(nextStack.Run());
         Assert.Equal(2, nextStack.Top!.Instruction);
         Assert.True(world.InteractionLifecycle.OwnsAction(rink, next, nextAction));
         Assert.Contains(InteractionLifecycle.SkateAttachment, next.InteractionAttachments);
 
-        Assert.True(world.Remove(next.Id)); // actor removal also finalizes its lease and observed accessory
+        Assert.True(world.Remove(next.Id));
         Assert.Equal(0, world.InteractionLifecycle.LeaseCount(rink));
         Assert.DoesNotContain(InteractionLifecycle.SkateAttachment, next.InteractionAttachments);
     }
@@ -67,7 +67,6 @@ public sealed class InteractionLifecycleTests
         var second = world.Add(new XPerson(22, PrimitiveTestWorld.Definition(XPerson.PersonType)));
         second.CurrentActionRecord = Action(rink, 202);
 
-        // Exercise the same ownership service with two authored lanes and distinct action identities.
         Assert.Equal(PrimitiveResult.True, Acquire(world, rink, actor, 2, 0));
         Assert.Equal(PrimitiveResult.True, Acquire(world, rink, second, 2, 0));
         Assert.True(world.InteractionLifecycle.OwnsAction(rink, actor, 201));
@@ -102,7 +101,8 @@ public sealed class InteractionLifecycleTests
         actor.InteractionAttachments.Add(InteractionLifecycle.SkateAttachment);
         Assert.True(world.InteractionLifecycle.OwnsAction(rink, actor, newAction));
 
-        // A late old-action finalizer must be idempotent and action-scoped.
+        // Action finalization is idempotent and scoped to the terminating action so subsequent interaction
+        // leases remain valid.
         world.InteractionLifecycle.FinalizeAction(actor, oldAction);
         Assert.True(world.InteractionLifecycle.OwnsAction(rink, actor, newAction));
         Assert.Contains(InteractionLifecycle.SkateAttachment, actor.InteractionAttachments);
@@ -183,8 +183,8 @@ public sealed class InteractionLifecycleTests
         var skateTree = scope.FindNamedTree("Skate");
         Assert.InRange(skateTree, 0x1000, 0x1FFF);
         var stack = TreeRunner.StartObjectTree(world, actor, scope, skateTree, rink.ClockManagerIndex, 0, [])!;
-        // An interaction push records the rink in the person's +0xb00 list (FUN_0045e707); Animate Sim's
-        // Object-scope lookup resolves the rink's skate clips through that entry (FUN_005893b7/FUN_005894e6).
+        // Pushing an interaction registers the target object so that Object-scope animation lookups resolve
+        // clips from that object.
         PersonInteractionStack.Register(actor, rink, stack.Frames.Count, flag: false);
         var sawSkateAttachmentState = false;
         var attachmentStateAtMs = -1;
@@ -202,11 +202,8 @@ public sealed class InteractionLifecycleTests
                 skatesOnStartedAtMs = elapsedMs;
             if (!exitRequested && stack.Top is { TreeId: var tree, Instruction: 17 } && tree == skateTree)
             {
-                // TreeRunner can execute through the following check before yielding, so
-                // request the ported source interrupt as the third glide begins. The BHAV
-                // consumes it at the post-glide boundary, after completing the circuit.
                 routeSelectionsAtTrack = world.NativeRouteTrace.Count(entry => entry.Phase == "destination-selected");
-                completeCircuitAtExitRequest = routeSelectionsAtTrack >= 4; // entry + source track successors 7/9/7 (or 8/10/8)
+                completeCircuitAtExitRequest = routeSelectionsAtTrack >= 4;
                 Assert.True(world.RequestInteractionExit(actor, 501));
                 exitRequested = true;
             }
@@ -218,8 +215,8 @@ public sealed class InteractionLifecycleTests
             var frameBefore = stack.Top;
             var traceCountBefore = world.NativeRouteTrace.Count;
             stack.Run();
-            // The world tick runs SAnimator::Tick after the object's stack; route root motion and the
-            // practice clip both advance there (SAnimator.s 0x10350F4C–0x1035109C).
+            // Avatar animation updates execute after object script evaluation, advancing root motion and
+            // active animation clips together.
             world.TickAvatarAnimations(actor);
             if (routeBefore is not null && actor.Position != positionBefore)
             {
@@ -243,12 +240,12 @@ public sealed class InteractionLifecycleTests
         }
 
         Assert.True(sawSkateAttachmentState, "XEVT 101 did not set action-owned skate attachment state on the compiled adult/child Skate action.");
-        Assert.InRange(attachmentStateAtMs - skatesOnStartedAtMs, 520, 760); // Source event is 566ms into the clip.
+        Assert.InRange(attachmentStateAtMs - skatesOnStartedAtMs, 520, 760);
         Assert.True(exitRequested, "The test never issued the action-scoped graceful exit request.");
         Assert.True(completeCircuitAtExitRequest,
             $"Exit was requested before the source 7→9→7 (or 8→10→8) circuit completed; route selections={routeSelectionsAtTrack}.");
         Assert.True(skatesOffStartedAtMs >= 0, "The graceful exit did not start the source skatesOff animation.");
-        Assert.InRange(skatesOffRemovedAtMs - skatesOffStartedAtMs, 560, 760); // Source event 102 is 600ms into the clip.
+        Assert.InRange(skatesOffRemovedAtMs - skatesOffStartedAtMs, 560, 760);
         Assert.True(routeSelectionsAtTrack >= 4,
             $"The compiled action made only {routeSelectionsAtTrack} routes; expected entry plus all three source track legs.");
         Assert.True(stack.Frames.Count == 0,
@@ -284,11 +281,7 @@ public sealed class InteractionLifecycleTests
             cancelRink.ClockManagerIndex, 0, [])!;
         Assert.True(cancelStack.Run());
         Assert.NotNull(cancelActor.NativeRoute);
-        // Exercise the forced interrupt path independently from Cancel Interaction, which
-        // requests the authored track-boundary exit after a lane has been acquired.
         cancelActor.ActiveActionCancelRequested = true;
-        // EndFollow defers while +0x180 is 1; SAnimator::Tick advances it to 3 and the next
-        // callback takes the interrupted exit.
         for (var tick = 0; tick < 8 && cancelStack.Frames.Count > 0; tick++)
         {
             cancelStack.Run();
@@ -310,13 +303,12 @@ public sealed class InteractionLifecycleTests
         world.RoutingEnabled = true;
         world.CaptureExecutionTrace = true;
         GoToRoutingSlotPrimitiveTests.AddWalkClips(world);
-        // Quick walk clips so the 180-tick budget covers the whole circuit; the route executor reads only the root motion.
         var quick = Enumerable.Range(0, 31).Select(i => new System.Numerics.Vector3(i * 2f, 0f, 0f)).ToArray();
         for (var index = 11; index <= 20; index++)
             world.StandardWalkFallbackAnimationTable[(150, index)] = new AvatarAnimationClip($"walk{index}", quick.Length, [],
                 null, 60f, new System.Numerics.Vector3(60f, 0f, 0f), quick, 1000f,
-                // Tick's terminal fade reads StartVitaBoy's walk-loop (0x14) marker strides; without them the
-                // final segment never arrives (SAnimator.s 0x103507B0–0x103509F0).
+                // Route deceleration and terminal blending rely on locomotion footstep markers to compute
+                // stride distances and finalize the route.
                 LocomotionMarkerOne: index == 20 ? new AvatarAnimationMarker(0.25f, "lfoot") : null,
                 LocomotionMarkerTwo: index == 20 ? new AvatarAnimationMarker(0.75f, "rfoot") : null);
         world.LotRoomMaps[1] = OpenRoom();
@@ -404,15 +396,15 @@ public sealed class InteractionLifecycleTests
     {
         var bhav = new byte[13 + 4 * 12];
         BinaryPrimitives.WriteUInt16LittleEndian(bhav, 0x8003);
-        bhav[2] = 0; // type
-        bhav[3] = 1; // Sleep reads parameter 0; retain the test's supplied wait value.
-        bhav[4] = 2; // locals: XEVT value and chosen lane
+        bhav[2] = 0;
+        bhav[3] = 1;
+        bhav[4] = 2;
         BinaryPrimitives.WriteUInt32LittleEndian(bhav.AsSpan(9), 4);
         Instruction(bhav.AsSpan(13, 12), InteractionLifecycle.AcquireLaneOpcode, 1, 0xFF,
             [1, 1, 0, 0, 0, 0, 0, 0]);
         Instruction(bhav.AsSpan(25, 12), InteractionLifecycle.SetAttachmentOpcode, 2, 2,
             [1, 1, 0, 0, 0, 0, 0, 0]);
-        Instruction(bhav.AsSpan(37, 12), 0, 3, 3, [0, 0, 0, 0, 0, 0, 0, 0]); // Sleep parameter 0
+        Instruction(bhav.AsSpan(37, 12), 0, 3, 3, [0, 0, 0, 0, 0, 0, 0, 0]);
         Instruction(bhav.AsSpan(49, 12), InteractionLifecycle.ReleaseLaneOpcode, 0xFE, 0xFE, new byte[8]);
         var chunks = includeCapability
             ? new (string Type, ushort Id, byte[] Data)[]

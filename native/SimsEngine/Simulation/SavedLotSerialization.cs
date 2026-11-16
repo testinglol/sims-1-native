@@ -4,11 +4,9 @@ namespace SimsEngine.Simulation;
 
 public sealed partial class SimulationWorld
 {
-    /// <summary>Original objt entries, plus types assigned a slot when a runtime instance is constructed.</summary>
     internal Dictionary<short, ObjectTypeEntry> SavedObjectTypes { get; } = [];
     internal Dictionary<short, XObject> LoadedObjectInstances { get; } = [];
 
-    /// <summary>Starts a rollback scope for object type records created while a placement is still tentative.</summary>
     public SavedObjectTypeRegistrationScope BeginSavedObjectTypeRegistrationScope() =>
         new(this, SavedObjectTypes.ToDictionary(pair => pair.Key, pair => pair.Value),
             SavedObjectClasses.ToDictionary(pair => pair.Key, pair => pair.Value),
@@ -21,7 +19,7 @@ public sealed partial class SimulationWorld
         var classes = SavedObjectClasses.ToDictionary(pair => pair.Key, pair => pair.Value);
         foreach (var (index, entry) in additions)
         {
-            // A registration can outlive this placement only if another live or saved object uses it.
+            // Retains an object type registration only if another active or saved object references it.
             if (WalkOrder.Any(item => item.TypeRecord?.Key == unchecked((int)entry.Guid)) ||
                 LoadedObjectInstances.Values.Any(item => item.TypeRecord?.Key == unchecked((int)entry.Guid)) ||
                 (SavedLotObjects?.Objects.Any(item => item.TypeIndex == index) ?? false))
@@ -99,7 +97,8 @@ public sealed partial class SimulationWorld
             var state = BuildLiveObjectState(live, typeIndex, source.Version, original?.Decoded);
             result.Add(new LotObject(live.Id, typeIndex, original?.StateBytes ?? [], original?.StateOffset ?? 0, state));
         }
-        // Keep opaque records near their original positions while preserving the live objects' relative walk order.
+        // Preserves the relative walk order of active objects while keeping opaque records near their
+        // original positions.
         for (var index = 0; index < source.Objects.Count; index++)
         {
             var saved = source.Objects[index];
@@ -143,10 +142,11 @@ public sealed partial class SimulationWorld
         values0x108[4] = live.Position.X;
         values0x108[5] = live.Position.Y;
 
-        var managerFlags = baseState?.ManagerFlags is null || live.ClockManagerIndex < 1 ||
-                           live.ClockManagerIndex > ClockManager.Entries.Count
-            ? (baseState?.ManagerFlags ?? (!placeholder && version > 0x35 ? 0 : null))
-            : unchecked((int)ClockManager.Entries[live.ClockManagerIndex - 1].Flags);
+        int? managerFlags = placeholder || version <= 0x35
+            ? null
+            : live.ClockManagerIndex >= 1 && live.ClockManagerIndex <= ClockManager.Entries.Count
+                ? unchecked((int)ClockManager.Entries[live.ClockManagerIndex - 1].Flags)
+                : (baseState?.ManagerFlags ?? 0);
 
         return new ObjectState(
             values0x108,
@@ -190,7 +190,6 @@ public sealed partial class SimulationWorld
     }
 }
 
-/// <summary>Rolls back unreferenced saved-object type registrations unless placement commits.</summary>
 public sealed class SavedObjectTypeRegistrationScope : IDisposable
 {
     private readonly SimulationWorld world;

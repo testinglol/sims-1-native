@@ -7,7 +7,6 @@ namespace SimsEngine.Tests;
 
 public sealed class GlobalLibraryTests
 {
-    /// <summary>A one-instruction tree whose only instruction has <paramref name="opcode"/>.</summary>
     private static byte[] Tree(ushort opcode) =>
         new ChunkBuilder().U16(0x8002).S16(1).U8(0).U8(0).U8(0).U8(0).U32(0)
             .U16(opcode).U8(BhavInstruction.ReturnTrue).U8(BhavInstruction.ReturnFalse).Raw(new byte[8]).ToArray();
@@ -46,7 +45,7 @@ public sealed class GlobalLibraryTests
             File.WriteAllBytes(Path.Combine(globalFolder, "ChairGlobals.iff"), ChunkBuilder.File(("BHAV", 8192, Tree(3))));
             var definition = new ChunkBuilder();
             for (var field = 0; field < 20; field++) definition.U16(field == 14 ? (ushort)0x1234 : (ushort)0);
-            // The semi-global name is length-prefixed, in a GLOB chunk numbered 128 as most shipped files number it.
+            // GLOB chunk 128 stores the semi-global library name as a length-prefixed string.
             var glob = new ChunkBuilder().U8(12).Raw("chairglobals"u8).ToArray();
             File.WriteAllBytes(Path.Combine(objects, "Chair.iff"),
                 ChunkBuilder.File(("OBJD", 128, definition.ToArray()), ("GLOB", 128, glob), ("BHAV", 4096, Tree(2))));
@@ -88,8 +87,8 @@ public sealed class GlobalLibraryTests
             NamedFile("hello", 4097),
             NamedFile("Hello", 8193));
 
-        // IFFResFile::GetByName is case-insensitive, so the private match wins even when a later scope
-        // contains an exact-case label.
+        // Named tree resolution across IFF resource scopes is case-insensitive, prioritizing private scope
+        // matches over later scopes regardless of casing.
         Assert.Equal(4097, scope.FindNamedTree("Hello"));
         Assert.Equal(4097, scope.FindNamedTree("HELLO"));
     }

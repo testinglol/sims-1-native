@@ -54,16 +54,14 @@ public sealed class FloorToolTests
         Assert.Equal(40, tool.Commit());
         Assert.Equal(960, budget.Funds);
 
-        // Repainting the same pattern is a no-op
         Assert.Equal(0, tool.Rectangle(10, 10, 11, 11, pattern: 1));
         Assert.Equal(0, tool.Commit());
 
-        // Replacing with pattern 2 charges pattern 2's price (FUN_00488de7 lines 116-120)
         Assert.Equal(4, tool.Rectangle(10, 10, 11, 11, pattern: 2));
         Assert.Equal(80, tool.Commit());
         Assert.Equal(880, budget.Funds);
 
-        // Erasing refunds trunc(-0.5 - 0.8 * price) per tile
+        // Erasing a floor tile refunds an amount calculated as trunc(-0.5 - 0.8 * price) per tile.
         Assert.Equal(4, tool.Rectangle(10, 10, 11, 11, pattern: 0));
         Assert.Equal(-64, tool.Commit());
         Assert.Equal(944, budget.Funds);
@@ -83,21 +81,20 @@ public sealed class FloorToolTests
         var tool = new FloorTool(new SimulationWorld(), floors, catalog, budget,
             LotTerrain.Read(lot), LotPool.Read(lot), LotTiles.Read(lot), walls, LotWater.Read(lot));
 
-        // Paint half 4 with pattern 2: half 3 preserves the previous flat floor (1), floor sentinel becomes 0xff
+        // Painting a diagonal half-tile preserves the opposite half's pattern and sets the tile's base
+        // floor value to the split sentinel 0xFF.
         Assert.True(tool.Tile(10, 10, 2, out var changed, half: 4, bothDiagonalSides: false));
         Assert.True(changed);
         Assert.Equal(byte.MaxValue, floors[10, 10]);
         Assert.Equal(2, walls[10, 10][4]);
         Assert.Equal(1, walls[10, 10][2]);
 
-        // Erase half 4 only: because half 3 is still non-zero (1), floor sentinel remains 0xff
         Assert.True(tool.Tile(10, 10, 0, out changed, half: 4, bothDiagonalSides: false));
         Assert.True(changed);
         Assert.Equal(byte.MaxValue, floors[10, 10]);
         Assert.Equal(0, walls[10, 10][4]);
         Assert.Equal(1, walls[10, 10][2]);
 
-        // Erase half 3: both sides are now 0, so base floor becomes 0
         Assert.True(tool.Tile(10, 10, 0, out changed, half: 3, bothDiagonalSides: false));
         Assert.True(changed);
         Assert.Equal(0, floors[10, 10]);

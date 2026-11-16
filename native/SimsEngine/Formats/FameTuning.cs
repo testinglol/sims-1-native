@@ -2,9 +2,9 @@ using System.Globalization;
 
 namespace SimsEngine.Formats;
 
-/// <summary>The fame promotion tables loaded by Sims.exe from GameData/fame.iff (FUN_00404e49): STR# 5 contains
-/// score thresholds, STR# 4 friend-power thresholds, and STR# 6 has one comma-separated row of six skill thresholds
-/// per star level.</summary>
+/// <summary>Loads fame tuning tables from fame.iff: string table 5 defines star score thresholds, string
+/// table 4 defines friend-power thresholds, and string table 6 defines skill requirements per star level.
+/// </summary>
 public sealed record FameTuning(
     IReadOnlyList<int> FameStarThresholds,
     IReadOnlyList<int> FameFriendThresholds,

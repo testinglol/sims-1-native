@@ -5,7 +5,6 @@ namespace SimsEngine.Tests;
 
 public sealed class RefreshPrimitiveTests
 {
-    // Operand: the mode word at 0 (0 running object, 1 stack object), the selector word at 2. Bytes 4 to 7 are unused.
     private static byte[] Operand(short mode, short selector) =>
         [(byte)mode, (byte)((ushort)mode >> 8), (byte)selector, (byte)((ushort)selector >> 8), 0, 0, 0, 0];
 
@@ -37,7 +36,6 @@ public sealed class RefreshPrimitiveTests
     {
         var (context, _, host) = PrimitiveTestWorld.Create(stackObject: 5);
         context.World.Add(new XObject(5, PrimitiveTestWorld.Definition()));
-        // Mode 0: the running object (id 100). Mode 1: the stack object (id 5).
         Assert.Equal(PrimitiveResult.True, RefreshPrimitive.Execute(context, Operand(0, 1)));
         Assert.Equal(PrimitiveResult.True, RefreshPrimitive.Execute(context, Operand(1, 1)));
         Assert.Equal(new[] { "SendNotice(242,100)", "SendNotice(242,5)" }, host.Calls);
@@ -139,7 +137,6 @@ public sealed class RefreshPrimitiveTests
     [Fact]
     public void ModeOtherThanZeroOrOneRaisesBadParameterBeforeTheSubjectIsLookedUp()
     {
-        // Stack object 77 is missing, but the mode is checked first, so error 3 wins over error 21.
         var (context, _, host) = PrimitiveTestWorld.Create(stackObject: 77);
         Assert.Equal(SimulationError.BadParameterToUpdatePrimitive, Fails(() => RefreshPrimitive.Execute(context, Operand(2, 0))));
         Assert.Equal(SimulationError.BadParameterToUpdatePrimitive, Fails(() => RefreshPrimitive.Execute(context, Operand(-1, 0))));
@@ -149,7 +146,6 @@ public sealed class RefreshPrimitiveTests
     [Fact]
     public void MissingStackObjectIsCheckedBeforeTheSelector()
     {
-        // A bad selector with a missing stack object: Sims.exe reads the subject first, so error 21 wins.
         var (context, _, host) = PrimitiveTestWorld.Create(stackObject: 77);
         Assert.Equal(SimulationError.NoStackObjectPresentWhenRequired, Fails(() => RefreshPrimitive.Execute(context, Operand(1, 3))));
         Assert.Empty(host.Calls);
@@ -167,7 +163,6 @@ public sealed class RefreshPrimitiveTests
     [Fact]
     public void ModeZeroNeverReadsTheStackObject()
     {
-        // The frame names no stack object at all; the running object is the subject.
         var (context, _, host) = PrimitiveTestWorld.Create(stackObject: 77);
         Assert.Equal(PrimitiveResult.True, RefreshPrimitive.Execute(context, Operand(0, 1)));
         Assert.Equal(new[] { "SendNotice(242,100)" }, host.Calls);

@@ -4,13 +4,13 @@ using SimsEngine.Simulation;
 
 namespace SimsEngine.Tests;
 
-/// <summary>Show String (0x15), after FUN_00451af7: the string lookup, the "name : text" message to the UI and the
-/// result, which is always true.</summary>
+/// <summary>Unit tests for Show String (0x15), covering string table lookup, UI notification formatting,
+/// and unconditional true return value.</summary>
 public class ShowStringPrimitiveTests
 {
     private const short TableWord = 0x0102;
 
-    /// <summary>The operand: the string table in word 0 and the signed string index in word 1.</summary>
+    /// <summary>Operand layout encodes the string table ID in word 0 and the signed string index in word 1.</summary>
     private static byte[] Operand(short table = TableWord, short index = 1) =>
         [(byte)table, (byte)(table >> 8), (byte)index, (byte)(index >> 8), 0, 0, 0, 0];
 
@@ -63,7 +63,8 @@ public class ShowStringPrimitiveTests
     {
         var (context, host, me) = Lot();
         me.TypeRecord = null;
-        // With no text there is nothing to name, so the missing record is not read.
+        // When string text resolves to empty, the object name lookup is skipped and the primitive returns
+        // true.
         Assert.Equal(PrimitiveResult.True, ShowStringPrimitive.Execute(context, Operand()));
         host.Strings[(TableWord, 0)] = "Hi";
         Assert.Throws<InvalidOperationException>(() => ShowStringPrimitive.Execute(context, Operand()));

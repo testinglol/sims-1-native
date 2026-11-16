@@ -1,19 +1,11 @@
 namespace SimsEngine.Simulation;
 
-/// <summary>A person's avatar inventory: the ordered 12-byte records the Manage Inventory primitive (opcode 0x33)
-/// keeps, after the list helpers behind Sims.exe FUN_0041f38f (add), FUN_0041f429 (remove), FUN_0041f56d (adjust),
-/// FUN_0041f662 (find index), FUN_0041f69e (find next) and FUN_0041f4e7 (filter). The disassembly of FUN_00455338
-/// (0x455338) shows the calls, their argument order and the temp/operand bit encoding; the C bodies give the list
-/// rules below. The container struct itself is 16 bytes (base, begin, populated end, capacity end); the port keeps
-/// only the populated entries, which is all any primitive observes.
-/// <para>Inferred: each entry is two keys and a count. The container is kept per person and animation key (see
-/// <see cref="XPerson.InventoryOf"/>); the original resolves it through a global search keyed by the same value,
-/// so a shared animation could share one list, which the port does not model.</para></summary>
+/// <summary>Manages ordered avatar inventory records for the Manage Inventory primitive (opcode 0x33). Each
+/// record consists of two 32-bit keys and a 16-bit count.</summary>
 public sealed class AvatarInventory
 {
     private const int Capacity = 0x7fff;
 
-    /// <summary>One 12-byte record: two key dwords and a count word.</summary>
     public sealed class Entry(int key1, int key2, short count)
     {
         public int Key1 { get; } = key1;
@@ -23,15 +15,14 @@ public sealed class AvatarInventory
 
     private readonly List<Entry> _entries = [];
 
-    /// <summary>Whether FUN_004cee86 set the inventory record's 0x04000000 refresh bit.</summary>
     public bool Changed { get; private set; }
     public void MarkChanged() => Changed = true;
 
-    /// <summary>The entries in insertion order, after removals and filters.</summary>
     public IReadOnlyList<Entry> Entries => _entries;
 
-    /// <summary>FUN_0041f38f: a zero count answers true and changes nothing; otherwise the first entry with both
-    /// keys takes the count added (capped at 0x7fff), or a new entry is appended (false when 0x7fff entries stand).</summary>
+    /// <summary>Adds to the first entry matching both keys, capping the count at 32767, or appends a new
+    /// entry. A count of zero returns true without changes; returns false if maximum capacity is reached.
+    /// </summary>
     public bool Add(int key1, int key2, short count)
     {
         if (count == 0) return true;
@@ -47,9 +38,9 @@ public sealed class AvatarInventory
         return true;
     }
 
-    /// <summary>FUN_0041f429: a zero count answers true and changes nothing; otherwise the first entry with both keys
-    /// loses one token, regardless of the positive count argument. The entry is erased when that token was its last,
-    /// or when the count argument is -1. Missing entries answer false.</summary>
+    /// <summary>Removes a single token from the first entry matching both keys regardless of the positive
+    /// count value, deleting the entry when its count reaches zero or if count is -1. A count of zero
+    /// returns true without changes; missing entries return false.</summary>
     public bool Remove(int key1, int key2, short count)
     {
         if (count == 0) return true;
@@ -63,13 +54,11 @@ public sealed class AvatarInventory
         return true;
     }
 
-    /// <summary>Mac SimInventory::RemoveAllTokensOfType: erases every entry whose token type (first key) is
-    /// <paramref name="type"/>.</summary>
     public void RemoveAllOfType(int type) => _entries.RemoveAll(entry => entry.Key1 == type);
 
-    /// <summary>FUN_0041f56d: count 0 answers true and changes nothing; an index outside the entries answers
-    /// false. Otherwise a positive count is subtracted from that entry, dropping it at zero or below, and a
-    /// negative count removes the entry outright.</summary>
+    /// <summary>Adjusts the entry at the specified index. A positive count subtracts from the entry and
+    /// removes it if the count drops to zero or below, while a negative count removes the entry outright.
+    /// </summary>
     public bool Adjust(int index, short count)
     {
         if (count == 0) return true;
@@ -85,7 +74,6 @@ public sealed class AvatarInventory
         return true;
     }
 
-    /// <summary>FUN_0041f662: the count of the first entry with both keys, with its index, or 0 with index -1.</summary>
     public short FindIndex(int key1, int key2, out short index)
     {
         var found = Find(key1, key2);
@@ -93,10 +81,9 @@ public sealed class AvatarInventory
         return found < 0 ? (short)0 : _entries[found].Count;
     }
 
-    /// <summary>FUN_0041f69e through FUN_0041f748: starting after <paramref name="cursor"/> (which names the
-    /// previously found index, -1 for a fresh search), the count of the first entry with <paramref name="key1"/>
-    /// and, unless <paramref name="key2"/> is 0, with that second key. The cursor takes the found index, or -1
-    /// with a 0 answer. The start truncates to a short, as the original reads it.</summary>
+    /// <summary>Finds the next entry matching <paramref name="key1"/> (and <paramref name="key2"/> if
+    /// nonzero) starting after <paramref name="cursor"/>, updating the cursor to the found index or -1.
+    /// </summary>
     public short FindNext(int key1, ref short cursor, int key2)
     {
         var start = unchecked((short)(cursor + 1));
@@ -113,7 +100,6 @@ public sealed class AvatarInventory
         return 0;
     }
 
-    /// <summary>FUN_0041f4e7: drops every entry whose first key is <paramref name="key1"/>.</summary>
     public void FilterOut(int key1) => _entries.RemoveAll(entry => entry.Key1 == key1);
 
     private int Find(int key1, int key2)

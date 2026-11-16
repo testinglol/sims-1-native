@@ -3,11 +3,6 @@ using SimsSDL;
 
 namespace SimsSDL.UI;
 
-/// <summary>
-/// Sims.exe cWinHelp (FUN_0050ea9b): modal centered on screen with a STR# 166 topic list
-/// (width = max title width + 25, height = 12 * (helpFont.LineHeight + 3)),
-/// a 340px detail view to its right, and a centered OK WinBtn below.
-/// </summary>
 public sealed class OriginalHelpOverlay
 {
     public struct DrawItem
@@ -32,13 +27,12 @@ public sealed class OriginalHelpOverlay
     }
 
     private const double DetailWidth = 340;
-    private const int VisibleRows = 12; // cWinHelp sizes the list to twelve font lines (0050ea9b.c:67).
-    private const int PageStep = 12; // cWinHelp also initializes the widget's page-step field to 12.
-    private const double ScrollbarWidth = 17; // WinScrol.bmp is 204x20 across 12 cells (005f3a06.c:199).
+    private const int VisibleRows = 12;
+    private const int PageStep = 12;
+    private const double ScrollbarWidth = 17;
     private const double ScrollbarButtonHeight = 20;
-    private const double ScrollbarReservedWidth = 20; // cWinListBox reserves bmpHeight (20px) on the right (005f4e36.c:37, 005f51e0.c:32).
+    private const double ScrollbarReservedWidth = 20;
 
-    // SMCtrlMgr color sets (004ff397.c:26-74): DAT_006f2a44 normal, DAT_006f2a48 hover, DAT_006f2a4c selected.
     private static readonly (byte R, byte G, byte B) NormalColor = (195, 205, 205);
     private static readonly (byte R, byte G, byte B) HoveredColor = (255, 255, 255);
     private static readonly (byte R, byte G, byte B) SelectedColor = (0, 255, 255);
@@ -84,7 +78,6 @@ public sealed class OriginalHelpOverlay
 
     public OriginalHelpOverlay(GameContent content, SimsBitmapFont font, UIDevice device, OriginalUIStrings strings)
     {
-        // cWinHelp (0053a478.c:292 -> 0050e9b6.c:17 -> 0050ea9b.c) passes DAT_006f2aa4 = variablesans_12.ffn.
         SimsBitmapFont loadedHelpFont;
         try
         {
@@ -115,18 +108,15 @@ public sealed class OriginalHelpOverlay
         }
         _listWidth = Math.Max(200, maxLabelWidth + 25);
 
-        // cWinHelp loads resource 0xBC0, PopupInfoTiles.bmp, and TSPaint draws its nine-slice frame (0050ea9b.c:19, 0050efc7.c).
         var popup = new SimsBitmap(content.Read("UIGraphics/CPanel/Backgrounds/PopupInfoTiles.bmp"));
         _frame = OriginalGameplayOverlay.CreateImage(device, popup.Width, popup.Height, popup.Rgba, magenta: false);
         _frameEdge = popup.Width / 3;
 
-        // SMCtrlMgr::CreateButton (005e7b7d.c:33-35) creates a 3-slice cWinTileBtn (005f730f.c) of width >= 100 from WinBtn.bmp.
         var buttonBitmap = new SimsBitmap(content.Read("UIGraphics/Shared/Sys/WinBtn.bmp"));
         _button = OriginalGameplayOverlay.CreateImage(device, buttonBitmap.Width, buttonBitmap.Height, buttonBitmap.Rgba, magenta: true);
         _buttonSheetWidth = Math.Max(1, buttonBitmap.Width);
         _buttonCapWidth = (buttonBitmap.Width / 4 - 1) / 2;
 
-        // cWinListBox / cWinScrollbar use kSMSystemScrollbar ("UIGraphics/Shared/Sys/WinScrol.bmp", 005f4e36.c:35, 005f6677.c).
         var scrollBitmap = new SimsBitmap(content.Read("UIGraphics/Shared/Sys/WinScrol.bmp"));
         _scrollbar = OriginalGameplayOverlay.CreateImage(device, scrollBitmap.Width, scrollBitmap.Height, scrollBitmap.Rgba, magenta: false);
 
@@ -230,7 +220,8 @@ public sealed class OriginalHelpOverlay
         var upActive = scroll > 0 && _hoveredPoint is { } hpUp && Contains(upRect, hpUp);
         var downActive = scroll < maxScroll && _hoveredPoint is { } hpDown && Contains(downRect, hpDown);
 
-        // FUN_005f6677 (lines 70-113): cell 0/1 = Up normal/pressed, cell 3 = stretched Track, cell 4/5 = Down normal/pressed, cell 2 = Thumb.
+        // Scrollbar sprite cells map to up arrow (0 normal, 1 pressed), thumb (2), stretched track (3), and
+        // down arrow (4 normal, 5 pressed).
         result.Add(new DrawItem(_scrollbar, upRect, new Vector4((upActive ? 1f : 0f) * cellW, 0f, cellW, 1f)));
         if (trackRect.Height > 0)
         {
@@ -246,7 +237,6 @@ public sealed class OriginalHelpOverlay
 
     private void AppendTileButton(CGRect bounds, int frameIndex, List<DrawItem> result)
     {
-        // FUN_005f730f (cWinTileBtn::OnPaint): 3-slice horizontal button from WinBtn.bmp (left cap, stretched center, right cap).
         var framePx = _buttonSheetWidth / 4.0f;
         var basePx = frameIndex * framePx;
         var capPx = (float)_buttonCapWidth;
@@ -285,7 +275,6 @@ public sealed class OriginalHelpOverlay
         Selected = Math.Clamp(index, 0, _topics.Count - 1);
         _detailScroll = 0;
 
-        // cWinText (005e9913.c) applies a (2, 2) text margin; reserve 20px on the right if detail lines overflow and require a scrollbar.
         var fullWrapWidth = Math.Max(40, (int)DetailWidth - 4);
         List<string> lines;
         try
@@ -306,7 +295,6 @@ public sealed class OriginalHelpOverlay
             }
             catch
             {
-                // Keep initial wrapped lines on fallback.
             }
         }
 
@@ -319,7 +307,6 @@ public sealed class OriginalHelpOverlay
             }
             catch
             {
-                // Skip unrasterizable line.
             }
         }
 
@@ -406,7 +393,6 @@ public sealed class OriginalHelpOverlay
             }
         }
 
-        // cWinListBox::OnPaint (005f5039.c:31) fills listRect with PopupInfoTiles' center pixel (0050ea9b.c:78-79).
         result.Add(new DrawItem(_frame, list, new Vector4(1.0f / 3.0f, 1.0f / 3.0f, 1.0f / 3.0f, 1.0f / 3.0f)));
 
         var end = Math.Min(_topics.Count, _scroll + VisibleRows);
@@ -420,7 +406,6 @@ public sealed class OriginalHelpOverlay
                     ? _topicHoveredLabels[index]
                     : _topicLabels[index];
 
-            // cWinListBox::AddItem (005f51e0.c:27) sets item button margins to (left: 4, top: 1), vertically centered.
             var labelWidth = Math.Min(label.Size.Width, Math.Max(0, rowRect.MaxX - (rowRect.MinX + 4)));
             if (labelWidth <= 0) continue;
             result.Add(new DrawItem(
@@ -474,7 +459,6 @@ public sealed class OriginalHelpOverlay
         return result;
     }
 
-    /// <summary>Returns true when the help window should close.</summary>
     public bool Click(CGPoint point, CGSize canvas = default)
     {
         if (canvas.Width > 0 && canvas.Height > 0) _lastCanvas = canvas;

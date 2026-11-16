@@ -3,8 +3,6 @@ using System.Text;
 
 namespace SimsEngine.Formats;
 
-/// <summary>One note of an FSC ambience sequence: the sample to play with its volume, pan, repeat
-/// count and play probability. Field order is the tab-separated column order of the game files.</summary>
 public sealed record FscNote(
     ushort Volume,
     bool Rand,
@@ -26,15 +24,9 @@ public sealed record FscNote(
     bool Stereo,
     string Filename);
 
-/// <summary>An FSC ambience sequence: the tab-separated plaintext format the game stores in
-/// SoundData/Sound.far, ExpansionShared/Sound/Sound.far and ExpansionPack7/Sound/Sound.far
-/// (Outdoors\sim_amb.fsc, Beach\beach.fsc, Park\hotdatepark_amb.fsc, MTOutdoors\magic_amb.fsc).
-/// The sequencer reads one note per beat (60 / tempo seconds): a note with Rand set ends the
-/// current run and restarts from a random jump point, Loop holds the note for extra beats, and
-/// Prob gates the play on a draw below it out of 16. Those stepping semantics are inferred, not
-/// verified against Sims.exe: its note-stepping tick has not been located in the decompilation,
-/// and the original file format does not document the randomization rule.
-/// </summary>
+/// <summary>Represents an FSC audio ambience sequence. The sequencer evaluates one note per beat (60 /
+/// tempo seconds), where loop counts sustain playback, a probability value out of 16 gates execution, and a
+/// randomize flag branches playback to an indexed jump point.</summary>
 public sealed class FscSequence
 {
     public string VersionCode { get; }
@@ -54,7 +46,6 @@ public sealed class FscSequence
     public ushort DiffY { get; }
     public IReadOnlyList<FscNote> Notes { get; }
 
-    /// <summary>Note indices with Rand set: the jump targets a restart picks from.</summary>
     public IReadOnlyList<int> RandomJumpPoints { get; }
 
     private FscSequence(string versionCode, ushort[] header, List<FscNote> notes, List<int> randomJumpPoints)
@@ -78,15 +69,12 @@ public sealed class FscSequence
         RandomJumpPoints = randomJumpPoints;
     }
 
-    /// <summary>Reads a sequence from its file bytes (UTF-8, like the previous StreamReader parse).
-    /// Comment lines start with '#', the header is the first non-comment line after the version code,
-    /// and note lines carry exactly 20 tab-separated columns; anything else is skipped. Malformed data
-    /// throws a <see cref="ResourceFormatException"/> naming <paramref name="source"/> and the byte offset.</summary>
+    /// <summary>Parses an FSC ambience sequence file where comments begin with '#', followed by a header
+    /// line and 20 tab-delimited columns per note entry.</summary>
     public static FscSequence Read(byte[] bytes, string source = "FSC")
     {
         var data = bytes.AsSpan();
         if (data.Length >= 3 && data[0] == 0xEF && data[1] == 0xBB && data[2] == 0xBF) data = data[3..];
-        // Lines split the way StreamReader.ReadLine does (\r\n, \r or \n), so both readers see the same rows.
         var lines = new List<(string Text, int Offset)>();
         var start = 0;
         for (var index = 0; index <= data.Length; index++)
@@ -160,7 +148,5 @@ public sealed class FscSequence
         throw new ResourceFormatException(source, null, offset, $"'{value}' is not a number");
     }
 
-    /// <summary>Anything but "0" counts as set, matching the previous reader exactly: these are
-    /// Maxis-shipped files the old parse already loads, so acceptance stays identical.</summary>
     private static bool Flag(string value) => value != "0";
 }

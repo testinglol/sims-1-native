@@ -3,9 +3,8 @@ using SimsEngine.Simulation;
 
 namespace SimsEngine.World;
 
-/// <summary>FUN_0056e1dc's room-to-cell pass, followed by FUN_0056ea87's planner. Rebuild from current lot layers and
-/// objects, rather than retaining grown/shape/height bytes between rebuilds (FUN_0056e1c7 clears the original grid).
-/// Room membership and outside state use RoomMap, including its documented edge-reachability inference.</summary>
+/// <summary>Reconstructs the roof cell grid from lot layers, room maps, and objects through room-to-cell
+/// seeding and planning passes.</summary>
 public static class LotRoofGrid
 {
     public static RoofGrid Build(IffFile lot, int level, IEnumerable<XObject> objects, bool grow = false)
@@ -22,15 +21,13 @@ public static class LotRoofGrid
         return grid;
     }
 
-    /// <summary>Seeds four half-tile cells with bits 0 and 3 before growth, height and shape passes. Coordinates are
-    /// [row = 2*y, column = 2*x], matching RoofGrid. The Sims.exe room-grid sentinel -5 tests both adjacent rooms;
-    /// RoomMap represents such diagonal tiles with NoRoom and AdjacentRoomsAtTile.</summary>
+    /// <summary>Seeds four half-tile cells per tile (at row 2*y, column 2*x) with roofed and blocked flags
+    /// before growth, height, and shape passes. Diagonal tiles evaluate both adjacent rooms.</summary>
     public static RoofGrid Seed(IffFile lot, int level, IEnumerable<XObject> objects)
     {
         if (level is not (1 or 2)) throw new ArgumentOutOfRangeException(nameof(level));
         var rooms = RoomMap.Build(lot, level, LotWalls.Size, LotWalls.Size);
         var terrain = LotTerrain.Read(lot);
-        // FUN_0047870b leaves an omitted floor plane zero-filled.
         var upperFloors = level == 1 && (lot.Find(ResourceType.Parse("Arry"), 111) is not null ||
             lot.Find(ResourceType.Parse("Arry"), 101) is not null) ? LotFloors.Read(lot, 2) : null;
         var items = objects.ToArray();
@@ -41,9 +38,8 @@ public static class LotRoofGrid
         var roofable = new Dictionary<ushort, bool>();
         foreach (var room in rooms.RoomIds)
         {
-            // FUN_004689d6 reads the four terrain corner bytes for EVERY retained room tile. Each tile must be
-            // flat, but different tiles need not share the same height. FUN_00467ee7 sets cXRoom +0x74 for a
-            // category-8 object with Hidden == 0 and Room >= 0, provided the room key's low ten bits are nonzero.
+            // Every retained room tile must be individually flat, though different tiles within the room
+            // can have different elevations.
             var tiles = rooms.TilesInRoom(room).ToArray();
             var flat = tiles.All(tile => terrain.IsFlatAt(tile.X, tile.Y, terrain.ReferenceHeight(tile.X, tile.Y)));
             var roomOverride = (room & 0x3ff) != 0 && tiles.Any(tile => localObjects[tile].Any(item =>
@@ -59,10 +55,8 @@ public static class LotRoofGrid
             var room = rooms.RoomAt(x, y);
             var has = room != RoomMap.NoRoom ? Roofable(room)
                 : rooms.AdjacentRoomsAtTile(x, y) is { } pair && (Roofable(pair.First) || Roofable(pair.Second));
-            // FUN_0056e1dc reads the level-2 FLOOR word at manager +0x28, not its room id. The second test
-            // first checks level-2 object occupancy (FUN_004325af on the level-2 key), then iterates the level-1
-            // objects at this tile (FUN_0043f371 on the level-1 key) and resolves their alternate definition
-            // (FUN_004573f9), testing BuildModeType +0x8a == 3. Neither test applies upstairs.
+            // Blocks ground-level roofing if upper floor tiles or objects exist, or if ground-level objects
+            // at the tile have build mode type 3 (stairs).
             var blocked = level == 1 && ((upperFloors?[x, y] ?? 0) != 0 || upperObjects.Contains((x, y)) &&
                 localObjects[(x, y)].Any(item => item.TypeRecord?.AutonomyAlternativeTypeFlag == 3));
             for (var dy = 0; dy < 2; dy++)

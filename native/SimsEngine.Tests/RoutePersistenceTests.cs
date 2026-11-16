@@ -103,8 +103,8 @@ public sealed class RoutePersistenceTests
             new ObjectPosition(6 * 16 + 8, 5 * 16 + 8, 1),
         ]);
 
-        Assert.Equal(5f, person.AnimatorRootDirection); // Mac BeginFollow copies FTile direction to +0x88.
-        Assert.Equal(0f, person.AnimatorDisplacementX); // Mac BeginFollow clears +0x8c/+0x90/+0x94.
+        Assert.Equal(5f, person.AnimatorRootDirection);
+        Assert.Equal(0f, person.AnimatorDisplacementX);
         Assert.Equal(0f, person.AnimatorDisplacementY);
         Assert.Equal(0f, person.AnimatorDisplacementDirection);
     }
@@ -134,7 +134,6 @@ public sealed class RoutePersistenceTests
         context.World.StandardWalkFallbackAnimationTable[(150, 20)] = new AvatarAnimationClip(
             "test-walk", 2, [], StandardDistance: 3f, StandardRootMotionSamples: samples,
             DurationMilliseconds: 1000f);
-        // The 16-FTile lookahead offset equals the walk-start threshold StdAnimDist(0x13) × 16/3 (inclusive gait entry).
         context.World.StandardWalkFallbackAnimationTable[(150, 19)] = new AvatarAnimationClip(
             "test-walk-start", 2, [], StandardDistance: 3f, StandardRootMotionSamples: samples,
             DurationMilliseconds: 1000f);

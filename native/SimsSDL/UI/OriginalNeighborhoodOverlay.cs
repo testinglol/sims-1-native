@@ -23,7 +23,6 @@ public enum BannerAction
     Rezone,
     StudioTown,
     MagicTown,
-    /// <summary>Returns from an expansion map to the base neighborhood (Res_Nbhd 5209).</summary>
     ReturnHome
 }
 
@@ -33,9 +32,6 @@ public static class BannerActionExtensions
 
     public static IReadOnlyList<BannerAction> AllCases => AllBannerActions;
 
-    /// <summary>
-    /// The buttons the original creates on a map of the given lot-location mode (1 is the base neighborhood).
-    /// </summary>
     public static IReadOnlyList<BannerAction> ActionsForMapMode(int mode)
     {
         if (mode == 1)
@@ -101,10 +97,8 @@ public static class BannerActionExtensions
         _ => CGPoint.Zero
     };
 
-    /// <summary>Frames side by side in the button sheet.</summary>
     public static int FrameCount(this BannerAction action) => action == BannerAction.SimsLogo ? 1 : 4;
 
-    /// <summary>STR# 151 (<c>NghbBtnTips</c>) tooltip index.</summary>
     public static int TooltipIndex(this BannerAction action) => action switch
     {
         BannerAction.SelectFamily => 0,
@@ -146,7 +140,6 @@ public static class BannerActionExtensions
             ? "Return to Neighborhood View"
             : FallbackTooltips[action.TooltipIndex()];
 
-    /// <summary>The expansion map a travel button opens (UserData lot-location modes), if it is one.</summary>
     public static int? MapMode(this BannerAction action) => action switch
     {
         BannerAction.Downtown => 2,
@@ -156,7 +149,6 @@ public static class BannerActionExtensions
         _ => null
     };
 
-    /// <summary>The expansion folder whose presence enables a travel button (Hot Date, Vacation, Superstar, Makin' Magic).</summary>
     public static string? RequiredPackFolder(this BannerAction action) => action switch
     {
         BannerAction.Downtown => "ExpansionPack3",
@@ -166,7 +158,6 @@ public static class BannerActionExtensions
         _ => null
     };
 
-    /// <summary>STR# 225 "please purchase" tooltip index shown when the pack is missing.</summary>
     public static int? MissingPackTooltipIndex(this BannerAction action) => action switch
     {
         BannerAction.Downtown => 0,
@@ -326,7 +317,6 @@ public sealed class OriginalNeighborhoodOverlay
             [JsonPropertyName("popupDescription")]
             public string? PopupDescription { get; init; }
 
-            /// <summary>Each member's character-file thumbnail (BMP_ 2004), or null where it has none.</summary>
             [JsonPropertyName("memberImages")]
             public IReadOnlyList<string?>? MemberImages { get; init; }
 
@@ -427,31 +417,26 @@ public sealed class OriginalNeighborhoodOverlay
         [JsonPropertyName("families")]
         public IReadOnlyList<OriginalFamilyPickerOverlay.Family>? Families { get; init; }
 
-        /// <summary>
-        /// <c>.FAM</c> files waiting in the profile's <c>Import</c> folder, and whether the Import button is enabled
-        /// (it also counts <c>*.rdt</c> and <c>*.cmt</c> files, as the original does).
-        /// </summary>
+        /// <summary>Lists importable files waiting in the profile import directory, where the presence of
+        /// family, residential lot (.rdt), or community lot (.cmt) files enables the import control.</summary>
         [JsonPropertyName("imports")]
         public IReadOnlyList<Import>? Imports { get; init; }
 
         [JsonPropertyName("importEnabled")]
         public bool? ImportEnabled { get; init; }
 
-        /// <summary>The Unleashed destination picker's saved filter (STR# 6 string 3 of LotLocations, cWinNeighborhoodUL::LoadCurrentFilter).</summary>
         [JsonPropertyName("travelFilter")]
         public int? TravelFilter { get; init; }
 
         [JsonPropertyName("backgroundImagePath")]
         public string? BackgroundImagePath { get; init; }
 
-        /// <summary>The numbered neighborhood (<c>UserData</c> is 1) and every neighborhood installed in the profile.</summary>
         [JsonPropertyName("neighborhood")]
         public int? Neighborhood { get; init; }
 
         [JsonPropertyName("neighborhoods")]
         public IReadOnlyList<int>? Neighborhoods { get; init; }
 
-        /// <summary>Display names pack towns give themselves, by neighborhood number.</summary>
         [JsonPropertyName("neighborhoodNames")]
         public Dictionary<string, string>? NeighborhoodNames { get; init; }
     }
@@ -481,14 +466,14 @@ public sealed class OriginalNeighborhoodOverlay
         OriginalGameplayOverlay.Image Closed,
         OriginalGameplayOverlay.Image Open,
         CGRect HitRect,
-        /// <summary>One slot per family member; a member without a thumbnail keeps its place and draws nothing.</summary>
+        /// <summary>Allocates one slot per family member, preserving slot index alignment by drawing
+        /// nothing when a member lacks a thumbnail.</summary>
         IReadOnlyList<SimsBitmap?> Members);
 
     private sealed record Animation(
         CGPoint Position,
         IReadOnlyList<OriginalGameplayOverlay.Image> Frames);
 
-    /// <summary>Funds a newly created family starts with (original <c>money_for_new_family</c> tuning).</summary>
     public const int NewFamilyFunds = 20_000;
 
     private static readonly IReadOnlyDictionary<int, string> RolloverFallbacks = new Dictionary<int, string>
@@ -530,10 +515,8 @@ public sealed class OriginalNeighborhoodOverlay
     private readonly House[] _houses;
     private readonly IReadOnlyList<Manifest.Entry> _entries;
 
-    /// <summary>Unhoused families offered by the Select a Family screen (base neighborhood only).</summary>
     public IReadOnlyList<OriginalFamilyPickerOverlay.Family> Families { get; }
 
-    /// <summary>Families the Import button offers, in the host's order (its <c>import:INDEX</c> edit counts in this order).</summary>
     public IReadOnlyList<Manifest.Import> Imports { get; }
 
     private readonly bool _importEnabled;
@@ -564,7 +547,6 @@ public sealed class OriginalNeighborhoodOverlay
     public BannerAction? HoveredBanner { get; private set; }
     private (int House, OriginalGameplayOverlay.Image Image, CGSize Size)? _rolloverCache;
 
-    /// <summary>The tooltip under the banner button the pointer rests on (any button, enabled or not), with its text drawn once.</summary>
     private (BannerAction Action, string Text, OriginalGameplayOverlay.Image Image)? _bannerTip;
     private BannerAction? _hoveredTipAction;
     private double? _bannerTipStartedAt;
@@ -596,7 +578,6 @@ public sealed class OriginalNeighborhoodOverlay
         }
         else
         {
-            // cWinLotPopup (0054fcb8) 9-slices HotSpotPopupTiler.tga into offscreen RGB+alpha surfaces and composites text + BMP_ 2004 heads onto it.
             var tiler = new SimsTarga(content.Read("UIGraphics/Nbhd/HotSpotPopupTiler.tga"));
             _rolloverTiler = tiler;
             _rolloverBackground = OriginalGameplayOverlay.CreateImage(device, tiler.Width, tiler.Height, tiler.Rgba);
@@ -633,7 +614,6 @@ public sealed class OriginalNeighborhoodOverlay
             }
         }
 
-        // The base map has the full banner; expansion maps show the Downtown-style banner with a Return button.
         if (manifest.Mode == 4)
         {
             _filterToolbar = TryBannerImage("UIGraphics/NghUI/filter_toolbar_Unleashed.bmp");
@@ -663,7 +643,6 @@ public sealed class OriginalNeighborhoodOverlay
 
         bool baseMap = manifest.Mode == 1;
         _banner = BannerImage(baseMap ? "UIGraphics/NghUI/banner_neighborhood.bmp" : "UIGraphics/NghUI/banner_downtown.bmp");
-        // A highlighted vacation lot shows Res_Nbhd kNghVacationLogo (5441), or kVacationNoVacancy (5510) on Vacation Island.
         _vacationMark = TryBannerImage(manifest.Mode == 3
             ? "UIGraphics/VIsland/no_vacancy.bmp"
             : "UIGraphics/VIsland/vacationlogosmall.bmp");
@@ -785,8 +764,8 @@ public sealed class OriginalNeighborhoodOverlay
         _animations = animations;
 
         _outerFill = OriginalGameplayOverlay.CreateImage(device, 1, 1, [0, 50, 0, 255]);
-        // 0055e843.c:161-162, 00556bc9.c:149, 0054a15f.c:162, 00568a84.c:175, 00564927.c:123 load resource 0x1389 (5001, largeback.bmp)
-        // behind the centered 800x600 map whenever the screen exceeds 800px wide.
+        // Loads a wide background backdrop behind the centered 800x600 neighborhood map when the display
+        // resolution exceeds 800 pixels in width.
         string[] largeBackCandidates = manifest.Mode switch
         {
             5 => ["UIGraphics/Studiotown/largeback.bmp", "UIGraphics/Downtown/largeback.bmp", "UIGraphics/Magicland/largeback.bmp"],
@@ -805,7 +784,6 @@ public sealed class OriginalNeighborhoodOverlay
             }
             catch
             {
-                // Try next largeback candidate.
             }
         }
         _largeBackground = loadedLargeBack;
@@ -834,7 +812,6 @@ public sealed class OriginalNeighborhoodOverlay
                 }
                 catch
                 {
-                    // Fall back to smaller font if unavailable.
                 }
             }
             _neighborhoodNumberImage = numImg;
@@ -917,10 +894,6 @@ public sealed class OriginalNeighborhoodOverlay
         _houses = houses;
     }
 
-    /// <summary>
-    /// The neighborhood after <paramref name="current"/> in the installed list, wrapping at either end like the original
-    /// Previous/Next buttons (<c>0x0042a368</c> previous, <c>0x0042a3ca</c> next).
-    /// </summary>
     public static int? NeighborhoodAfter(int current, IReadOnlyList<int> installed, bool forward)
     {
         ArgumentNullException.ThrowIfNull(installed);
@@ -980,10 +953,10 @@ public sealed class OriginalNeighborhoodOverlay
 
     private (double Left, double Top, double Factor) Transform(CGSize canvas, float uiScale = 1f)
     {
+        _ = uiScale;
         double w = _canvasWidth;
         double h = _canvasHeight;
-        double cap = Math.Max(0.25, uiScale);
-        double factor = Math.Max(0.001, Math.Min(cap, Math.Min(canvas.Width / w, canvas.Height / h)));
+        double factor = Math.Max(0.001, Math.Min(canvas.Width / w, canvas.Height / h));
         double left = (canvas.Width - w * factor) / 2.0;
         double top = (canvas.Height - h * factor) / 2.0;
         return (left, top, factor);
@@ -1023,7 +996,6 @@ public sealed class OriginalNeighborhoodOverlay
         HoveredHouse = bestHouse;
     }
 
-    /// <summary>The Unleashed destination picker uses one category at a time.</summary>
     public void EnableTravelFilter()
     {
         if (Mode != 4 || _filterToolbar is null || _filterButtons.Count != 7)
@@ -1036,7 +1008,6 @@ public sealed class OriginalNeighborhoodOverlay
         _travelFilter = new NeighborhoodLotFilter(communityFlags, _savedTravelFilter);
     }
 
-    /// <summary>The filter mode cWinNeighborhoodUL::Shutdown passes to SaveCurrentFilter.</summary>
     public int? TravelFilterMode => _travelFilter?.SelectedMask;
 
     public bool ClickTravelFilter(CGPoint point, CGSize canvas, float uiScale = 1f)
@@ -1072,11 +1043,11 @@ public sealed class OriginalNeighborhoodOverlay
     public bool CanCreateHousehold(int house) =>
         (Mode == 1 || Mode == 7) && FindEntry(house)?.AvailableForCreation == true;
 
-    /// <summary>Whether the family living on a lot is away on vacation, which blocks evicting it (0x00552c63).</summary>
+    /// <summary>Indicates whether a household is currently away on vacation, which prevents evicting the
+    /// family.</summary>
     public bool IsOnVacation(int house) =>
         FindEntry(house)?.OnVacation == true;
 
-    /// <summary>The family living on a lot, shaped like a picker row, for eviction prompts.</summary>
     public OriginalFamilyPickerOverlay.Family? Occupant(int house)
     {
         if (FindEntry(house) is not { Occupied: true, Residential: true } entry)
@@ -1093,36 +1064,32 @@ public sealed class OriginalNeighborhoodOverlay
             MemberThumbnails: ThumbnailData(entry.MemberImages));
     }
 
-    /// <summary>While active, the Bulldoze/Evict banner button is drawn pressed and the next lot click proposes an eviction.</summary>
     public void SetEvictMode(bool value)
     {
         EvictMode = value;
         _rolloverCache = null;
     }
 
-    /// <summary>A bin family being moved in: lot rollovers show its Move-in entries.</summary>
     public void SetMovingInFamily(OriginalFamilyPickerOverlay.Family? value)
     {
         MovingInFamily = value;
         _rolloverCache = null;
     }
 
-    /// <summary>While active, the Rezone banner button is drawn pressed and the next lot click starts a rezoning.</summary>
     public void SetRezoneMode(bool value)
     {
         RezoneMode = value;
         _rolloverCache = null;
     }
 
-    /// <summary>Whether a lot's house is already bulldozed (no house on the buildable area), which the original game requires before rezoning.</summary>
+    /// <summary>Indicates whether a lot is completely bulldozed, which is required before the lot can be
+    /// rezoned.</summary>
     public bool IsBulldozed(int house) => FindEntry(house)?.Bulldozed == true;
 
     public bool HasLot(int house) => FindEntry(house) is not null;
 
-    /// <summary>The lot's current zoning as the original STR# 251 names it: 0 Residential, 1 Community.</summary>
     public int ZoningIndex(int house) => FindEntry(house)?.Residential == true ? 0 : 1;
 
-    /// <summary>The lot's <c>Sims.exe</c> <c>StateClass</c> (<c>1</c> residential, <c>2</c> community), or <c>null</c> if absent from the map.</summary>
     public int? StateClass(int house)
     {
         if (FindEntry(house) is not { } entry)
@@ -1132,7 +1099,6 @@ public sealed class OriginalNeighborhoodOverlay
 
     public int? Price(int house) => FindEntry(house)?.Price;
 
-    /// <summary>Vacant residential lots on the base or Magic Town map, in house order.</summary>
     public IReadOnlyList<int> VacantResidentialLots =>
         (Mode == 1 || Mode == 7)
             ? _entries.Where(static e => e.Residential && !e.Occupied).Select(static e => e.House).OrderBy(static h => h).ToArray()
@@ -1151,11 +1117,6 @@ public sealed class OriginalNeighborhoodOverlay
         return null;
     }
 
-    /// <summary>
-    /// The original rollover text for a lot: the STR# 134 entry Mac <c>cWinLotPopup::GetPopupIndex</c> picks, formatted as
-    /// <c>cWinLotPopup::SetHouseInfo</c> does. The travel picker is the Old Town map built as <c>cWinNeighborhoodUL(false)</c>,
-    /// whose lot mode is Visit.
-    /// </summary>
     public string? RolloverText(int house)
     {
         if (FindEntry(house) is not { } entry)
@@ -1233,10 +1194,9 @@ public sealed class OriginalNeighborhoodOverlay
             static (tpl, args) => OriginalUIStrings.Format(tpl, [.. args]));
     }
 
-    /// <summary>
-    /// The address template, chosen by house number as the original's rollover (<c>0x0054fcb8</c>) does: pack lot ranges use
-    /// their STR# 134 lines, and other lots use StreetNames.iff STR# 2000 at their STR# 2001 index, else STR# 134 entry 7.
-    /// </summary>
+    /// <summary>Resolves the street address template by lot number: expansion lot ranges use
+    /// expansion-specific strings, while standard lots look up street names in resource chunk STR# 2000 via
+    /// STR# 2001, falling back to default string entries.</summary>
     private string StreetTemplate(Manifest.Entry entry)
     {
         int house = entry.House;
@@ -1251,7 +1211,8 @@ public sealed class OriginalNeighborhoodOverlay
 
         if (index is int idx)
         {
-            // Downtown and Vacation Island lots first use the street from Downtown.iff or Vacation.iff, which the host exports.
+            // Downtown lots (21–31) and Vacation Island lots (40–49) prioritize street templates exported
+            // from their respective expansion packages.
             if ((house is >= 21 and <= 31 || house is >= 40 and <= 49) && entry.StreetTemplate is { } template)
                 return template;
             return _strings.NeighborhoodRollover(idx, "%s Sim Lane");
@@ -1260,11 +1221,9 @@ public sealed class OriginalNeighborhoodOverlay
         return entry.StreetTemplate ?? _strings.NeighborhoodRollover(7, "%s Sim Lane");
     }
 
-    /// <summary>
-    /// cWinLotPopup::SetHouseInfo (0054fcb8) composites 9-sliced HotSpotPopupTiler.tga, wrapped white text, and 25x25
-    /// BMP_ 2004 thumbnails into one offscreen surface (d4) and cWinLotPopup::Draw (0054fbc7 -> 00498cab) alpha-blends
-    /// that single surface with fade - 0x145 = -79 (center alpha 255 - 79 = 176).
-    /// </summary>
+    /// <summary>Composites the nine-sliced popup background, wrapped text, and 25x25 thumbnail portraits
+    /// into an offscreen surface, then alpha-blends the composite using a constant fade offset yielding a
+    /// center alpha of 176.</summary>
     private (OriginalGameplayOverlay.Image Image, CGSize Size)? RolloverComposite(int houseNumber)
     {
         if (_rolloverCache is { } cached && cached.House == houseNumber)
@@ -1426,7 +1385,6 @@ public sealed class OriginalNeighborhoodOverlay
         return (image, size);
     }
 
-    /// <summary>The housed and unhoused families on the map, for the Web page export.</summary>
     public IReadOnlyList<NeighborhoodWebExport.Family> WebFamilies(
         IReadOnlyDictionary<int, NeighborhoodWebExport.HouseViews>? houseViews = null)
     {
@@ -1559,10 +1517,6 @@ public sealed class OriginalNeighborhoodOverlay
         }
     }
 
-    /// <summary>
-    /// Whether a banner button works: Quit, Evict/Bulldoze and Return always do; Import needs a file in the Import folder;
-    /// travel buttons need their expansion installed.
-    /// </summary>
     public bool IsEnabled(BannerAction action) => action switch
     {
         BannerAction.Quit or BannerAction.Bulldoze or BannerAction.ReturnHome or BannerAction.SimsLogo => true,
@@ -1593,8 +1547,6 @@ public sealed class OriginalNeighborhoodOverlay
 
     public BannerAction? BannerActionAt(CGPoint point, CGSize canvas, float uiScale = 1f)
     {
-        // Sims.exe wires both CreditBtn (index 4) and TheSimsLogo (index 9 on base/UL, index 2 on sub-hoods) to cWinCredits
-        // (005607f3.c:79-80, 005591ff.c:82-83, 0054b9fa.c:25, 0056a5f4.c:35, 00565c9a.c:35, 00552fa9.c:26).
         foreach (var action in BannerActionExtensions.AllCases)
         {
             if (_bannerButtons.ContainsKey(action) && BannerRect(action, canvas, uiScale).Contains(point))
@@ -1649,7 +1601,6 @@ public sealed class OriginalNeighborhoodOverlay
         if (!_bannerTooltips.TryGetValue(action, out string? text))
             return null;
 
-        // Previous and Next name the town they lead to when a pack town gave itself a name.
         if ((action == BannerAction.Previous || action == BannerAction.Next)
             && Mode == 1
             && NeighborhoodAfter(Neighborhood, Neighborhoods, forward: action == BannerAction.Next) is int target
@@ -1690,7 +1641,6 @@ public sealed class OriginalNeighborhoodOverlay
                 top + house.HitRect.MinY * factor,
                 house.HitRect.Width * factor,
                 house.HitRect.Height * factor);
-            // Scripted checks key on these labels; the original rollover text is available from RolloverText.
             int id = house.Entry.House;
             string label = CanCreateHousehold(id)
                 ? $"Create a household on vacant lot {id}"
@@ -1753,7 +1703,7 @@ public sealed class OriginalNeighborhoodOverlay
             }
         }
 
-        // Multi-frame water wave animations are composited onto the map background before house lots (0056bf55, 00566ef1).
+        // Composites multi-frame water wave animations onto the map background before drawing lot overlays.
         AppendAnimations(multiFrame: true);
 
         foreach (var house in _houses)
@@ -1772,7 +1722,6 @@ public sealed class OriginalNeighborhoodOverlay
                 var openRect = new CGRect(x, openY, entry.OpenImageWidth * scale, entry.OpenImageHeight * scale);
                 items.Add(new DrawItem(house.Open, openRect));
 
-                // 0x0054e5e9 composites the mark centered on the highlighted image of a lot whose family is on vacation.
                 if (entry.OnVacation == true && _vacationMark is { } mark)
                 {
                     double markW = mark.Size.Width * scale;
@@ -1784,7 +1733,7 @@ public sealed class OriginalNeighborhoodOverlay
             }
         }
 
-        // Single-frame foreground overlays (visland_port, visland_trees, Studiotown/DScreen_top_layer) draw over houses.
+        // Renders single-frame scenery overlay animations above house graphics.
         AppendAnimations(multiFrame: false);
 
         if (_travelFilter is { } activeFilter && _filterMarkers.TryGetValue(activeFilter.SelectedMask, out var marker))
@@ -1875,7 +1824,6 @@ public sealed class OriginalNeighborhoodOverlay
         return items;
     }
 
-    /// <summary>Draws a tiler image with its <paramref name="sourceEdge"/>-pixel corners and edges kept at <paramref name="requestedEdge"/> points and its centre stretched.</summary>
     public static IReadOnlyList<DrawItem> NineSlice(
         OriginalGameplayOverlay.Image image,
         CGRect rect,
@@ -1919,7 +1867,6 @@ public sealed class OriginalNeighborhoodOverlay
         return items;
     }
 
-    /// <summary>The banner button tooltip: the same translucent panel as the lot rollover, centred under the button.</summary>
     private void AppendBannerTipItems(CGSize canvas, float uiScale, List<DrawItem> outItems)
     {
         if (_bannerTip is not { } tip
@@ -1994,8 +1941,8 @@ public sealed class OriginalNeighborhoodOverlay
         if (house is null || RolloverComposite(hoveredHouse) is not { } composite)
             return;
 
-        // The original tooltip placement (0x005ddae6, drawn by 0x005d9f30): the box's left edge at the middle of the lot,
-        // one pixel above it, or two pixels below it when that would come within 3 pixels of the top, then moved inside the screen.
+        // Positions the tooltip with its left edge centered on the lot, placed one pixel above or two
+        // pixels below when within three pixels of the screen top.
         var box = composite.Size;
         var hit = house.HitRect;
         double originX = Math.Truncate((hit.MinX + hit.MaxX) / 2.0);

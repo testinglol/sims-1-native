@@ -16,7 +16,7 @@ public sealed class RoofGridTests
     [Fact]
     public void HeightIsTheNumberOfFullyRoofedRingsAroundACell()
     {
-        var grid = Square(16, 4, 10); // A 7x7 seed gains one ring of eaves before heights are computed.
+        var grid = Square(16, 4, 10);
         grid.Plan(false);
         Assert.Equal(4, grid.Height(7, 7));
         Assert.Equal(1, grid.Height(4, 4));

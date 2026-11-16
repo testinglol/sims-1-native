@@ -15,19 +15,16 @@ using SimsEngine.World;
 
 namespace SimsSimulation;
 
-/// <summary>Builds the frontend's lot scene from the native world and the lot's Arry layers: terrain triangles with
-/// grass colours and floor diamonds with a generated colour texture per pattern. Object sprites and textured Sim avatar
-/// meshes are exported from the native resource readers. Coordinates use <see cref="LotCamera"/>,
-/// the projection used by the native scene renderer.</summary>
+/// <summary>Builds the lot scene from world state and ARRY layers, exporting terrain triangles, floor
+/// diamonds, object sprites, and avatar meshes projected into camera space.</summary>
 internal static class SceneExporter
 {
     internal const int Size = 64;
 
     private static readonly ConcurrentDictionary<string, bool> speechBuffersCache = new(StringComparer.Ordinal);
 
-    /// <summary>Mac Product::GenerateSpeechIcons loads both global speech buffers before it calls
-    /// RenderSpeechShot (Catalog.s 0x10200F44–0x10200FCF). These are the 0x2328/0x2329 resources
-    /// declared as Other/SpeechMedium.bmp and Other/SpeechLarge.bmp in UIGraphics/Res_Other.RT.</summary>
+    /// <summary>Loads the global speech balloon background bitmaps (resources 0x2328 and 0x2329) required
+    /// for compositing medium and large speech icons.</summary>
     private static bool HasProductSpeechBuffers(string gameRoot) =>
         speechBuffersCache.GetOrAdd(gameRoot, LoadProductSpeechBuffers);
 
@@ -41,8 +38,6 @@ internal static class SceneExporter
             var medium = archive.Find("Other/SpeechMedium.bmp");
             var large = archive.Find("Other/SpeechLarge.bmp");
             if (medium is null || large is null) return false;
-            // LoadBuffer must produce both image handles before Mac calls RenderSpeechShot. Decode them here
-            // so a present-but-unreadable FAR entry follows that same failed-load path.
             _ = BitmapCodec.Read(archive.Read(medium).ToArray());
             _ = BitmapCodec.Read(archive.Read(large).ToArray());
             return true;
@@ -57,13 +52,9 @@ internal static class SceneExporter
         }
     }
 
-    /// <summary>Extracts one object's original directional sprites from a normal native scene as the small scene
-    /// payload consumed by the frontend's held-object renderer. Texture files stay beside the source scene.</summary>
     internal static object? PlacementGhost(string scenePath, short objectId, string? referenceScenePath = null)
         => PlacementGhost(scenePath, new HashSet<short> { objectId }, referenceScenePath);
 
-    /// <summary>Extracts all directional sprites for a newly created object group, keeping physical member artwork
-    /// together in the held-object scene.</summary>
     internal static object? PlacementGhost(string scenePath, IReadOnlySet<short> objectIds, string? referenceScenePath = null)
     {
         using var document = JsonDocument.Parse(SimsSimulation.InMemorySessionAssets.ReadAllBytes(scenePath));
@@ -256,17 +247,17 @@ internal static class SceneExporter
 
     private static readonly JsonSerializerOptions Json = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
-    private sealed record Vertex(float X, float Y, float Z, float U, float V, float Nx, float Ny, float Nz);
-    private sealed record Texture(string File, int Width, int Height, string Encoding);
-    private sealed record WallSide(int X, int Y, int Level, int Direction, int Cut = 0, int? Edge = null, int? Side = null);
-    private sealed record WallDepth(int X, int Y, int Level, int Configuration);
-    private sealed record WallJunction(int X, int Y, int Level, int Flags, int Frame, bool Down);
-    private sealed record WaterSurface(int Adjacency, ushort Sprite, ushort[] Corners);
-    private sealed record FloorSurface(int X, int Y, ushort Pattern, int Half, int Level = 1, WaterSurface? Water = null);
-    private sealed record ZoomImage(int Texture, float X, float Y, float Width, float Height,
+    internal sealed record Vertex(float X, float Y, float Z, float U, float V, float Nx, float Ny, float Nz);
+    internal sealed record Texture(string File, int Width, int Height, string Encoding);
+    internal sealed record WallSide(int X, int Y, int Level, int Direction, int Cut = 0, int? Edge = null, int? Side = null);
+    internal sealed record WallDepth(int X, int Y, int Level, int Configuration);
+    internal sealed record WallJunction(int X, int Y, int Level, int Flags, int Frame, bool Down);
+    internal sealed record WaterSurface(int Adjacency, ushort Sprite, ushort[] Corners);
+    internal sealed record FloorSurface(int X, int Y, ushort Pattern, int Half, int Level = 1, WaterSurface? Water = null);
+    internal sealed record ZoomImage(int Texture, float X, float Y, float Width, float Height,
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? DepthTexture = null);
-    private sealed record RoofSurface(string Part, uint Style, float Pitch, string File);
-    private sealed record Mesh(int Texture, int ObjectID, float Depth, Vertex[] Vertices, int Level,
+    internal sealed record RoofSurface(string Part, uint Style, float Pitch, string File);
+    internal sealed record Mesh(int Texture, int ObjectID, float Depth, Vertex[] Vertices, int Level,
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? Room = null,
         bool Unlit = false,
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] FloorSurface? Floor = null,
@@ -278,17 +269,18 @@ internal static class SceneExporter
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? ShadowBrightness = null,
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ZoomImage? FloorShadow = null,
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ZoomImage? FloorShadowNear = null,
-        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ZoomImage? FloorShadowFar = null);
-    private sealed record TerrainVertex(float X, float Y, int R, int G, int B, int Dr, int Dg, int Db, int Grass);
-    /// <summary>The mask art of a wall style: <see cref="BaseStyle"/> indexes walls.iff, or <see cref="File"/> and
-    /// <see cref="SpriteBase"/> name the six SPRs an architectural window or door stores in its own object file.</summary>
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ZoomImage? FloorShadowFar = null,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] float[]? Tint = null);
+    internal sealed record TerrainVertex(float X, float Y, int R, int G, int B, int Dr, int Dg, int Db, int Grass);
+    /// <summary>Represents mask art for a wall style, referencing either a base style in walls.iff or six
+    /// SPR# frames defined within a door or window object file.</summary>
     internal sealed record WallStyleArt(IffFile? File, ushort SpriteBase, ushort BaseStyle)
     {
         public static WallStyleArt Base(ushort style) => new(null, 0, style);
     }
 
-    private sealed record CensorRect(float X, float Y, float Width, float Height, float Depth);
-    private sealed record SceneSprite(int Texture, float X, float Y, int Width, int Height, bool Flip, short ObjectID, float Depth, int Layer,
+    internal sealed record CensorRect(float X, float Y, float Width, float Height, float Depth);
+    internal sealed record SceneSprite(int Texture, float X, float Y, int Width, int Height, bool Flip, short ObjectID, float Depth, int Layer,
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? DepthTexture = null,
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] float? DepthNear = null,
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] float? DepthFar = null,
@@ -303,19 +295,67 @@ internal static class SceneExporter
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? ShadowBrightness = null,
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ZoomImage? FloorShadow = null,
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ZoomImage? FloorShadowNear = null,
-        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ZoomImage? FloorShadowFar = null);
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ZoomImage? FloorShadowFar = null,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? HideAtFarZoom = null);
+
+    internal sealed record SoundSourceRecord(short ObjectID, int Level, float X, float Y, float Z);
+
+    internal sealed record ExportedLotScene(
+        short House,
+        float Width,
+        float Height,
+        int LotSize,
+        int[] FloorDiagonals,
+        short[] TerrainHeights,
+        int CameraOrientation,
+        float OriginX,
+        float OriginY,
+        string WallMode,
+        bool RoofsVisible,
+        int ViewLevel,
+        int Stories,
+        SceneLighting.State? Lighting,
+        Texture[] Textures,
+        SceneSprite[] Sprites,
+        SoundSourceRecord[] SoundSources,
+        TerrainVertex[] Terrain,
+        float PlacementLift,
+        Mesh[] Meshes,
+        CensorRect[] CensorRects,
+        string[] Limitations,
+        string[] MissingResources);
+
+    internal sealed record DirectAnimationMesh(
+        int Texture,
+        int ObjectID,
+        float Depth,
+        int Level,
+        int? Room,
+        ZoomImage? FloorShadow,
+        ZoomImage? FloorShadowNear,
+        ZoomImage? FloorShadowFar,
+        Vertex[] Vertices,
+        float ShiftX,
+        float ShiftY,
+        float[]? Tint = null);
+
+    internal sealed record DirectAnimationFrame(
+        long BaseRevision,
+        long Sequence,
+        long Updates,
+        int TextureStart,
+        SceneLighting.State? Lighting,
+        Texture[] Textures,
+        SceneSprite[] Sprites,
+        DirectAnimationMesh[] Meshes,
+        CensorRect[] CensorRects);
     private static readonly (int X, int Y, int Width, int Height)[] WallRectangles = [(2, 39, 32, 136), (34, 39, 32, 136), (2, 55, 64, 120), (30, 73, 8, 116)];
-    // WallComponent.DESTINATION_NEAR and DESTINATION_FAR in their own zoom's pixels.
     private static readonly (int X, int Y, int Width, int Height)[] NearWallRectangles = [(4, 77, 64, 271), (68, 77, 64, 271), (4, 109, 128, 240), (60, 145, 16, 232)];
     private static readonly (int X, int Y, int Width, int Height)[] FarWallRectangles = [(1, 20, 16, 68), (17, 20, 16, 68), (1, 28, 32, 60), (15, 37, 4, 58)];
-    // WallComponent.JUNCDEST_MED: the medium junction destination, which the near and far destinations are
-    // scaled to 64x32 against when they are expressed in medium-zoom scene units.
     private static readonly (int X, int Y) JunctionOrigin = (2, 159);
-    // TextureGenerator.FLAT_Z_INC, the per-row depth gradient of floor and junction ramps.
     private const float FlatDepthIncrement = 1.525f;
-    // TextureGenerator.WallZBufferConfig: near, medium and far wall faces in the order top-left, top-right,
-    // horizontal diagonal and vertical diagonal (rows 0-11), the floor ramp and its vertical flip (12-17), then
-    // the walls-up junction ramp (18-20). Columns are width, height, start intensity and the two depth gradients.
+    // Defines wall, floor, and junction depth ramp configurations across zoom levels, specifying
+    // dimensions, base intensity, and depth gradients.
     private static readonly float[][] WallDepthConfig =
     [
         [64, 271, 74, 1, 0.5f], [64, 271, 135, -1, 0.5f], [128, 240, 89.5f, 0, 0.5f], [16, 232, 45, 0, 0.5f],
@@ -323,10 +363,11 @@ internal static class SceneExporter
         [16, 67, 74, 4, 2f], [16, 67, 135, -4, 2f], [32, 60, 89.5f, 0, 2f], [4, 58, 45, 0, 2f],
         [128, 64, 255, 0, -FlatDepthIncrement], [64, 32, 255, 0, -FlatDepthIncrement * 2], [32, 16, 255, 0, -FlatDepthIncrement * 4],
         [128, 64, 153, 0, FlatDepthIncrement], [64, 32, 153, 0, FlatDepthIncrement * 2], [32, 16, 153, 0, FlatDepthIncrement * 4],
-        [128, 64, 263, 0, -FlatDepthIncrement], [64, 32, 263, 0, -FlatDepthIncrement * 2], [32, 16, 263, 0, -FlatDepthIncrement * 4],
+        [128, 64, 235, 0, -FlatDepthIncrement], [64, 32, 235, 0, -FlatDepthIncrement * 2], [32, 16, 235, 0, -FlatDepthIncrement * 4],
     ];
 
-    // Sims.exe DAT_006cd440 (Mac lbl_10614590 in Vertex.s): maps 8-bit camera-rotated junction mask to 1-based SPR# frame (0 or 255 = none).
+    // Maps an 8-bit camera-rotated wall junction mask to a 1-based SPR# frame index, where 0 or 255
+    // indicates no junction.
     internal static ReadOnlySpan<byte> JunctionFrames =>
     [
         0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
@@ -350,12 +391,10 @@ internal static class SceneExporter
     internal static ushort SelectedGraphic(ushort baseGraphic, short graphicOffset) =>
         unchecked((ushort)(baseGraphic + graphicOffset));
 
-    /// <summary>The one-bit direction flag a draw group names a facing by: Sims.exe stores a three-bit compass
-    /// direction (0 north, 2 east, 4 south, 6 west, odd values the diagonals) and DGRP names each facing by
-    /// <c>1 &lt;&lt; index</c> (1, 2, 4, 8, 16, 32, 64, 128), and camera rotation advances that flag by one quadrant.</summary>
+    /// <summary>Converts a three-bit compass direction into the single-bit facing mask used by DGRP
+    /// resources, shifted by camera rotation.</summary>
     internal static int FacingFlag(int direction) => 1 << (direction & 7);
 
-    /// <summary>Selects the DGRP image for one facing and zoom (1 far, 2 medium, 3 near).</summary>
     internal static DrawGroupImage? SelectedImage(DrawGroup group, int direction, int cameraOrientation, int zoom = 2)
     {
         var rotatedDirection = (uint)FacingFlag(direction) << (cameraOrientation * 2);
@@ -369,7 +408,6 @@ internal static class SceneExporter
         return null;
     }
 
-    /// <summary>FUN_004c828c blits the frame's stored rectangle; a zero-sized frame draws nothing.</summary>
     internal static bool FrameHasPixels(int width, int height) => width > 0 && height > 0;
 
     internal static bool HasFloorArtwork(ushort pattern) =>
@@ -377,37 +415,32 @@ internal static class SceneExporter
 
     internal static ushort WallMaskId(ushort wallStyle, bool down, int zoom = 1)
     {
-        // WorldWallProvider.InitGlobals derives every base style's mask from the globals walls SPR run: far masks
-        // start at 2, medium at 514 and near at 1026, two per style. Style 1 is the ordinary wall. Saved grid styles
-        // outside the four opening styles are normalised to 1 before they reach here (DecodeWalls).
+        // Global wall mask SPR# indices start at 2 for far, 514 for medium, and 1026 for near zoom,
+        // allocating two frames per style.
         var style = wallStyle is >= 1 and <= 21 ? wallStyle : (ushort)1;
         var origin = zoom switch { 0 => 2, 2 => 1026, _ => 514 };
         return (ushort)(origin + (style - 1) * 2 + (down ? 1 : 0));
     }
 
-    /// <summary>DecodeWalls keeps the four opening styles 2, 12, 13 and 14 and turns every other stored grid style
-    /// into the ordinary style 1. Object-supplied styles such as a door's 3 are applied after this normalisation.</summary>
+    /// <summary>Normalizes stored wall styles to standard style 1 while preserving opening cutout styles 2,
+    /// 12, 13, and 14 before object-supplied styles are applied.</summary>
     internal static ushort NormalizedWallStyle(byte style) => style is 1 or 2 or 12 or 13 or 14 ? style : (ushort)1;
 
-    /// <summary>Wall top junction cap pieces (SPR# 4096..4098) are emitted only when walls are fully UP
-    /// on the active view level, or for lower stories below the active view level (Mac Vertex.s 0x102B1EDC).</summary>
+    /// <summary>Wall top junction cap pieces (SPR# 4096..4098) are rendered only when walls are fully up on
+    /// the active story, or on stories below the active view level.</summary>
     internal static bool ShouldEmitWallJunction(int wallLevel, int viewLevel, string wallMode) =>
         wallLevel < viewLevel || wallMode == "up";
 
-    /// <summary>Selects the wall style art: an object-provided style (e.g. door or window mask) overrides
-    /// ordinary style 1, preserved unconditionally regardless of wall height/cutaway (Mac Wall.s 0x102B82D0).</summary>
     internal static WallStyleArt ResolveWallStyle(ushort style, WallStyleArt? objectStyle) =>
         style == 1 && objectStyle is not null ? objectStyle : WallStyleArt.Base(style);
 
-    /// <summary>Computes the mask SPR# id for a wall style. For object-supplied styles (doors/windows),
-    /// lowered walls offset by +3 to select the doorway cutout opening (Mac Wall.s 0x102B82DC).</summary>
+    /// <summary>Computes the mask SPR# ID for a wall style, offsetting object-supplied door and window
+    /// masks by +3 when walls are lowered to select the doorway cutout.</summary>
     internal static ushort ResolveWallMaskId(WallStyleArt styleArt, bool down, int zoom = 1) =>
         styleArt.File is not null
             ? (ushort)(styleArt.SpriteBase + (down ? 3 : 0) + (zoom switch { 0 => 0, 2 => 2, _ => 1 }))
             : WallMaskId(styleArt.BaseStyle, down, zoom);
 
-    /// <summary>Populates wall junction bitmasks from tile segment flags and styles matching original
-    /// Sims.exe / Mac reference bitmask parity (Mac lbl_105C1200: 0x50 = 16|64, lbl_105C1210: 0xA0 = 32|128).</summary>
     internal static void PopulateTileJunctionFlags(
         int[] junctions,
         int lotSize,
@@ -438,8 +471,8 @@ internal static class SceneExporter
             return style == 1;
         }
 
-        // Sims.exe (0x0053dd1c, 0x0053d257): segment bit 1 (top-left edge along +y) sets bit 4 at (x, y) and
-        // bit 1 at (x, y + 1); segment bit 2 (top-right edge along +x) sets bit 8 at (x, y) and bit 2 at (x + 1, y).
+        // Segment bit 1 (top-left edge) sets junction bit 4 at (x, y) and bit 1 at (x, y + 1); segment bit
+        // 2 (top-right edge) sets bit 8 at (x, y) and bit 2 at (x + 1, y).
         if (Thick(1, styleSide0, x - 1, y))
         {
             junctions[y * s + x] |= 4;
@@ -454,10 +487,8 @@ internal static class SceneExporter
                         (cutawayMask is null || !cutawayMask[y * lotSize + x]);
         if ((segments & 0x30) == 0x20 && diagThick)
         {
-            // The vertical diagonal runs from vertex (x, y) down to (x + 1, y + 1). FUN_0053d257 pairs the
-            // diagonal arms as 0x10/0x40 and 0x80/0x20 at a line's two ends, and the walls.iff junction art draws
-            // 0x10 as the arm going up (-x-y) and 0x40 as the arm going down (+x+y), so the top vertex takes 0x40 and
-            // the bottom vertex 0x10 (the reverse pointed both trims away from the wall).
+            // Diagonal wall junction arms pair 0x10 and 0x40 at line endpoints; walls.iff junction art maps
+            // 0x40 to the downward arm and 0x10 to the upward arm.
             junctions[y * s + x] |= 64;
             if (x + 1 < lotSize && y + 1 < lotSize) junctions[(y + 1) * s + x + 1] |= 16;
         }
@@ -468,24 +499,20 @@ internal static class SceneExporter
         }
     }
 
-    /// <summary>walls.iff stores a pattern's far art at 1536 + pattern, its medium art at 1792 + pattern and its
-    /// near art at 2048 + pattern (WorldWallProvider.InitGlobals).</summary>
+    /// <summary>Calculates the wallpaper pattern SPR# resource ID in walls.iff by adding the pattern index
+    /// to 1536 for far, 1792 for medium, and 2048 for near zoom.</summary>
     internal static ushort WallPatternId(ushort pattern, int zoom) =>
         (ushort)((zoom switch { 0 => 1536, 2 => 2048, _ => 1792 }) + pattern);
 
     internal static int WallPaletteId(int paletteId) =>
         paletteId is >= 0 and <= ushort.MaxValue ? paletteId : 0;
 
-    /// <summary>DrawSpriteSlot selects the zoom frame within each three-frame group, then offsets by the current
-    /// animation frame stored at SpriteSlot +0x20 (Mac ObjectDraw.s 0x100C6650).</summary>
     internal static int RuntimeSlotSpriteFrame(int scale, int animationFrame) => 3 - scale + animationFrame * 3;
 
-    /// <summary>DrawSpriteSlot selects the scale frame only for the static +0x2c/+0x30 balloon and label shapes.</summary>
     internal static int RuntimeSlotOverlayFrame(int scale) => 3 - scale;
 
-    /// <summary>DrawSpriteSlot centres a PersonFinder/Product speech image on the runtime-slot anchor after
-    /// applying the source's scale-specific 0x20/-36 offset (00438198.c:35-36, 155-158; camera.Project already
-    /// returns the direct world-point / tile-centre screen Y rather than cRenderContext's tile-top renderY).</summary>
+    /// <summary>Calculates speech balloon screen coordinates by centering the image horizontally on the
+    /// runtime slot anchor and applying scale-adjusted vertical offsets.</summary>
     internal static (int X, int Y) RuntimeSlotSpeechImagePosition(float renderX, float renderY, float slotZ,
         int width, int height, int scale = 2)
     {
@@ -496,15 +523,15 @@ internal static class SceneExporter
         return ((int)(slotX + imageOffsetX - width / 2f), (int)(slotY + imageOffsetY - height / 2f));
     }
 
-    /// <summary>DrawSpriteSlot's scale-specific anchor adjustment (subtracting GetShapeBounds height: 00438198.c:35-36,50,91,171)
-    /// followed by DrawShape's SPR# bounds offset (004c7387.c:59-64).</summary>
+    /// <summary>Adjusts runtime slot sprite screen position by subtracting shape bounds height and applying
+    /// SPR# bounding box offsets.</summary>
     internal static (int X, int Y) RuntimeSlotSpritePosition(float renderX, float renderY, float slotZ,
         int height, short boundsLeft = 0, short boundsTop = 0, int scale = 2) =>
         ((int)(renderX - (8 << scale) / 2f + boundsLeft),
             (int)(renderY - slotZ * (1 << (scale + 1)) - height + boundsTop));
 
-    /// <summary>0049bafe.c:106 + 004cc548.c:85-95 + 004e8332.c: pre-baked Speech BMPs are composited over
-    /// SpeechMedium.bmp / SpeechLarge.bmp and blitted with 16-bit RGB565 corner-(0,0) color-key transparency.</summary>
+    /// <summary>Applies transparency to composited speech balloon bitmaps using the 16-bit RGB565 color key
+    /// sampled from the top-left corner pixel.</summary>
     internal static void KeySpeechBitmapTransparency(int width, int height, byte[] rgba)
     {
         if (width <= 0 || height <= 0 || rgba.Length < 4) return;
@@ -526,10 +553,8 @@ internal static class SceneExporter
         }
     }
 
-    /// <summary>ObjSelector::GetShadowID returns OBJD.Shadow for a single tile. For a multi-tile object it builds
-    /// an eight-neighbour mask from sibling definitions in the same IFF, ignoring elevated parts. The Mac source
-    /// then rejects masks its ShadowID lookup table cannot represent; FloorShadowMgr's renderer consumes that
-    /// mask separately.</summary>
+    /// <summary>Determines an object's shadow ID, using OBJD.Shadow for single-tile objects and building an
+    /// eight-neighbor footprint mask from non-elevated sibling parts for multi-tile objects.</summary>
     internal static int? ShadowId(ObjectEntry entry, IReadOnlyDictionary<(IffFile File, ushort MasterId, ushort SubIndex), ObjectEntry> parts)
     {
         var definition = entry.Definition;
@@ -538,8 +563,7 @@ internal static class SceneExporter
         var masterId = definition[ObjdField.MasterId];
         if (masterId == 0) return shadow;
 
-        // GetMultiTileOffsets reads signed X from the high byte and unsigned Y from the low byte. The tile
-        // selector packs them back with GetSubIndex(x, y) as (x << 8) | y.
+        // SubIndex packs the signed tile X offset in the high byte and unsigned Y offset in the low byte.
         var subIndex = definition[ObjdField.SubIndex];
         var originX = unchecked((sbyte)(subIndex >> 8));
         var originY = (byte)subIndex;
@@ -578,8 +602,8 @@ internal static class SceneExporter
         return valid;
     }
 
-    /// <summary>Port of ShadowID::GenerateLookups (004a3bab.c / 004a3cc0.c): the four three-neighbour corner values must
-    /// not be 2, 4, or 6.</summary>
+    /// <summary>Validates a multi-tile shadow mask by ensuring none of its four corner neighbor
+    /// configurations equal 2, 4, or 6.</summary>
     internal static bool ShadowMaskIsValid(int mask)
     {
         if ((uint)mask < (uint)validShadowMasks.Length) return validShadowMasks[mask];
@@ -587,9 +611,8 @@ internal static class SceneExporter
         return !corners.Any(corner => corner is 2 or 4 or 6);
     }
 
-    /// <summary>ShadowID::GetCorner (004a3b2c.c, Sims.exe 0x63bd30): packs each tile edge's cardinal neighbour bit
-    /// (weight 1) and two flanking diagonal neighbour bits (weights 2 and 4) into a 0..7 curve selector for the
-    /// -y, -x, +y, and +x edges in camera space.</summary>
+    /// <summary>Packs each tile edge's cardinal neighbor bit (weight 1) and two flanking diagonal neighbor
+    /// bits (weights 2 and 4) into a 0..7 profile curve index for all four camera-space edges.</summary>
     internal static int[] ShadowLookupValues(int mask) =>
     [
         (mask & 1) + 2 * ((mask >> 7) & 1) + 4 * ((mask >> 4) & 1),
@@ -598,10 +621,8 @@ internal static class SceneExporter
         ((mask >> 3) & 1) + 2 * ((mask >> 6) & 1) + 4 * ((mask >> 7) & 1),
     ];
 
-    /// <summary>FloorShadowMgr's 3x256 rotation table DAT_006efc6c / DAT_006f4c20 (0053d4b1.c:21-60, 004a3bab.c:23-26,
-    /// 00434ec8.c:29-31, 004adabb.c:920-922): single-tile ShadowID 16 stays invariant, while multi-tile masks rotate
-    /// their cardinal low nibble (bits 0..3: 1->8->4->2->1) and diagonal high nibble (bits 4..7: 16->128->64->32->16)
-    /// independently per 90-degree turn.</summary>
+    /// <summary>Rotates a shadow ID per quarter-turn: single-tile shadow 16 remains invariant, while
+    /// multi-tile masks rotate their cardinal low nibble and diagonal high nibble independently.</summary>
     internal static int RotateShadowId(int shadowId, int quarterTurns)
     {
         var turns = ((quarterTurns % 4) + 4) % 4;
@@ -616,8 +637,8 @@ internal static class SceneExporter
         return cardinal | (diagonal << 4);
     }
 
-    /// <summary>ShadowID edge profile functions (004a3cc0.c:19-26, 004a3c68.c:9, Sims.exe 0x63cd30..0x63ce59):
-    /// 0=min(0), 1=blob sin(t*pi)^0.6, 3=ramp-up sin(t*pi/2)^0.6, 5=ramp-down sin((1-t)*pi/2)^0.6, 7=max(1).</summary>
+    /// <summary>Evaluates edge profile curve functions for floor shadow blending, mapping curve types to
+    /// sine power functions or constant bounds.</summary>
     internal static float ShadowLookup(int type, float value) => type switch
     {
         0 => 0f,
@@ -628,16 +649,16 @@ internal static class SceneExporter
         _ => 0f,
     };
 
-    /// <summary>FloorShadowMgr::EvaluatePoint (004a40c9.c:14-25, Sims.exe 0x63ba91..0x63bbb4): bilinearly blends the
-    /// four edge profile curves across camera-tile coordinates (u, v) in [0, 1]^2 and scales the sum by 0.5.</summary>
+    /// <summary>Bilinearly blends the four edge profile curves across camera-tile coordinates (u, v) in [0,
+    /// 1]² and scales the result by 0.5.</summary>
     internal static float EvaluateFloorShadowShade(ReadOnlySpan<int> lookupTypes, float u, float v) =>
         0.5f * ((1f - v) * ShadowLookup(lookupTypes[0], u)
             + (1f - u) * ShadowLookup(lookupTypes[1], v)
             + v * ShadowLookup(lookupTypes[2], u)
             + u * ShadowLookup(lookupTypes[3], v));
 
-    /// <summary>The block of up to 5x5 source tiles that the Mac viewer cuts toward the camera from a tile when an
-    /// outdoor room is involved: the far corner starts four camera tiles away and steps back until it is on the lot.</summary>
+    /// <summary>Calculates a block of up to 5x5 source tiles cut toward the camera from an outdoor room
+    /// tile, stepping back toward the lot bounds.</summary>
     internal static IEnumerable<(int X, int Y)> CutawayRectangle(LotCamera camera, int sourceX, int sourceY, int lotSize)
     {
         var origin = camera.CameraPoint(sourceX + 0.5f, sourceY + 0.5f);
@@ -653,16 +674,12 @@ internal static class SceneExporter
         }
     }
 
-    /// <summary>Story height in pixels per zoom (1 far, 2 medium, 3 near): ZBufferLookup::GenerateLookupTables stores
-    /// 58, 116 and 232 at ZBufferLookup+0x6c, which HouseViewer reads at this+0x124.</summary>
+    /// <summary>Returns the story height in screen pixels for a given zoom level: 58 for far, 116 for
+    /// medium, and 232 for near.</summary>
     internal static int CutawayStoryPixels(int zoom) => 58 << (Math.Clamp(zoom, 1, 3) - 1);
 
-    /// <summary>Mac Room::ComputeCutawayMatrix (0x1011C2E0): each indoor room tile is cut, and a walk from it toward
-    /// the camera also cuts every lot-interior tile whose wall column (a tile diamond raised one story) overlaps the
-    /// room tile's screen box. The walk follows the table at lbl_105BA078 (set in ctilept's __sinit): step A is
-    /// (0,1), step B is (1,-1), in the order A, B, A, A, B, A, A, ... and it stops after three consecutive
-    /// out-of-lot checks. Outdoor rooms contribute no tiles; extra tiles are or-ed in (DoDynamicCutaway).
-    /// <paramref name="altitudePixels"/> gives medium-zoom terrain height of a source tile (GetPackedAlt).</summary>
+    /// <summary>Computes the cutaway visibility matrix by cutting indoor room tiles and ray-walking toward
+    /// the camera in an alternating (0,1) and (1,-1) step pattern to cut overlapping wall columns.</summary>
     internal static bool[] CutawayMatrix(RoomMap rooms, LotCamera camera, int lotSize, IEnumerable<ushort> selectedRooms,
         IEnumerable<(int X, int Y)> extraTiles, int zoom = 2, Func<int, int, float>? altitudePixels = null)
     {
@@ -682,9 +699,8 @@ internal static class SceneExporter
             if (selected.Contains(room) && !rooms.IsOutside(room)) Walk(x, y, 0, 0);
             else if (room == RoomMap.NoRoom && rooms.AdjacentRoomsAtTile(x, y) is { } pair)
             {
-                // RoomManager::ResolveDiagonal gives the rooms on both sides of a diagonal wall tile; for the
-                // matching room ComputeCutawayMatrix halves the tile's screen box (side 1 keeps the left half,
-                // side 3 the right half, by view rotation).
+                // Halves a diagonal wall tile's screen bounds during cutaway testing, keeping the left half
+                // for side 1 or the right half for side 3.
                 var diagonal = rooms.HasRoomDividingDiagonal(x, y);
                 if (!diagonal) continue;
                 var vertical = (rooms.DiagonalKind(x, y) & 0x20) != 0;
@@ -737,9 +753,8 @@ internal static class SceneExporter
         return mask;
     }
 
-    /// <summary>The second room of HouseViewer::MouseTrack: from the hovered tile the cursor probes right in screen
-    /// space in steps of a quarter tile width up to half a story (ZBufferLookup story height), stopping at the first
-    /// different room.</summary>
+    /// <summary>Probes screen space to the right of the hovered tile in quarter-tile increments up to half
+    /// a story height, returning the first distinct room encountered.</summary>
     internal static ushort CutawayProbeRoom(RoomMap rooms, LotCamera camera, int lotSize, int tileX, int tileY, int zoom = 2)
     {
         zoom = Math.Clamp(zoom, 1, 3);
@@ -764,10 +779,8 @@ internal static class SceneExporter
         return probe;
     }
 
-    /// <summary>The source tile that stores a wall edge's pattern and style, and the slot it uses. The top-left
-    /// slot holds the edge towards the tile's -x neighbour and the top-right slot the edge towards its -y
-    /// neighbour; the opposite slots hold the same two edges, whose style is taken from the neighbour that owns
-    /// them.</summary>
+    /// <summary>Determines the tile and slot that store a wall edge's pattern and style, where top-left and
+    /// top-right slots hold edges towards -x and -y neighbors respectively.</summary>
     internal static (int X, int Y, int Side) EdgeOwner(int x, int y, int neighbourX, int neighbourY)
     {
         var dx = neighbourX - x;
@@ -788,16 +801,15 @@ internal static class SceneExporter
 
     public static int Stories(IffFile lot) => lot.Find(ResourceType.Parse("Arry"), 101) is not null ? 2 : 1;
 
-    /// <summary>cLotRenderer::UpdateTerrainPalette (004c482f.c:12-44, 004c4902.c-004c4953.c): maps lot number
-    /// to terrain palette index 0..7 in TerrainColors.</summary>
+    /// <summary>Maps a lot number to its corresponding terrain color palette index (0..7).</summary>
     private static int TerrainType(short house) => house switch
     {
-        28 or 29 or 46 or 47 or 48 => 1,       // Vacation Beach Sand (0049e3a0.c)
-        40 or 41 or 42 => 3,                   // Vacation Snow (0049e421.c)
-        >= 90 and <= 94 => 5,                  // Magic Town Dark Grass (0049e4ff.c)
-        95 or 96 => 6,                         // Magic Town Autumn Grass (0049e56a.c)
-        99 => 7,                               // Magic Town Cloud Lot (0049e49a.c)
-        _ => 0,                                // Standard Grass (0049e331.c)
+        28 or 29 or 46 or 47 or 48 => 1,
+        40 or 41 or 42 => 3,
+        >= 90 and <= 94 => 5,
+        95 or 96 => 6,
+        99 => 7,
+        _ => 0,
     };
 
     private static readonly ConditionalWeakTable<ObjectRegistry, IReadOnlyDictionary<(IffFile File, ushort MasterId, ushort SubIndex), ObjectEntry>> shadowPartsCache = new();
@@ -830,8 +842,6 @@ internal static class SceneExporter
         short Graphic,
         short[] DynamicSpriteFlags);
 
-    /// <summary>What the last full export of a scene left behind for animation frames: the texture list the client now
-    /// holds, the texture indexes already handed out, and the shift applied to the scene's coordinates.</summary>
     public sealed class AnimationState
     {
         internal long Revision;
@@ -867,6 +877,7 @@ internal static class SceneExporter
     private sealed class Kept
     {
         public List<Texture> Textures = [];
+        public int BaseTextureCount;
         public Dictionary<(uint Guid, int SpriteId, int Frame), int> SpriteTextures = [];
         public Dictionary<(uint Guid, int BitmapId), (int Texture, int Width, int Height)> SpeechImageTextures = [];
         public Dictionary<(uint Guid, int SpriteId, int Frame), int> SpriteDepthTextures = [];
@@ -888,6 +899,18 @@ internal static class SceneExporter
         public HashSet<short> WallObjectIds = [];
         public SavedDoor[] SavedDoors = [];
         public float ShiftX, ShiftY;
+        public SceneLighting.State? CachedLighting;
+        public ulong CachedLightingXor;
+        public ulong CachedLightingSum;
+        public int CachedLightingRoomCount = -1;
+        public int CachedLightingMapRooms = -1;
+        public int CachedLightingMinute = -1;
+        public int CachedLightingPhase = -1;
+        public short CachedLightingHouse = -1;
+        public long LastAnimatedUpdates = -1;
+        public SceneSprite[]? CachedNonCarriedObjectSprites;
+        public SceneLighting.Light[]? CachedSubTickLights;
+        public SceneLighting.Window[]? CachedSubTickWindows;
     }
 
     private static float HeightAtArray(float[] heights, int x, int y)
@@ -919,9 +942,8 @@ internal static class SceneExporter
         return true;
     }
 
-    // Mac HouseViewer::DoDynamicCutaway (0x101C6520) ORs every room of the cutaway set and, in live mode, the
-    // selected Sim's room into the cut mask. When any of those rooms is outdoors, a 5x5 tile block toward the
-    // camera is also cut around the Sim and around the cursor tile (FUN_101C6520 r26 path).
+    // Combines cutaway rooms and the selected avatar's room, adding a 5x5 tile block toward the camera
+    // around the avatar and cursor when outdoors.
     private static bool[]? ComputeCutawayMask(
         RoomMap? rooms,
         LotCamera camera,
@@ -1045,18 +1067,56 @@ internal static class SceneExporter
     public static string Export(IffFile lot, SimulationWorld world, ObjectRegistry registry, string gameRoot, string directory, short house, long revision, int viewLevel = 1, string wallMode = "down", int cameraOrientation = 0, (int X, int Y)? cutawayTile = null, bool roofsVisible = false, AnimationState? state = null, IReadOnlyList<ushort>? cutawayRooms = null, (int X, int Y)? cutawaySim = null, int cutawayZoom = 2, bool showLoweredPortals = false) =>
         (string)Build(lot, world, registry, gameRoot, directory, house, revision, viewLevel, wallMode, cameraOrientation, cutawayTile, roofsVisible, state, false, 0, 0, cutawayRooms, cutawaySim, cutawayZoom, showLoweredPortals, 0f);
 
-    /// <summary>The moving part of the scene exported last: every object sprite and Sim mesh, as an animation frame the
-    /// client lays over the snapshot (<c>SceneAnimation</c>). Null when the state belongs to another revision.</summary>
     public static object? Animation(IffFile lot, SimulationWorld world, ObjectRegistry registry, string gameRoot, string directory, short house, long revision, AnimationState state, long sequence, long updates, int viewLevel = 1, string wallMode = "down", int cameraOrientation = 0, (int X, int Y)? cutawayTile = null, bool roofsVisible = false, IReadOnlyList<ushort>? cutawayRooms = null, (int X, int Y)? cutawaySim = null, int cutawayZoom = 2, bool showLoweredPortals = false, float subTickAlpha = 0f) =>
         state.Kept is Kept && state.Revision == revision
-            ? Build(lot, world, registry, gameRoot, directory, house, revision, viewLevel, wallMode, cameraOrientation, cutawayTile, roofsVisible, state, true, sequence, updates, cutawayRooms, cutawaySim, cutawayZoom, showLoweredPortals, subTickAlpha)
+            ? Build(lot, world, registry, gameRoot, directory, house, revision, viewLevel, wallMode, cameraOrientation, cutawayTile, roofsVisible, state, true, sequence, updates, cutawayRooms, cutawaySim, cutawayZoom, showLoweredPortals, subTickAlpha, directAnimation: false)
             : null;
 
-    private static object Build(IffFile lot, SimulationWorld world, ObjectRegistry registry, string gameRoot, string directory, short house, long revision, int viewLevel, string wallMode, int cameraOrientation, (int X, int Y)? cutawayTile, bool roofsVisible, AnimationState? retain, bool animating, long sequence, long updates, IReadOnlyList<ushort>? cutawayRooms, (int X, int Y)? cutawaySim, int cutawayZoom, bool showLoweredPortals = false, float subTickAlpha = 0f)
+    internal static DirectAnimationFrame? AnimationDirect(IffFile lot, SimulationWorld world, ObjectRegistry registry, string gameRoot, string directory, short house, long revision, AnimationState state, long sequence, long updates, int viewLevel = 1, string wallMode = "down", int cameraOrientation = 0, (int X, int Y)? cutawayTile = null, bool roofsVisible = false, IReadOnlyList<ushort>? cutawayRooms = null, (int X, int Y)? cutawaySim = null, int cutawayZoom = 2, bool showLoweredPortals = false, float subTickAlpha = 0f) =>
+        state.Kept is Kept && state.Revision == revision
+            ? (DirectAnimationFrame)Build(lot, world, registry, gameRoot, directory, house, revision, viewLevel, wallMode, cameraOrientation, cutawayTile, roofsVisible, state, true, sequence, updates, cutawayRooms, cutawaySim, cutawayZoom, showLoweredPortals, subTickAlpha, directAnimation: true)
+            : null;
+
+    private static ulong MixLightingTerm(ulong value)
+    {
+        value += 0x9e3779b97f4a7c15UL;
+        value = (value ^ (value >> 30)) * 0xbf58476d1ce4e5b9UL;
+        value = (value ^ (value >> 27)) * 0x94d049bb133111ebUL;
+        return value ^ (value >> 31);
+    }
+
+    private static (ulong Xor, ulong Sum, int RoomCount, int MapRooms, int Minute, int Phase) LightingStamp(
+        SimulationWorld world)
+    {
+        ulong xor = 0;
+        ulong sum = 0;
+        foreach (var pair in world.PersonRoomMotiveEntries)
+        {
+            var term = MixLightingTerm(
+                ((ulong)pair.Key << 48)
+                ^ ((ulong)(pair.Value.IsOutside ? 1 : 0) << 40)
+                ^ ((ulong)pair.Value.LightsEnabledFlag73 << 41)
+                ^ ((ulong)pair.Value.LightOverrideFlag75 << 42)
+                ^ ((ulong)(uint)BitConverter.SingleToInt32Bits(pair.Value.LightLevel6c) << 8)
+                ^ ((ulong)(ushort)pair.Value.LightingObjectCount140 << 24)
+                ^ (ushort)pair.Value.PersonObjectCount142);
+            xor ^= term;
+            sum = unchecked(sum + term);
+        }
+
+        var mapRooms = 0;
+        foreach (var map in world.LotRoomMaps.Values)
+            mapRooms += map.RoomIds.Count;
+
+        return (xor, sum, world.PersonRoomMotiveEntries.Count, mapRooms,
+            world.Clock.Hour * 60 + world.Clock.Minute, world.Clock.TimeOfDay);
+    }
+
+    private static object Build(IffFile lot, SimulationWorld world, ObjectRegistry registry, string gameRoot, string directory, short house, long revision, int viewLevel, string wallMode, int cameraOrientation, (int X, int Y)? cutawayTile, bool roofsVisible, AnimationState? retain, bool animating, long sequence, long updates, IReadOnlyList<ushort>? cutawayRooms, (int X, int Y)? cutawaySim, int cutawayZoom, bool showLoweredPortals = false, float subTickAlpha = 0f, bool directAnimation = false)
     {
         var shadowParts = GetShadowParts(registry);
-        // SIMI global 23 stores the active lot size (52 for House 05), while the
-        // saved Arry layers keep their 64-cell storage stride.
+        // SIMI global 23 defines the active lot size, while saved ARRY layers retain a fixed 64-cell
+        // storage stride.
         var lotSize = world.Globals.Length > 23 && world.Globals[23] is > 0 and <= Size ? world.Globals[23] : Size;
         var lapWatch = Stopwatch.StartNew();
         var lapText = new StringBuilder();
@@ -1066,7 +1126,31 @@ internal static class SceneExporter
         var baseHeight = animating ? kept.BaseHeight : heights[0];
         var rooms = world.LotRoomMaps.TryGetValue(viewLevel, out var roomMap) ? roomMap : null;
         var camera = new LotCamera(cameraOrientation, lotSize, lotSize);
-        var baseLighting = SceneLighting.Build(world, rooms, house);
+        var stamp = LightingStamp(world);
+        SceneLighting.State? baseLighting;
+        if (animating &&
+            kept.CachedLightingHouse == house &&
+            kept.CachedLightingXor == stamp.Xor &&
+            kept.CachedLightingSum == stamp.Sum &&
+            kept.CachedLightingRoomCount == stamp.RoomCount &&
+            kept.CachedLightingMapRooms == stamp.MapRooms &&
+            kept.CachedLightingMinute == stamp.Minute &&
+            kept.CachedLightingPhase == stamp.Phase)
+        {
+            baseLighting = kept.CachedLighting;
+        }
+        else
+        {
+            baseLighting = SceneLighting.Build(world, rooms, house);
+            kept.CachedLighting = baseLighting;
+            kept.CachedLightingHouse = house;
+            kept.CachedLightingXor = stamp.Xor;
+            kept.CachedLightingSum = stamp.Sum;
+            kept.CachedLightingRoomCount = stamp.RoomCount;
+            kept.CachedLightingMapRooms = stamp.MapRooms;
+            kept.CachedLightingMinute = stamp.Minute;
+            kept.CachedLightingPhase = stamp.Phase;
+        }
 
         int TileSpriteLightByte(int? subtileRoom)
         {
@@ -1079,8 +1163,8 @@ internal static class SceneExporter
         float HeightAt(int x, int y) => HeightAtArray(heights, x, y);
         float Elevation(float x, float y) => ElevationAt(heights, baseHeight, x, y);
 
-        var terrain = new List<TerrainVertex>();
-        var meshVertices = new List<(Vertex Vertex, int TileX, int TileY)>();
+        var terrain = animating ? null! : new List<TerrainVertex>();
+        var meshVertices = animating ? null! : new List<(Vertex Vertex, int TileX, int TileY)>();
         var textures = animating ? kept.Textures : new List<Texture>();
         var animationStart = animating ? textures.Count : 0;
         var files = new Dictionary<string, byte[]>();
@@ -1097,62 +1181,63 @@ internal static class SceneExporter
 
         int? FloorShadowTexture(int shadowId, int attenuation, int zoom)
         {
-            // cRenderer::SetupShadowMgrs (004a3bab.c) preloads floor-shadow surfaces from floors.iff SPR2
-            // 0x300/0x310 (far), 0x320/0x330 (medium), and 0x340/0x350 (near) for ShadowID 0 and 16.
-            // Other masks are generated on demand from base diamonds SPR2 0x000/0x100/0x200 and four
-            // ShadowID edge profile curves in FloorShadowMgr::Generate (004a3eeb.c, 004a40c9.c).
+            // Preloads floor shadow surfaces from floors.iff SPR2 resources (0x300-0x350) for shadow IDs 0
+            // and 16, generating other masks dynamically from base diamond sprites.
             if (floorArtwork is null || shadowId is < 0 or > 255 || attenuation >= 0xf8 || zoom is < 1 or > 3) return null;
             var key = (shadowId, attenuation, zoom);
             if (floorShadowTextures.TryGetValue(key, out var cached)) return cached;
-            var spriteId = shadowId is 0 or 16
-                ? (ushort)(0x300 + (zoom - 1) * 0x20 + (shadowId == 16 ? 0x10 : 0))
-                : (ushort)((zoom - 1) * 0x100);
-            var chunk = floorArtwork.Find(ResourceType.Spr2, spriteId);
-            if (chunk is null) return null;
-            var art = CachedDepthSprite(floorArtwork, chunk);
-            if (art.Frames.Count == 0) return null;
-            var frame = art.Frames[0];
-            var generated = shadowId is not (0 or 16);
-            var lookupTypes = generated ? ShadowLookupValues(shadowId) : [];
-            if (generated && lookupTypes.Any(type => type is 2 or 4 or 6)) return null;
-            var bytes = new byte[frame.Width * frame.Height * 4];
-            var generatedWidth = frame.Width + (frame.Width & 1);
-            var scale = generatedWidth > 0 ? 2f / generatedWidth : 0f;
-            var anyVisible = false;
-            for (var pixel = 0; pixel < frame.Width * frame.Height; pixel++)
+            if (floorShadowBytesCache.Count > 1024) floorShadowBytesCache.Clear();
+            var cachedPixels = floorShadowBytesCache.GetOrAdd((floorArtwork, shadowId, attenuation, zoom), static k =>
             {
-                if (frame.Alpha[pixel] == 0) continue;
-                int shadeByte;
-                if (generated)
+                var (artwork, sId, atten, z) = k;
+                var spriteId = sId is 0 or 16
+                    ? (ushort)(0x300 + (z - 1) * 0x20 + (sId == 16 ? 0x10 : 0))
+                    : (ushort)((z - 1) * 0x100);
+                var chunk = artwork.Find(ResourceType.Spr2, spriteId);
+                if (chunk is null) return default;
+                var art = CachedDepthSprite(artwork, chunk);
+                if (art.Frames.Count == 0) return default;
+                var frame = art.Frames[0];
+                var generated = sId is not (0 or 16);
+                var lookupTypes = generated ? ShadowLookupValues(sId) : [];
+                if (generated && lookupTypes.Any(type => type is 2 or 4 or 6)) return default;
+                var buffer = new byte[frame.Width * frame.Height * 4];
+                var generatedWidth = frame.Width + (frame.Width & 1);
+                var scale = generatedWidth > 0 ? 2f / generatedWidth : 0f;
+                var anyVisible = false;
+                for (var pixel = 0; pixel < frame.Width * frame.Height; pixel++)
                 {
-                    // FloorShadowMgr::Generate (004a3eeb.c:35-84) maps raster (column, row) into camera-tile
-                    // coordinates (u, v) in [0, 1]^2 using even-rounded width and 2/generatedWidth scale,
-                    // evaluates the four edge curves (004a40c9.c), and writes round((1 - shade) * 255).
-                    var row = pixel / frame.Width;
-                    var column = pixel - row * frame.Width;
-                    var halfX = (column - generatedWidth * 0.5f) * 0.5f;
-                    var halfY = row - frame.Height * 0.5f;
-                    var u = Math.Clamp(0.5f + scale * (halfY + halfX), 0f, 1f);
-                    var v = Math.Clamp(0.5f + scale * (halfY - halfX), 0f, 1f);
-                    var shade = EvaluateFloorShadowShade(lookupTypes, u, v);
-                    shadeByte = Math.Clamp((int)(Math.Clamp(1f - shade, 0f, 1f) * 255f + 0.5f), 0, 255);
+                    if (frame.Alpha[pixel] == 0) continue;
+                    int shadeByte;
+                    if (generated)
+                    {
+                        // Maps raster pixels to normalized tile coordinates (u, v) to evaluate edge curves,
+                        // writing inverted shade values scaled to 255.
+                        var row = pixel / frame.Width;
+                        var column = pixel - row * frame.Width;
+                        var halfX = (column - generatedWidth * 0.5f) * 0.5f;
+                        var halfY = row - frame.Height * 0.5f;
+                        var u = Math.Clamp(0.5f + scale * (halfY + halfX), 0f, 1f);
+                        var v = Math.Clamp(0.5f + scale * (halfY - halfX), 0f, 1f);
+                        var shade = EvaluateFloorShadowShade(lookupTypes, u, v);
+                        shadeByte = Math.Clamp((int)(Math.Clamp(1f - shade, 0f, 1f) * 255f + 0.5f), 0, 255);
+                    }
+                    else
+                    {
+                        shadeByte = frame.Indices[pixel];
+                    }
+                    // Applies shadow attenuation to the shade value, skipping blending when the adjusted
+                    // value reaches 0xF8 or higher.
+                    var adjusted = shadeByte + atten;
+                    if (adjusted >= 0xf8) continue;
+                    var opacity = (byte)(Math.Clamp(255 - adjusted, 0, 255) * frame.Alpha[pixel] / 31);
+                    if (opacity == 0) continue;
+                    buffer[pixel * 4 + 3] = opacity;
+                    anyVisible = true;
                 }
-                else
-                {
-                    // SetupShadowMgrs initializes its prebaked shadow surface to 0xff before SPR2 decode.
-                    shadeByte = frame.Indices[pixel];
-                }
-                // DrawShadow (004b12d3.c:40-45, 00438f12.c) adds attenuation to the source shade byte,
-                // leaves destination pixels untouched at >= 0xf8, and otherwise scales destination RGB by
-                // adjusted / 255 (rendered here as a black quad with alpha = 255 - adjusted).
-                var adjusted = shadeByte + attenuation;
-                if (adjusted >= 0xf8) continue;
-                var opacity = (byte)(Math.Clamp(255 - adjusted, 0, 255) * frame.Alpha[pixel] / 31);
-                if (opacity == 0) continue;
-                bytes[pixel * 4 + 3] = opacity;
-                anyVisible = true;
-            }
-            if (!anyVisible)
+                return anyVisible ? (frame.Width, frame.Height, buffer) : default;
+            });
+            if (cachedPixels.Bytes is not { } bytes)
             {
                 floorShadowTextures[key] = null;
                 return null;
@@ -1161,24 +1246,23 @@ internal static class SceneExporter
             var name = $"floor-shadow-{shadowId}-{attenuationTag}-{zoom}.rgba";
             files[name] = bytes;
             var texture = textures.Count;
-            textures.Add(new Texture(name, frame.Width, frame.Height, "rgba"));
+            textures.Add(new Texture(name, cachedPixels.Width, cachedPixels.Height, "rgba"));
             floorShadowTextures[key] = texture;
             return texture;
         }
         ZoomImage? FloorShadowAt(int? shadowId, int shadowBrightness, int roomLightByte, int zoom, float x, float y, float altitude = 0)
         {
             if (shadowId is null or < 0 or > 255) return null;
-            // cLotRenderer::DrawObjects (004adabb.c:959-966, Sims.exe 0x55f683..0x55f685) passes
-            // (shadowBrightness - roomLightByte) + 0xff to DrawShadow (004b12d3.c:40-45).
+            // Calculates shadow attenuation by offsetting shadow brightness by room lighting and baseline
+            // intensity.
             var attenuation = Math.Clamp(shadowBrightness - roomLightByte + 0xff, -255, 0xf8);
             var textureIndex = FloorShadowTexture(shadowId.Value, attenuation, zoom);
             if (textureIndex is null) return null;
             var point = camera.Project(x, y, altitude * 40f);
             var dimensions = textures[textureIndex.Value];
             var factor = zoom switch { 1 => 0.5f, 3 => 2f, _ => 1f };
-            // The shadow raster is the footprint of one tile diamond (63x32 at medium), so it is centred on the
-            // projected tile centre. Object sprites are placed in the same canvas space, which already carries
-            // the +34/+158 base that Project adds.
+            // Centers the 63x32 medium-zoom tile diamond shadow raster on the projected tile center in
+            // canvas space.
             var shadowWidth = dimensions.Width / factor;
             var shadowHeight = dimensions.Height / factor;
             return new ZoomImage(textureIndex.Value, point.X - shadowWidth / 2, point.Y - shadowHeight / 2,
@@ -1205,13 +1289,9 @@ internal static class SceneExporter
             bool unresetPortalFallback = false)
         {
             if (roofsVisible || level != viewLevel || showLoweredPortals) return false;
-            // Sims.exe (004adabb.c:1015, 004aa3e7.c:125): ONLY ObjectData.Flags (+0x5a) bit 0x400 (flag 11,
-            // "hide for cutaway", Behavior.iff STR# 142) hides cXObject sprites on lowered/cutaway walls; paintings
-            // (ArtGlobals.iff BHAV 8193), wall lamps (LightGlobals.iff BHAV 8195), wall phones (PhoneGlobals.iff
-            // BHAV 8301), and mirrors/cabinets/alarms (Mirrors.iff BHAV 4102 [6], MedicineCabinet.iff BHAV 4101 [8]
-            // unwired) intentionally omit 0x400 and stay visible in cutaway/walls-down mode. Fall back to FlagField2
-            // (+0x9a) 0xc000 only before ResetObjectsWithChangedCode updates pre-SetFlag-11 saved portals, so live
-            // portals that run ClearFlag 11 (e.g. Doors5..Magic BHAV 4103 [20], Awnings2 [10]) stay visible.
+            // Only objects with flag 11 (bit 0x400, hide for cutaway) are hidden on lowered walls;
+            // wall-mounted objects such as paintings, lamps, and phones intentionally omit this flag to
+            // remain visible.
             var hideForCutaway = (flags1 & 0x400) != 0 || (unresetPortalFallback && (flags2 & 0xc000) != 0);
             if (!hideForCutaway) return false;
             if (wallMode == "down") return true;
@@ -1267,7 +1347,7 @@ internal static class SceneExporter
         var objectWallSprites = new Dictionary<(IffFile File, ushort Id), Sprite>();
         var wallPalettes = new Dictionary<(IffFile File, int Id), PaletteColor[]>();
         var wallTextures = new Dictionary<(ushort Pattern, IffFile? File, ushort SpriteBase, ushort BaseStyle, int Frame, bool Down, int Zoom), int>();
-        var wallJunctionTextures = new Dictionary<(int Zoom, int Frame), int>();
+        var wallJunctionTextures = new Dictionary<(int Zoom, int Frame, bool LoweredSheet), int>();
         var wallDepthTextures = new Dictionary<(int Configuration, int Width, int Height), int>();
         var wallStripTextures = new Dictionary<(int Texture, int Width, bool Right), int>();
 
@@ -1292,24 +1372,29 @@ internal static class SceneExporter
             return result;
         }
 
-        // Walls have no depth art of their own: the native renderer derives a per-pixel depth ramp for the
-        // wall face from WallZBufferConfig, and the frontend needs it to depth-test the wall against the objects
-        // behind it. Without it walls draw flat over everything already drawn, hiding the room's contents.
+        // Synthesizes per-pixel depth ramps for wall faces to depth-test walls against intersecting and
+        // occluded objects.
         int ArchitectureDepth(int configuration, int colorTexture)
         {
             var dimensions = textures[colorTexture];
             var key = (configuration, dimensions.Width, dimensions.Height);
             if (wallDepthTextures.TryGetValue(key, out var cached)) return cached;
-            var config = WallDepthConfig[configuration];
-            var depths = new byte[dimensions.Width * dimensions.Height];
-            for (var row = 0; row < dimensions.Height; row++)
-            for (var column = 0; column < dimensions.Width; column++)
+            if (archDepthBytesCache.Count > 512) archDepthBytesCache.Clear();
+            var depths = archDepthBytesCache.GetOrAdd(key, static k =>
             {
-                var sourceX = Math.Min((int)config[0] - 1, column * (int)config[0] / dimensions.Width);
-                var sourceY = Math.Min((int)config[1] - 1, row * (int)config[1] / dimensions.Height);
-                depths[row * dimensions.Width + column] =
-                    (byte)Math.Clamp(Math.Round(config[2] + config[3] * sourceX + config[4] * sourceY), 0, 254);
-            }
+                var (cfg, w, h) = k;
+                var config = WallDepthConfig[cfg];
+                var buffer = new byte[w * h];
+                for (var row = 0; row < h; row++)
+                for (var column = 0; column < w; column++)
+                {
+                    var sourceX = Math.Min((int)config[0] - 1, column * (int)config[0] / w);
+                    var sourceY = Math.Min((int)config[1] - 1, row * (int)config[1] / h);
+                    buffer[row * w + column] =
+                        (byte)Math.Clamp(Math.Round(config[2] + config[3] * sourceX + config[4] * sourceY), 0, 254);
+                }
+                return buffer;
+            });
             var name = $"wall-depth-{configuration}-{dimensions.Width}x{dimensions.Height}.depth8";
             files[name] = depths;
             var result = textures.Count;
@@ -1326,17 +1411,18 @@ internal static class SceneExporter
             if (palette is null) return wallPalettes[(sourceFile, paletteId)] = [];
             return wallPalettes[(sourceFile, paletteId)] = Palette.Read(sourceFile, palette).Colors.ToArray();
         }
-        // A wall corner is one frame of a junction sheet: WorldWallProvider reads walls.iff SPR 4097 as the
-        // medium sheet, 4098 as the near one and 4096 as the far one, and WallComponent picks frame
-        // JunctionFrame(flags) for the corner's up-junction bits. The sheet is drawn as its own mask, so
-        // every opaque palette pixel is visible.
-        int JunctionTexture(int zoom, int frame)
+        // Wall junction caps use walls.iff SPR# resources (4096..4098 upper, 5120..5122 lowered),
+        // indexing individual frames by junction bitmask.
+        int JunctionTexture(int zoom, int frame, bool loweredSheet = false)
         {
             if (wallArtwork is null) { missingResources.Add("GameData/walls.iff"); return -1; }
-            var key = (zoom, frame);
+            var key = (zoom, frame, loweredSheet);
             if (wallJunctionTextures.TryGetValue(key, out var cached)) return cached;
-            var artworkId = (ushort)(zoom switch { 0 => 4096, 2 => 4098, _ => 4097 });
-            var chunk = wallArtwork.Find(ResourceType.Spr1, artworkId);
+            var upperId = (ushort)(zoom switch { 0 => 4096, 2 => 4098, _ => 4097 });
+            var loweredId = (ushort)(zoom switch { 0 => 5120, 2 => 5122, _ => 5121 });
+            var chunk = loweredSheet ? wallArtwork.Find(ResourceType.Spr1, loweredId) : null;
+            var artworkId = chunk is not null ? loweredId : upperId;
+            chunk ??= wallArtwork.Find(ResourceType.Spr1, upperId);
             if (chunk is null) { missingResources.Add($"wall-junction:{artworkId}"); return -1; }
             if (!wallSprites.TryGetValue(chunk.Id, out var sprite))
                 wallSprites[chunk.Id] = sprite = Sprite.Read(wallArtwork, chunk);
@@ -1359,7 +1445,7 @@ internal static class SceneExporter
                 bytes[at + 2] = color.Blue;
                 bytes[at + 3] = 255;
             }
-            var name = $"wall-junction-{zoom}-{frame}.rgba";
+            var name = $"wall-junction-{(loweredSheet ? "down-" : "")}{zoom}-{frame}.rgba";
             files[name] = bytes;
             var result = textures.Count;
             textures.Add(new Texture(name, art.Width, art.Height, "rgba"));
@@ -1367,8 +1453,8 @@ internal static class SceneExporter
             return result;
         }
         var terrainType = TerrainType(house);
-        // cTerrainRenderer / cAltitudeRenderer (FUN_0049c24d, FUN_004a4769, FUN_004a4bac, FUN_004c49de, FUN_004c496a):
-        // fLightSourceLatitude = 0.31415927f (0x3ea0d973), fLightSourceLongitude per camera rotation, fJitterEnvelope = 3.
+        // Applies terrain directional lighting using a fixed sun latitude of 0.314 radians, camera-aligned
+        // sun longitude, and a jitter envelope of 3.
         const float sunLatitude = 0.31415927f;
         var sunLongitude = (camera.Orientation & 3) switch
         {
@@ -1405,12 +1491,10 @@ internal static class SceneExporter
             grass[Math.Clamp(tx, 1, lotSize - 1) * Size + Math.Clamp(ty, 1, lotSize - 1)];
         var terrainPoint = new Func<float, float, TerrainVertex>((x, y) =>
         {
-            // The original terrain draw (FUN_0049cf80) excludes the outer padding cells.
             var cellX = Math.Clamp((int)x, 1, lotSize - 1);
             var cellY = Math.Clamp((int)y, 1, lotSize - 1);
-            // FUN_0049ceba averages the grass state of the four tiles sharing vertex (cellX, cellY).
-            // On the Magic Town cloud lot (+0x8d != 0, 0049cf80.c:72,88-100), the outer two-tile border
-            // forces the sky-blue ramp endpoint (0x14148c, grassState = 255 in inverted ReadGrass units).
+            // Averages grass wear across four tiles sharing each terrain vertex, while forcing the outer
+            // two-tile border to sky blue on cloud lots.
             var grassState = terrainType == 7 && (x <= 2 || y <= 2 || x >= lotSize - 2 || y >= lotSize - 2)
                 ? (byte)255
                 : (byte)((GrassCell(cellX, cellY) + GrassCell(cellX - 1, cellY)
@@ -1419,12 +1503,11 @@ internal static class SceneExporter
             var light = TerrainColors.LightGreen[terrainType];
             var lightBrown = TerrainColors.LightBrown[terrainType];
             var lightColor = Microsoft.Xna.Framework.Color.Lerp(light, lightBrown, blend);
-            // Sims.exe cTerrainRenderer ramps from the light colour to the dark one (FUN_0049ca4a, FUN_0049e846).
             var darkGreen = TerrainColors.DarkGreen[terrainType];
             var darkBrown = TerrainColors.DarkBrown[terrainType];
             var darkColor = Microsoft.Xna.Framework.Color.Lerp(darkGreen, darkBrown, blend);
-            // FUN_004a499b averages the six triangle normals meeting at vertex (cellX, cellY), maps (1 - avgDotSq)
-            // onto [0, 127], and adds deterministic per-vertex jitter (fJitterEnvelope = 3, fJitterRandSeed = 0x40de9).
+            // Averages the normals of the six terrain triangles meeting at each vertex, scales the slope
+            // lighting into [0, 127], and adds deterministic jitter.
             var avgDotSq = (TileTri0(cellX - 1, cellY - 1) + TileTri1(cellX - 1, cellY - 1)
                 + TileTri0(cellX, cellY - 1) + TileTri1(cellX - 1, cellY)
                 + TileTri0(cellX, cellY) + TileTri1(cellX, cellY)) / 6f;
@@ -1451,9 +1534,8 @@ internal static class SceneExporter
             terrain.AddRange([top, right, bottom, bottom, left, top]);
         }
 
-        // Keep lower-story floors resident in the exported scene when an upper story is selected. Story navigation
-        // changes the visible ceiling/story, not the saved floor layers; lower surfaces remain visible through gaps
-        // in the selected story's floor and provide the correct floor depth beneath upper-story objects.
+        // Retains lower-story floors when viewing upper stories so surfaces remain visible through floor
+        // openings and provide correct depth underneath objects.
         Lap("preFloors");
         for (var floorLevel = 1; floorLevel <= viewLevel; floorLevel++)
         {
@@ -1556,8 +1638,8 @@ internal static class SceneExporter
                 if (wallDiag == 0x20)
                 {
                     var wallTile = floorWalls!.Element(x, y);
-                    // Mac HouseViewer::DrawFloor (0x101BF744 / 0x101C01E4): when both diagonal floor slots are 0,
-                    // fall back to the underlying tile's floor pattern unless it is the 0xff diagonal sentinel.
+                    // Falls back to the underlying tile floor pattern when both diagonal slots are zero,
+                    // unless marked by the 0xFF diagonal sentinel.
                     var basePattern = floors[x * Size + y] == byte.MaxValue ? (ushort)0 : floors[x * Size + y];
                     var pat1 = wallTile[2] == 0 && wallTile[4] == 0 ? basePattern : wallTile[4];
                     var pat2 = wallTile[2] == 0 && wallTile[4] == 0 ? basePattern : wallTile[2];
@@ -1576,8 +1658,8 @@ internal static class SceneExporter
                 else
                 {
                     var pattern = floors[x * Size + y];
-                    // FUN_004a0fb4 treats 0xff as the special architecture fallback value, not a standard floor pattern.
-                    // On the lot scene it leaves the terrain visible; looking for SPR2 pattern 0x1ff invents a missing asset.
+                    // Floor pattern value 0xFF acts as a transparent architecture sentinel leaving
+                    // underlying terrain visible rather than indexing a floor pattern.
                     EmitFloor(x, y, pattern, 0, [c0, c1, c2, c2, c3, c0], floorRooms?.RoomAt(x, y));
                 }
             }
@@ -1587,8 +1669,8 @@ internal static class SceneExporter
         {
             var key = (pattern, zoom);
             if (floorTextures.TryGetValue(key, out var cached)) return cached;
-            // FUN_004a08bd registers each .flr's local SPR2 i/i+0x100/i+0x200 for far/medium/near.
-            // The installed single-pattern resources start at i=1, so medium art is SPR2 257, not pattern+256.
+            // Floor files store local SPR2 artwork with far, medium, and near zoom levels offset by 0, 256,
+            // and 512 from the base sprite ID.
             var art = floorArtwork;
             var spriteId = unchecked((ushort)(pattern + zoom * 256));
             if (pattern >= 256)
@@ -1621,8 +1703,8 @@ internal static class SceneExporter
                 if (zoom == 1) missingResources.Add($"floor:{pattern}:frame:0");
                 return -1;
             }
-            // FUN_004c173f selects the palette from the SPR2 chunk. The frame's palette/transparent fields are not
-            // used by Sims.exe's depth blitter, so retain the sprite header palette even when those frame bytes are nonzero.
+            // Selects the palette defined in the SPR2 chunk header, ignoring individual frame palette
+            // fields.
             var paletteId = sprite.PaletteId;
             var colors = PaletteFor(art, paletteId);
             if (colors is null)
@@ -1645,16 +1727,16 @@ internal static class SceneExporter
                 bytes[at + 1] = color.Green;
                 bytes[at + 2] = color.Blue;
                 bytes[at + 3] = (byte)Math.Clamp((frame.Alpha[pixel] * 255 + 15) / 31, 0, 255);
-                // The road patterns ship with white paint; the original tints their brightest pixels yellow
-                // (LotSceneExporter's yellowRoadMarkings, matching Sims.exe's road marking blit).
+                // Tints bright pixels in road floor patterns yellow to render yellow road dividing lines
+                // from white texture artwork.
                 if (pattern is 10 or 11 && Math.Min(color.Red, Math.Min(color.Green, color.Blue)) > 64)
                 {
                     bytes[at + 1] = (byte)(color.Green * 0.8f);
                     bytes[at + 2] = (byte)(color.Blue * 0.12f);
                 }
             }
-            // Bleed the outermost opaque texels on each scanline into the transparent corners outside the stair-stepped
-            // SPR2 diamond so continuous triangle edges never sample alpha=0 and discard fragments along tile seams.
+            // Bleeds edge texels into transparent border pixels of floor diamonds to prevent texture
+            // filtering seams along tile edges.
             var firstOpaqueRow = -1;
             var lastOpaqueRow = -1;
             for (var py = 0; py < frame.Height; py++)
@@ -1873,7 +1955,7 @@ internal static class SceneExporter
             if (entry is null) continue;
             if (entry.Definition[ObjdField.Type] is not (8 or 9)) continue;
             if ((state.Value0x110 & 0xff) < 1 || (state.Value0x110 & 0xff) > viewLevel) continue;
-            // The saved state's +0xf8 and +0xf4 words are the x and y positions in sixteenths of a tile.
+            // Converts stored world coordinates from sixteenths of a tile into floating-point tile units.
             var tileX = state.Values0x108[4] / 16f;
             var tileY = state.Values0x108[5] / 16f;
             if (world.ObjectById(saved.ObjectId) is not null) continue;
@@ -1885,7 +1967,6 @@ internal static class SceneExporter
         savedDoors = savedDoorsList.Count == 0 ? Array.Empty<SavedDoor>() : savedDoorsList.ToArray();
         var objectStyles = new Dictionary<(int Level, int X, int Y, int Side), WallStyleArt>();
         var wallObjectKinds = new Dictionary<(int Level, int X, int Y, int Side), int>();
-        // Window, door, and HideForCutaway wall objects hide when the wall they are attached to is lowered.
         void AddObjectStyle(int level, int tileX, int tileY, int flags2, int wallPlacement, int direction, int wallStyle, IffFile file, Objd definition)
         {
             if ((flags2 & 0xc000) == 0 || wallStyle == 0) return;
@@ -1893,8 +1974,8 @@ internal static class SceneExporter
             WallStyleArt art;
             if (wallStyle is > 21 and < 256)
             {
-                // A window or door carries six wall SPRs in its own object file: up far/medium/near and down
-                // far/medium/near. The native renderer maps them to runtime styles at 256+.
+                // Door and window objects define six wall mask SPR# resources covering up and down states
+                // across three zoom levels, mapped to wall styles at 256 and above.
                 if (definition.Fields.Count <= 81) return;
                 var spriteBase = definition.Fields[81];
                 if (spriteBase == 0) return;
@@ -1905,8 +1986,8 @@ internal static class SceneExporter
             void Apply(int side)
             {
                 side &= 3;
-                // Wall style placement stores only the top-right (side 0) and top-left (side 3) slots and ignores
-                // the other two; that is what leaves a two-tile window on its single wall face.
+                // Wall style placement uses only top-right (side 0) and top-left (side 3) slots, allowing
+                // multi-tile wall objects to anchor to a single wall face.
                 if (side == 0)
                 {
                     objectStyles[(level, tileX, tileY, 1)] = art;
@@ -1969,14 +2050,15 @@ internal static class SceneExporter
         {
         var walls = ReadWalls(lot, wallLevel);
         var wallRooms = world.LotRoomMaps.TryGetValue(wallLevel, out var wallRoomMap) ? wallRoomMap : null;
-        // Wall corners: WallComponent.GenerateWallData derives them from the two faces that end at a tile corner.
-        // A face contributes when it is "thick": DecodeWalls keeps the four opening styles 2, 12, 13 and 14 and
-        // turns every other stored style into 1, so for a cardinal tile a face is thick exactly when its segment
-        // bit is set. The top-left face corners the tile itself at the bottom-left and the next tile at the
-        // top-right; the top-right face corners the tile at the bottom-right and the next tile at the top-left.
-        // A diagonal adds its own corner bit to this tile and the opposite one to the next tile, and only counts
-        // when its stored style is 1 or 255 (diagonal tiles keep their styles unnormalised).
-        var junctions = new int[Size * Size];
+        // Derives both standing and lowered wall corner junctions from thick segments and diagonals,
+        // excluding lowered doorway openings so thresholds do not receive plaster strips.
+        var upJunctions = new int[Size * Size];
+        var downJunctions = new int[Size * Size];
+        var levelForcedDown = wallMode == "down" && wallLevel == viewLevel;
+        var levelCutaway = wallMode == "cutaway" && wallLevel == viewLevel;
+        bool IsDoorEdge(int ownerX, int ownerY, int side, byte storedStyle) =>
+            wallObjectKinds.GetValueOrDefault((wallLevel, ownerX, ownerY, side)) == 1 ||
+            (!hasLiveObjects && storedStyle is 3 or 5 or 6 or 15 or 23);
         if (walls is not null)
         Lap("wallsLevel");
         for (var y = 0; y < lotSize; y++)
@@ -1984,29 +2066,67 @@ internal static class SceneExporter
         {
             if (walls is null || x >= walls.Rows || y >= walls.Width) continue;
             var tile = walls.Element(x, y);
-            if (wallLevel == viewLevel && tile[0] != 0)
+            var segments = tile[0];
+            if (wallLevel == viewLevel && segments != 0)
                 MarkCutawaySensitiveNeighborhood(x, y);
-            PopulateTileJunctionFlags(junctions, lotSize, x, y, tile[0], tile[2], tile[3],
-                cutawayMask: wallLevel == viewLevel && wallMode == "cutaway" ? cutawayMask : null);
+            if (segments == 0) continue;
+
+            if ((segments & 1) != 0 && NormalizedWallStyle(tile[2]) == 1)
+            {
+                var segDown = levelForcedDown || (levelCutaway && IsCutawayPair(x, y, x - 1, y));
+                if (!segDown || !IsDoorEdge(x, y, 0, tile[2]))
+                {
+                    var targetJunctions = segDown ? downJunctions : upJunctions;
+                    targetJunctions[y * Size + x] |= 4;
+                    if (y + 1 < lotSize) targetJunctions[(y + 1) * Size + x] |= 1;
+                }
+            }
+            if ((segments & 2) != 0 && NormalizedWallStyle(tile[3]) == 1)
+            {
+                var segDown = levelForcedDown || (levelCutaway && IsCutawayPair(x, y, x, y - 1));
+                if (!segDown || !IsDoorEdge(x, y, 1, tile[3]))
+                {
+                    var targetJunctions = segDown ? downJunctions : upJunctions;
+                    targetJunctions[y * Size + x] |= 8;
+                    if (x + 1 < lotSize) targetJunctions[y * Size + x + 1] |= 2;
+                }
+            }
+
+            var diag = segments & 0x30;
+            if (diag is 0x20 or 0x10 && tile[3] is not (2 or 12 or 13 or 14))
+            {
+                var diagDown = levelForcedDown || (levelCutaway && cutawayMask is not null && cutawayMask[y * lotSize + x]);
+                if (!diagDown || !IsDoorEdge(x, y, 1, tile[3]))
+                {
+                    var targetJunctions = diagDown ? downJunctions : upJunctions;
+                    if (diag == 0x20)
+                    {
+                        targetJunctions[y * Size + x] |= 64;
+                        if (x + 1 < lotSize && y + 1 < lotSize) targetJunctions[(y + 1) * Size + x + 1] |= 16;
+                    }
+                    else
+                    {
+                        if (x + 1 < lotSize) targetJunctions[y * Size + x + 1] |= 32;
+                        if (y + 1 < lotSize) targetJunctions[(y + 1) * Size + x] |= 128;
+                    }
+                }
+            }
         }
         if (walls is not null)
-        // The reference exporter walks the camera-rotated wall grid: every camera tile owns the two visible wall
-        // faces, and each face takes the pattern and style that the source tile holding that edge stores. The wall
-        // art is anchored at the camera tile's corner, with the destination rectangle of the camera face.
+        // Walks the camera-rotated grid where each camera tile owns the two visible wall faces, mapping
+        // pattern and style from the owning source tile edge.
         Lap("wallTiles");
         for (var v = 0; v < lotSize; v++)
         for (var u = 0; u < lotSize; u++)
         {
             var (sourceX, sourceY) = camera.SourceTile(u, v);
             if (sourceX < 0 || sourceY < 0 || sourceX >= lotSize || sourceY >= lotSize) continue;
-            // Wall::ComputeCutaway cuts a wall only when the tile that owns it and the tile across it are both in the mask.
+            // Cuts a wall segment only when both the owning tile and the opposing neighbor tile are
+            // included in the cutaway mask.
             bool Cutaway(int otherX, int otherY) =>
                 wallLevel == viewLevel && cutawayMask is not null && otherX >= 0 && otherY >= 0 && otherX < lotSize && otherY < lotSize &&
                 cutawayMask[sourceY * lotSize + sourceX] && cutawayMask[otherY * lotSize + otherX];
             var down = wallMode == "down" && wallLevel == viewLevel;
-            bool IsDoorEdge(int ownerX, int ownerY, int side, byte storedStyle) =>
-                wallObjectKinds.GetValueOrDefault((wallLevel, ownerX, ownerY, side)) == 1 ||
-                (!hasLiveObjects && storedStyle is 3 or 5 or 6 or 15 or 23);
             bool IsWindowEdge(int ownerX, int ownerY, int side, byte storedStyle) =>
                 wallObjectKinds.GetValueOrDefault((wallLevel, ownerX, ownerY, side)) == 2 ||
                 (!hasLiveObjects && storedStyle is 4 or 9 or 10 or 11 or (>= 16 and <= 22));
@@ -2045,8 +2165,8 @@ internal static class SceneExporter
                 }
                 return false;
             }
-            // Each zoom uses its own SPR and destination rectangle; the near art carries two texels per scene unit
-            // and the far art half of one.
+            // Wall sprites scale per zoom level, with near art using two texels per scene unit and far art
+            // using half a texel per unit.
             ZoomImage? Zoom(ushort pattern, WallStyleArt wallStyle, int zoom, float scale,
                 (int X, int Y, int Width, int Height)[] rectangles, int configuration, int artFace, bool isDown)
             {
@@ -2059,22 +2179,21 @@ internal static class SceneExporter
             }
             void AddFace(int face, int neighbourX, int neighbourY)
             {
-                // The face is the edge between the camera tile's source tile and its neighbour in the camera's
-                // direction. The owner of that edge stores its style in the top-left or top-right slot, while the
-                // source tile itself stores the wallpaper pattern facing into (sourceX, sourceY).
+                // Separates wall face attributes: the owning tile stores the structural wall style, while
+                // each adjacent tile stores the wallpaper pattern facing its interior.
                 var (ownerX, ownerY, side) = EdgeOwner(sourceX, sourceY, neighbourX, neighbourY);
                 if (ownerX < 0 || ownerY < 0 || ownerX >= lotSize || ownerY >= lotSize) return;
                 var owner = walls!.Element(ownerX, ownerY);
-                // Sims.exe's FUN_0047870b expands these saved ARRy wall bytes into the runtime grid: byte 0 holds
-                // the segment flags, bytes 2 and 3 the two styles and bytes 4..7 the four side patterns.
+                // Decodes ARRY wall cell data: byte 0 stores segment flags, bytes 2 and 3 store wall
+                // styles, and bytes 4 through 7 store wallpaper patterns for each face.
                 if ((owner[0] & (side == 0 ? 1 : 2)) == 0) return;
                 var sourceTile = walls.Element(sourceX, sourceY);
                 var patternSlot = neighbourX < sourceX ? 4 : neighbourX > sourceX ? 7 : neighbourY < sourceY ? 5 : 6;
                 var pattern = sourceTile[patternSlot];
                 var storedStyle = side == 0 ? owner[2] : owner[3];
                 var style = NormalizedWallStyle(storedStyle);
-                // Sims.exe (0x0053dd1c): cutaway or Walls Down lowers Thick walls (style 1), hides Door wall segments
-                // completely (leaving a doorway gap), and draws Window wall segments as solid lowered style-1 wall stubs.
+                // Lowering walls or applying cutaway lowers solid walls, hides door segments completely to
+                // create openings, and renders window segments as lowered wall stubs.
                 var faceDown = down || (style == 1 && Cutaway(neighbourX, neighbourY));
                 if (faceDown && IsDoorEdge(ownerX, ownerY, side, storedStyle)) return;
                 var objectStyle = objectStyles.GetValueOrDefault((wallLevel, ownerX, ownerY, side));
@@ -2107,9 +2226,8 @@ internal static class SceneExporter
                     Near: Zoom(pattern, wallStyle, 2, 2f, NearWallRectangles, face, face, faceDown),
                     Far: Zoom(pattern, wallStyle, 0, 0.5f, FarWallRectangles, face + 8, face, faceDown)));
                 if (style != 1) return;
-                // FUN_0053dd1c clips an end to 3 << (zoom - 1) pixels, then restores the viewport.
-                // Drawing the complete style frame here creates a second full wall beside windows. A joined
-                // corner is not an open end; both straight and perpendicular continuations must be considered.
+                // Clips wall end caps to a narrow vertical strip scaled by zoom level, emitting them only
+                // at open ends rather than joined corners.
                 AddEnd(false);
                 AddEnd(true);
 
@@ -2125,7 +2243,8 @@ internal static class SceneExporter
                     var endU = face == 0 ? u - (close ? 1 : 0) : u + (close ? 1 : -1);
                     var endV = face == 0 ? v + (close ? 1 : -1) : v - (close ? 1 : 0);
                     var right = artFace == 1;
-                    // End strips use the ordinary wall style rather than the opening in a door/window mask.
+                    // Wall end cap strips render using the base wall style rather than door or window
+                    // cutout masks.
                     var capStyle = WallStyleArt.Base(style);
                     var fullTexture = WallTexture(pattern, capStyle, artFace, faceDown, 1);
                     if (fullTexture < 0) return;
@@ -2158,9 +2277,8 @@ internal static class SceneExporter
                         Far: CapZoom(0, 0.5f, FarWallRectangles, artFace + 8)));
                 }
             }
-            // A diagonal wall replaces both cardinal faces: segment bit 0x10 (horizontal diagonal, art frame 2) or
-            // 0x20 (vertical diagonal, art frame 3) instead of a face bit. Odd camera rotations swap 0x10 and 0x20,
-            // and rotations 1/2 swap the two diagonal pattern slots (bytes 6 and 7).
+            // Diagonal walls use segment bit 0x10 for horizontal or 0x20 for vertical diagonals; odd camera
+            // rotations swap these bits, while rotations 1 and 2 swap the diagonal pattern slots.
             void AddDiagonal()
             {
                 var owner = walls!.Element(sourceX, sourceY);
@@ -2176,8 +2294,8 @@ internal static class SceneExporter
                 var style = (ushort)storedStyle;
                 var diagDown = down || (wallLevel == viewLevel && style is not (2 or 12 or 13 or 14) && cutawayMask is not null && cutawayMask[sourceY * lotSize + sourceX]);
                 if (diagDown && IsDoorEdge(sourceX, sourceY, 1, storedStyle)) return;
-                // Diagonal tiles keep their stored style unnormalised (DecodeWalls only normalises cardinal faces),
-                // but an object style still replaces the ordinary style 1.
+                // Diagonal wall tiles preserve unnormalized style indices, though object-provided styles
+                // still override standard style 1.
                 var objectStyle = objectStyles.GetValueOrDefault((wallLevel, sourceX, sourceY, 1));
                 var wallStyle = diagDown && IsWindowEdge(sourceX, sourceY, 1, storedStyle)
                     ? WallStyleArt.Base(1)
@@ -2188,8 +2306,8 @@ internal static class SceneExporter
                 var interval = camera.SpriteDepthCamera(u, v, altitude);
                 var point = camera.ProjectCamera(u, v, altitude * 40);
                 var rectangle = WallRectangles[face];
-                // FUN_0053f876 (lines 53-66, 186-207), FUN_004672d0, and FUN_0053daef shade the visible diagonal face
-                // from its camera-facing room half rather than RoomAt(sourceX, sourceY), which is RoomMap.NoRoom (0xff).
+                // Shades visible diagonal wall faces using the camera-facing room half, since diagonal
+                // dividing tiles are marked as having no room.
                 var (diagSubX, diagSubY) = sourceDiag == 0x10
                     ? (camera.Orientation is 1 or 2 ? (4, 4) : (12, 12))
                     : (camera.Orientation is 2 or 3 ? (4, 12) : (12, 4));
@@ -2208,51 +2326,50 @@ internal static class SceneExporter
                     Near: Zoom(pattern, wallStyle, 2, 2f, NearWallRectangles, face, face, diagDown),
                     Far: Zoom(pattern, wallStyle, 0, 0.5f, FarWallRectangles, face + 8, face, diagDown)));
             }
-            // The corner sprite is anchored at the top of the storey, at the tile corner one half tile back, and
-            // picks its frame from the camera-rotated flags using Sims.exe's DAT_006cd440 lookup table. A
-            // lowered junction keeps the same art but anchors 0.3 units above the floor of the view level.
-            void AddJunction()
+            // Anchors wall corner junction sprites at the top of the story, or 0.3 height units above the
+            // floor when walls are lowered.
+            void AddJunction(int sourceFlags, bool isDown)
             {
-                var sourceFlags = junctions[sourceY * Size + sourceX];
                 if (sourceFlags == 0) return;
                 var flags = camera.CameraJunction(sourceFlags);
                 var rawFrame = JunctionFrames[flags & 0xff];
                 var frameIndex = rawFrame is 0 or byte.MaxValue ? -1 : rawFrame - 1;
                 if (frameIndex < 0) return;
-                var texture = JunctionTexture(1, frameIndex);
+                var useDownSheet = isDown && (flags & 0x50) == 0;
+                var texture = JunctionTexture(1, frameIndex, useDownSheet);
                 if (texture < 0) return;
-                var altitude = Elevation(sourceX, sourceY) / 40f + wallLevel * EntityTransform.StoryHeight;
+                var floorAltitude = Elevation(sourceX, sourceY) / 40f + (wallLevel - 1) * EntityTransform.StoryHeight;
+                var altitude = floorAltitude + (isDown ? 0.3f : EntityTransform.StoryHeight);
                 var corner = camera.CameraPoint(sourceX, sourceY);
-                var interval = camera.SpriteDepthCamera(corner.X - 0.5f, corner.Y - 0.5f, altitude);
+                var depthBias = (flags & 0x40) != 0 ? 0.5f : -0.5f;
+                var interval = camera.SpriteDepthCamera(corner.X + depthBias, corner.Y + depthBias, altitude);
                 var point = camera.ProjectCamera(corner.X, corner.Y, altitude * 40);
                 ZoomImage? JunctionZoom(int zoom, float scale, (int X, int Y) destination, int configuration)
                 {
-                    var art = JunctionTexture(zoom, frameIndex);
+                    var art = JunctionTexture(zoom, frameIndex, useDownSheet);
                     if (art < 0) return null;
                     return new ZoomImage(art, destination.X / scale - JunctionOrigin.X,
                         destination.Y / scale - JunctionOrigin.Y, 64, 32, ArchitectureDepth(configuration, art));
                 }
-                // FUN_0053c3dc draws the walls-up sheet (SPR# 0xfff + zoom) at (X - 1 - (8 << zoom),
-                // Y - (4 << zoom) - wallHeight[zoom]), wallHeight being FUN_004ca03f's 232/116/58, while FUN_004ac357
-                // puts the top of a top-right wall face at Y - (1 << zoom) - wallHeight[zoom]. The junction's top edge
-                // therefore sits 12 medium pixels above the wall sprite's top (P.y - 119 here), i.e. 131 pixels above
-                // the floor vertex, 13 below the storey-raised point. Its 6-pixel trim then rests on the wall's top
-                // edge instead of floating 2 pixels above it. The near (4, 317) and far (1, 80) destinations keep the
-                // same 24/12/6 pixel relation to their wall rectangles, so only the medium anchor moves.
-                sprites.Add(new SceneSprite(texture, point.X - 32, point.Y - 13, 64, 32, false, 0,
+                // Aligns junction cap sprites to rest cleanly atop standing and lowered walls.
+                var junctionRoom = wallRooms is not null && sourceX >= 0 && sourceY >= 0 && sourceX < wallRooms.Width && sourceY < wallRooms.Height
+                    ? (int?)wallRooms.RoomAt(sourceX, sourceY)
+                    : (wallRooms is not null ? RoomMap.NoRoom : 1);
+                sprites.Add(new SceneSprite(texture, point.X - 32, point.Y - (isDown ? 15 : 13), 64, 32, false, 0,
                     camera.DepthOrderCamera(corner.X, corner.Y) - 0.5f, 1, ArchitectureDepth(19, texture),
-                    interval.Near, interval.Far, Level: wallLevel, Room: 1,
-                    Junction: new WallJunction(sourceX, sourceY, wallLevel, sourceFlags, frameIndex, down),
-                    Near: JunctionZoom(2, 2f, (4, 317), 18), Far: JunctionZoom(0, 0.5f, (1, 80), 20)));
+                    interval.Near, interval.Far, Level: wallLevel, Room: junctionRoom,
+                    Junction: new WallJunction(sourceX, sourceY, wallLevel, sourceFlags, frameIndex, isDown),
+                    Near: JunctionZoom(2, 2f, (4, isDown ? 318 : 317), 18), Far: JunctionZoom(0, 0.5f, (1, 80), 20)));
             }
-            // The camera's top-left face looks towards the previous camera column and its top-right face towards
-            // the previous camera row; both neighbours are source tiles once the camera rotation is undone.
+            // Maps camera-relative wall faces to grid neighbors: the top-left face looks toward the prior
+            // column and the top-right face toward the prior row.
             var (leftX, leftY) = camera.SourceTile(u - 1, v);
             var (upX, upY) = camera.SourceTile(u, v - 1);
             AddFace(0, leftX, leftY);
             AddFace(1, upX, upY);
             AddDiagonal();
-            if (ShouldEmitWallJunction(wallLevel, viewLevel, wallMode)) AddJunction();
+            AddJunction(downJunctions[sourceY * Size + sourceX], isDown: true);
+            AddJunction(upJunctions[sourceY * Size + sourceX], isDown: false);
 
             int WallTexture(ushort pattern, WallStyleArt styleArt, int frame, bool down, int zoom)
             {
@@ -2264,7 +2381,8 @@ internal static class SceneExporter
                 if (pattern is >= 256 and < 65534 && dynamicWallFiles.TryGetValue(pattern, out var dynamicWallPath))
                 {
                     patternFile = OpenArtwork(dynamicWallPath);
-                    // FUN_004c5715 lines 159-161: standalone .wll files store far at SPR# 1, medium at 1793 (1+0x700), near at 2049 (1+0x800).
+                    // Standalone .wll files store wallpaper sprites at SPR# 1 for far, 1793 for medium, and
+                    // 2049 for near zoom.
                     patternSpriteId = zoom switch { 0 => 1, 2 => 2049, _ => 1793 };
                 }
                 else
@@ -2281,7 +2399,8 @@ internal static class SceneExporter
                 Sprite maskSprite;
                 if (styleArt.File is { } objectFile)
                 {
-                    // The object's six wall SPRs run up far/medium/near, then down far/medium/near.
+                    // Architectural object wall mask sprites are ordered as far, medium, and near for
+                    // walls-up, followed by far, medium, and near for walls-down.
                     var maskId = ResolveWallMaskId(styleArt, down, zoom);
                     var maskChunk = objectFile.Find(ResourceType.Spr1, maskId);
                     if (maskChunk is null)
@@ -2296,7 +2415,8 @@ internal static class SceneExporter
                 {
                     var maskId = ResolveWallMaskId(styleArt, down, zoom);
                     var maskChunk = wallArtwork.Find(ResourceType.Spr1, maskId);
-                    // WorldWallProvider falls back to the up artwork when a style ships no lowered mask.
+                    // Falls back to the walls-up mask artwork when an object style does not provide a
+                    // lowered wall mask.
                     if (maskChunk is null && down)
                     {
                         maskId = WallMaskId(styleArt.BaseStyle, false, zoom);
@@ -2358,10 +2478,11 @@ internal static class SceneExporter
 
         }
 
-        } // end if (!animating)
+        }
 
         var mediumUnitHeight = (float)(Math.Sqrt(64 * 64 / 2.0) * Math.Cos(Math.PI / 6));
-        // Native slot offsets are one-indexed by the slot's Height field; only 1, 2, 3, 4, and 8 override the slot's own Z (0046e014.c:4-36).
+        // Slot height offsets are 1-indexed by the slot Height field, where only codes 1, 2, 3, 4, and 8
+        // override the authored Z coordinate.
         float[] slotHeightOffsets = [0f, 2.5f, 4f, 4.05f, 0f, 0f, 0f, 4f, 0f];
         var avatarGeometry = AvatarSceneGeometry.For(gameRoot, registry);
         var avatarParts = new Dictionary<short, IReadOnlyList<AvatarSceneGeometry.Part>>();
@@ -2385,8 +2506,8 @@ internal static class SceneExporter
                 }
             }
         }
-        // Prepare parent Sim poses before their attached child Sims; reuse each resulting mesh list later rather than
-        // sampling the pose twice.
+        // Evaluates parent avatar poses before attached child avatars so child attachment transforms
+        // inherit updated parent bone positions.
         foreach (var walkEntry in world.WalkOrder)
         {
             if (walkEntry is not XPerson person) continue;
@@ -2412,9 +2533,8 @@ internal static class SceneExporter
                 System.Numerics.Vector3? attachmentRoot = null;
                 float? inheritedRootDirection = null;
                 var parent = ContainmentParent(world, person);
-                // FUN_00432771 stores the source hierarchy index + 1. The named HEAD slot inserted by
-                // cXPerson::Initialize is logical index 1; SAnimator::Tick reads GetObjectSlot(1), then uses the
-                // parent HEAD bone position and animator root transform for an animated child Sim.
+                // SlotHierNumber stores the 1-based hierarchy index, mapping index 2 to the logical HEAD
+                // slot (index 1) to transform an attached child by the parent head bone.
                 if (person[ObjectData.SlotHierNumber] == 2 && parent is XPerson parentPerson &&
                     HeadSlotTargets(world, parentPerson, person) &&
                     parentPerson.Position.Height >= 1 &&
@@ -2429,10 +2549,9 @@ internal static class SceneExporter
                     }
                 }
 
-                // cNeighborhood::SelectPerson (0044668c.c, 0044756e.c, 00446f29.c) attaches PlumbBob - Standard (1)
-                // to the selected Sim's HEAD slot, PlumbBob - Date (2) to the selected Sim's AutoFollowHotDate target,
-                // and PlumbBob - Star (3) to non-selected Sims with FameStarPower09 >= 10, provided the HEAD slot is
-                // not occupied by an attached child/object.
+                // Attaches the standard plumbbob to the selected avatar, the date plumbbob to the active
+                // date target, and the star plumbbob to celebrities with sufficient fame, provided the head
+                // slot is unoccupied.
                 var headSlotOccupied = false;
                 if (person.Slots.Count > 2 && person.Slots[2] != 0)
                 {
@@ -2452,7 +2571,8 @@ internal static class SceneExporter
                     ? 0
                     : selectedPerson is not null && person.Id == selectedPerson.Id
                         ? 1
-                        : selectedPerson is not null && Math.Abs((int)selectedPerson[PersonData.AutoFollowHotDate]) == person.Id
+                        : selectedPerson is not null && selectedPerson[PersonData.AutoFollowHotDate] > 0 &&
+                          selectedPerson[PersonData.AutoFollowHotDate] == person.Id
                             ? 2
                             : person[PersonData.FameStarPower09] >= 10
                                 ? 3
@@ -2460,7 +2580,8 @@ internal static class SceneExporter
 
                 avatarParts[person.Id] = avatarGeometry.Build(person, person.Position.Height, cameraOrientation, Elevation,
                     camera, attachmentRoot: attachmentRoot, inheritedRootDirection: inheritedRootDirection,
-                    headIndicatorKind: headIndicatorKind, subTickAlpha: animating ? subTickAlpha : 0f, updates: updates);
+                    headIndicatorKind: headIndicatorKind, subTickAlpha: animating ? subTickAlpha : 0f, updates: updates,
+                    careerHost: world.CareerHost);
             }
             catch
             {
@@ -2471,6 +2592,7 @@ internal static class SceneExporter
         }
         var objectPositions = new Dictionary<XObject, Microsoft.Xna.Framework.Vector3>();
         var resolvingContainment = new HashSet<XObject>();
+        var shadowedObjectTiles = new HashSet<(int Level, int TileX, int TileY)>();
         var traceSpriteGuid = uint.TryParse(Environment.GetEnvironmentVariable("SIMS_NATIVE_TRACE_SPRITE_GUID"),
             NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var parsedTraceSpriteGuid) ? parsedTraceSpriteGuid : 0;
         var tracedSpriteResources = new HashSet<(short Id, ushort Graphic, int Direction)>();
@@ -2507,9 +2629,8 @@ internal static class SceneExporter
                 (tile.Height - 1) * EntityTransform.StoryHeight + Elevation(tile.X / 16f + 0.5f, tile.Y / 16f + 0.5f) / 40);
         Microsoft.Xna.Framework.Vector3 SlotPosition(XObject container, int index)
         {
-            // EntityTransform.SlotPosition: a container object's slot 0 table, the height code mapped through
-            // SLOT.HeightOffsets, and the offset rotated with the container. This parameter is the zero-based index
-            // into the SLOT list; SlotHierNumber's normalized first authored hierarchy is 1.
+            // Calculates container slot world positions by rotating slot offsets by container orientation
+            // and applying SLOT height code table offsets.
             var origin = ObjectPosition(container);
             if (index < 0) return origin;
             var defSlots = container.DefinitionSlots;
@@ -2535,10 +2656,8 @@ internal static class SceneExporter
         }
         world.HeadSeekGeometryResolver = (actor, target) =>
         {
-            // Mac Registration::GetTranslation asks its Bone for the current transform on every call
-            // (skeleton.s 0x103664B0–0x10366508 and 0x10366560–0x103665B8). Refresh the source poses here
-            // because an offscreen Sim is not rebuilt by the scene walk and its prior world-space cache can lag
-            // behind the current animator practice/root state.
+            // Refreshes avatar poses when resolving bone attachment points to ensure offscreen avatars
+            // reflect current animation transforms.
             if (actor.AnimatorHeadSeekRegistrationsAvailable == false) return null;
             try { BuildAvatar(actor, refreshPose: true); }
             catch (Exception error) when (error is InvalidDataException or ResourceFormatException or ArgumentException)
@@ -2570,8 +2689,8 @@ internal static class SceneExporter
             }
             else
             {
-                // ObjectPosition returns (tileX, tileY, altitude), whereas HeadSeek registrations come from
-                // avatar world space where X is tileY (+0xf4) and Z is tileX (+0xf8) (005904d6.c:38-46).
+                // Maps avatar coordinate axes to tile space, where avatar bone space maps X to tile Y and Z
+                // to tile X.
                 objectPositions.Clear();
                 resolvingContainment.Clear();
                 var targetPosition = ObjectPosition(target);
@@ -2605,14 +2724,31 @@ internal static class SceneExporter
                     cachedObj.Key == cacheKey &&
                     DynamicFlagsSequenceEqual(cachedObj.DynamicFlags, dynamicSpriteFlags))
                 {
-                    sprites.AddRange(cachedObj.Sprites);
+                    var cachedSprites = cachedObj.Sprites;
+                    var hasCachedShadow = false;
+                    for (var c = 0; c < cachedSprites.Length; c++)
+                    {
+                        if (cachedSprites[c].FloorShadow is not null) { hasCachedShadow = true; break; }
+                    }
+                    if (!hasCachedShadow || shadowedObjectTiles.Add((level, (int)MathF.Floor(origin.X), (int)MathF.Floor(origin.Y))))
+                    {
+                        sprites.AddRange(cachedSprites);
+                    }
+                    else
+                    {
+                        for (var c = 0; c < cachedSprites.Length; c++)
+                        {
+                            var cs = cachedSprites[c];
+                            sprites.Add(cs.FloorShadow is not null
+                                ? cs with { FloorShadow = null, FloorShadowNear = null, FloorShadowFar = null }
+                                : cs);
+                        }
+                    }
                     return;
                 }
             }
             var emitStart = sprites.Count;
-            // ObjectData.Graphic is the graphic offset into OBJD BaseGraphic. Sims.exe's draw path resolves that
-            // selected DGRP before FUN_004c828c walks its sprites; falling back to an arbitrary first DGRP makes
-            // animated objects display unrelated art when the selected group is absent.
+            // Resolves an object's active DGRP resource by adding the Graphic offset to OBJD BaseGraphic.
             var baseGraphic = (ushort)entry.Definition[ObjdField.BaseGraphic];
             var selectedGraphic = SelectedGraphic(baseGraphic, graphic);
             var groupChunk = entry.File.Find(ResourceType.Dgrp, selectedGraphic);
@@ -2628,19 +2764,20 @@ internal static class SceneExporter
                 missingResources.Add($"object:{id}:guid:{guid:x8}:dgrp-read:{selectedGraphic}");
                 return;
             }
-            // DGRP holds the four facing flags (1, 4, 16, 64); SelectedImage applies the camera rotation.
+            // DGRP resources store images for cardinal facings (flags 1, 4, 16, 64), rotated by camera
+            // orientation.
             var image = SelectedImage(group, direction, camera.Orientation);
             if (image is null)
             {
                 missingResources.Add($"object:{id}:guid:{guid:x8}:image:{selectedGraphic}:direction:{direction}:rotation:{camera.Orientation}");
                 return;
             }
-            // Each zoom level has its own DGRP image; pair its sprites with the medium ones by
-            // index: zoom 3 is the near image, zoom 1 the far one (DrawGroupImage.Zoom).
+            // Pairs zoomed DGRP sprites with medium-zoom sprites by part index across near (zoom 3) and far
+            // (zoom 1) images.
             var nearImage = SelectedImage(group, direction, camera.Orientation, 3);
             var farImage = SelectedImage(group, direction, camera.Orientation, 1);
-            // One draw group sprite's art: FUN_004c173f reads the SPR2 chunk palette, FUN_004bf678 consumes its
-            // per-pixel depth and alpha, and a part with no SPR2 falls back to the legacy SPR# frame.
+            // Decodes draw group sprite parts using SPR2 palette, depth, and alpha data, falling back to
+            // legacy SPR# frames when SPR2 is absent.
             (DepthFrame? Frame, IndexedFrame? Legacy, int Width, int Height, int PaletteId) ReadPart(
                 DrawGroupSprite part, bool report)
             {
@@ -2674,25 +2811,32 @@ internal static class SceneExporter
             int PartTexture(DrawGroupSprite part, DepthFrame? frame, IndexedFrame? legacy, int width, int height, int paletteId)
             {
                 var doubleAlpha = (part.Flags & 0x10) != 0;
-                var key = (guid, part.SpriteId | (doubleAlpha ? 0x1000000 : 0), part.Frame);
+                var spriteKey = part.SpriteId | (doubleAlpha ? 0x1000000 : 0);
+                var key = (guid, spriteKey, part.Frame);
                 if (spriteTextures.TryGetValue(key, out var texture)) return texture;
                 var palette = PaletteFor(entry.File, paletteId);
                 if (palette is null) return -1;
-                var bytes = new byte[width * height * 4];
-                for (var pixel = 0; pixel < width * height; pixel++)
+                if (partRgbaBytesCache.Count > 4096) partRgbaBytesCache.Clear();
+                var cacheKey = (entry.File, paletteId, spriteKey | (frame is null ? 0x2000000 : 0), part.Frame);
+                var bytes = partRgbaBytesCache.GetOrAdd(cacheKey, _ =>
                 {
-                    // Sims.exe SPR2 blitters (004bdbcc.c:95, 004bbca9.c:95) skip raw 5-bit alpha < 8 (1..7) completely.
-                    var visible = frame is not null ? frame.Alpha[pixel] >= 8 : legacy!.Opaque[pixel];
-                    if (!visible) continue;
-                    var color = palette[frame is not null ? frame.Indices[pixel] : legacy!.Indices[pixel]];
-                    var at = pixel * 4;
-                    bytes[at] = color.Red;
-                    bytes[at + 1] = color.Green;
-                    bytes[at + 2] = color.Blue;
-                    var alpha = frame is null ? (byte)255 : (byte)Math.Clamp((frame.Alpha[pixel] * 255 + 15) / 31, 0, 255);
-                    if (doubleAlpha) alpha = alpha < 0x80 ? (byte)(alpha << 1) : (byte)0xff;
-                    bytes[at + 3] = alpha;
-                }
+                    var buffer = new byte[width * height * 4];
+                    for (var pixel = 0; pixel < width * height; pixel++)
+                    {
+                        // Treats 5-bit SPR2 alpha values below 8 as fully transparent.
+                        var visible = frame is not null ? frame.Alpha[pixel] >= 8 : legacy!.Opaque[pixel];
+                        if (!visible) continue;
+                        var color = palette[frame is not null ? frame.Indices[pixel] : legacy!.Indices[pixel]];
+                        var at = pixel * 4;
+                        buffer[at] = color.Red;
+                        buffer[at + 1] = color.Green;
+                        buffer[at + 2] = color.Blue;
+                        var alpha = frame is null ? (byte)255 : (byte)Math.Clamp((frame.Alpha[pixel] * 255 + 15) / 31, 0, 255);
+                        if (doubleAlpha) alpha = alpha < 0x80 ? (byte)(alpha << 1) : (byte)0xff;
+                        buffer[at + 3] = alpha;
+                    }
+                    return buffer;
+                });
                 var baseName = $"sprite-{guid:x8}-{part.SpriteId}-{part.Frame}.rgba";
                 var name = doubleAlpha && files.ContainsKey(baseName)
                     ? $"sprite-{guid:x8}-{part.SpriteId}-{part.Frame}-a2.rgba"
@@ -2708,11 +2852,16 @@ internal static class SceneExporter
                 if (frame is null) return null;
                 var key = (guid, part.SpriteId, part.Frame);
                 if (spriteDepthTextures.TryGetValue(key, out var depthIndex)) return depthIndex;
-                var srcDepth = frame.Depth;
-                var srcAlpha = frame.Alpha;
-                var depthBytes = new byte[srcDepth.Length];
-                for (var pixel = 0; pixel < srcDepth.Length; pixel++)
-                    depthBytes[pixel] = srcAlpha[pixel] < 8 ? (byte)255 : srcDepth[pixel];
+                if (partDepthBytesCache.Count > 4096) partDepthBytesCache.Clear();
+                var depthBytes = partDepthBytesCache.GetOrAdd((entry.File, part.SpriteId, part.Frame), _ =>
+                {
+                    var srcDepth = frame.Depth;
+                    var srcAlpha = frame.Alpha;
+                    var buffer = new byte[srcDepth.Length];
+                    for (var pixel = 0; pixel < srcDepth.Length; pixel++)
+                        buffer[pixel] = srcAlpha[pixel] < 8 ? (byte)255 : srcDepth[pixel];
+                    return buffer;
+                });
                 var depthName = $"sprite-depth-{guid:x8}-{part.SpriteId}-{part.Frame}.depth8";
                 files[depthName] = depthBytes;
                 depthIndex = textures.Count;
@@ -2720,6 +2869,8 @@ internal static class SceneExporter
                 spriteDepthTextures[key] = depthIndex;
                 return depthIndex;
             }
+            var emittedAnySprite = false;
+            var objectEmittedShadow = false;
             for (var index = 0; index < image.Sprites.Count; index++)
             {
                 var sprite = image.Sprites[index];
@@ -2735,18 +2886,13 @@ internal static class SceneExporter
                 var (offsetX, offsetY) = RotateCardinalOffset(direction, sprite.Offset2, sprite.Offset3);
                 var offset = new Microsoft.Xna.Framework.Vector3(offsetX, offsetY, sprite.Offset1);
                 var point = camera.Project(origin.X + offset.X / 16, origin.Y + offset.Y / 16, origin.Z * 40);
-                // A part sits at its tile-centre anchor plus the draw group's own sprite offset: that is the DGRP
-                // destination used by the native renderer (projected tile centre, minus the frame height, plus the
-                // sprite offset), and it is what the reference scene and its ground-contact check are built on.
-                // Sims.exe's blitter FUN_004c828c also adds the SPR2 frame's stored x/y to the destination it is
-                // given (004c828c:60-61), but that destination is the exe's own projected object position, not this
-                // anchor; adding the frame offsets here double-counts the pivot and moves parts off the ground
-                // (front door +32 x and +73 y, pine -22 y) with no reference parity, so they stay out.
+                // Positions DGRP sprite parts by adding DGRP offsets to the projected tile-center anchor
+                // minus frame height, omitting internal SPR2 frame offsets to prevent double-counting
+                // pivots.
                 var spriteX = (int)(point.X + sprite.X);
                 var spriteY = (int)(point.Y - offset.Z / 5 * mediumUnitHeight - height + sprite.Y);
-                // The same placement at another zoom, in scene (medium) units: every world measure at near is twice
-                // the medium one and at far half of it, while the sprite offset and the frame height are already in
-                // that zoom's pixels, so the truncation happens on the scaled grid.
+                // Scales sprite coordinates across zoom levels where near units are doubled and far units
+                // halved, while sprite offsets remain in zoom-native pixels.
                 ZoomImage? Zoom(DrawGroupImage? zoomed, float scale)
                 {
                     if (zoomed is null || index >= zoomed.Sprites.Count) return null;
@@ -2755,7 +2901,6 @@ internal static class SceneExporter
                     if ((other.Flags & 1) != (sprite.Flags & 1)) return null;
                     var (otherFrame, otherLegacy, otherWidth, otherHeight, otherPalette) = ReadPart(other, report: false);
                     if (otherFrame is null && otherLegacy is null) return null;
-                    // The renderer swaps the whole sprite, so its depth must come from the same kind of source.
                     if ((otherFrame is not null) != (frame is not null)) return null;
                     if (!FrameHasPixels(otherWidth, otherHeight)) return null;
                     var otherTexture = PartTexture(other, otherFrame, otherLegacy, otherWidth, otherHeight, otherPalette);
@@ -2777,8 +2922,6 @@ internal static class SceneExporter
                     var containerId = source is null ? 0 : source[ObjectData.ContainerId];
                     var slot = source is null ? -1 : source[ObjectData.SlotHierNumber];
                     var sourceParentKey = source is null ? (short)0 : source[ObjectData.ParentId];
-                    // ContainerId/ParentId are one-based manager-table keys in placement paths. Log both
-                    // identity spaces so this diagnostic can distinguish a real parent from an Id collision.
                     var managerContainer = source is not null && containerId is > 0 and <= short.MaxValue
                         ? source.ObjectTableEntry((short)containerId)
                         : null;
@@ -2801,13 +2944,11 @@ internal static class SceneExporter
                         $"rotatedOffset={offset.X:R},{offset.Y:R},{offset.Z:R} sortDepth={sortDepth:R} " +
                         $"near={depth.Near:R} far={depth.Far:R}"));
                 }
-                // Object sprites take the room at their subtile position (with cXObject +0x84 fallback on diagonal seams).
-                // cXObject::Draw (00437961.c:96-103, 108), IsLitLightSource (00438022.c:8-10), and DrawSprite (004c7387.c:53-59)
-                // render sprites unlit (1.0f) when DGRP flag 0x4 (luminous) is set, on the cloud lot (house 99), or when a
-                // non-portal object (OBJD Type != 8) has an active LightingContribution0100 (+0xb0 != 0).
+                // Renders object sprites unlit (full brightness) when DGRP flag 0x4 is set, on cloud lots,
+                // for active non-portal light sources, or for pool attachments.
                 var unlitSprite = (sprite.Flags & 4) != 0 || house == 99 ||
                     (litLightSource && entry.Definition[ObjdField.Type] != 8);
-                var room = unlitSprite ? null : subtileRoom;
+                var room = unlitSprite ? null : entry.Definition[ObjdField.BuildModeType] == 7 ? 65534 : subtileRoom;
                 var shadowId = ShadowId(entry, shadowParts);
                 if (shadowId is { } rawMask)
                 {
@@ -2815,9 +2956,11 @@ internal static class SceneExporter
                     shadowId = RotateShadowId(rawMask, turns);
                 }
                 var shadowBrightness = (short)entry.Definition[ObjdField.ShadowBrightness];
+                var attachShadow = !emittedAnySprite;
+                emittedAnySprite = true;
                 ZoomImage? FloorShadow(int zoom)
                 {
-                    if (index != 0 || shadowId is null || contained ||
+                    if (!attachShadow || shadowId is null || contained ||
                         shadowHidden ||
                         entry.Definition[ObjdField.Type] is 2 or 9)
                         return null;
@@ -2827,16 +2970,19 @@ internal static class SceneExporter
                         origin.X, origin.Y, altitude);
                     return absolute is null ? null : absolute with { X = absolute.X - spriteX, Y = absolute.Y - spriteY };
                 }
+                var fsMed = FloorShadow(2);
+                var fsNear = FloorShadow(3);
+                var fsFar = FloorShadow(1);
+                if (fsMed is not null) objectEmittedShadow = true;
                 sprites.Add(new SceneSprite(texture, spriteX, spriteY, width, height, (sprite.Flags & 1) != 0, id,
                     sortDepth, 1,
                     depthTexture, depthTexture.HasValue ? depth.Near : null, depthTexture.HasValue ? depth.Far : null,
                     Level: level, Room: room, Near: Zoom(nearImage, 2f), Far: Zoom(farImage, 0.5f),
-                    // GetShadowID returns OBJD.Shadow directly for single-tile objects. Multi-tile roots compute
-                    // a different ID from their neighboring parts (ObjSelector::ComputeShadowID), so their raw
-                    // field must not be mistaken for the runtime shadow ID.
+                    // Single-tile objects use OBJD.Shadow directly, whereas multi-tile objects compute a
+                    // composite shadow ID from neighboring parts.
                     Shadow: shadowId,
                     ShadowBrightness: shadowBrightness,
-                    FloorShadow: FloorShadow(2), FloorShadowNear: FloorShadow(3), FloorShadowFar: FloorShadow(1)));
+                    FloorShadow: fsMed, FloorShadowNear: fsNear, FloorShadowFar: fsFar));
             }
             if (canCacheObject)
             {
@@ -2844,6 +2990,16 @@ internal static class SceneExporter
                 var emitted = emittedCount == 0 ? Array.Empty<SceneSprite>() : sprites.GetRange(emitStart, emittedCount).ToArray();
                 var flagsCopy = dynamicSpriteFlags is null or { Length: 0 } ? null : (short[])dynamicSpriteFlags.Clone();
                 kept.ObjectSprites[id] = new CachedObjectSprites(cacheKey, flagsCopy, emitted);
+            }
+            // Limits floor shadow rendering to at most one object shadow per tile.
+            if (objectEmittedShadow &&
+                !shadowedObjectTiles.Add((level, (int)MathF.Floor(origin.X), (int)MathF.Floor(origin.Y))))
+            {
+                for (var k = emitStart; k < sprites.Count; k++)
+                {
+                    if (sprites[k].FloorShadow is not null)
+                        sprites[k] = sprites[k] with { FloorShadow = null, FloorShadowNear = null, FloorShadowFar = null };
+                }
             }
         }
 
@@ -2884,7 +3040,8 @@ internal static class SceneExporter
                 var rawSlotZ = BitConverter.Int32BitsToSingle(slot.ReadWord(0x08));
                 var slotZ = float.IsFinite(rawSlotZ) ? rawSlotZ : 0f;
 
-                bool EmitSprite(int resourceId, int frameIndex, string kind, float depthLayer = 0f, int? nearFrameIndex = null)
+                bool EmitSprite(int resourceId, int frameIndex, string kind, float depthLayer = 0f,
+                    int? nearFrameIndex = null)
                 {
                     if (resourceId <= 0 || resourceId > ushort.MaxValue) return false;
                     var chunk = source.Find(ResourceType.Spr1, (ushort)resourceId);
@@ -2937,30 +3094,26 @@ internal static class SceneExporter
                     }
                     var texture = UploadRuntimeSlotFrame(frame, frameIndex);
                     if (texture < 0) return false;
-                    // SceneExporter stores the medium scene in scale-2 coordinates. DrawSpriteSlot (00438198.c:35-36)
-                    // applies slotZ on both object and XPerson head-anchored runtime slots (00459f0f.c:191) and draws
-                    // +0x2c, then the slot/selector image, then +0x30 in this same anchor space.
+                    // Draws runtime slot overlays in layered order: background balloon shape, followed by
+                    // the slot or selector image, and finally the foreground label sprite.
                     var (x, y) = RuntimeSlotSpritePosition(point.X, point.Y, slotZ, frame.Height, frame.BoundsLeft, frame.BoundsTop);
-                    ZoomImage? nearImage = null;
-                    if (nearFrameIndex is { } nearIdx && nearIdx >= 0 && nearIdx < art.Frames.Count)
+                    ZoomImage? ZoomRuntimeSlotImage(int? zoomFrameIndex, int zoomScale, float zoomFactor)
                     {
-                        var nearFrame = art.Frames[nearIdx];
-                        if (FrameHasPixels(nearFrame.Width, nearFrame.Height))
-                        {
-                            var nearTexture = UploadRuntimeSlotFrame(nearFrame, nearIdx);
-                            if (nearTexture >= 0)
-                            {
-                                var (nearX, nearY) = RuntimeSlotSpritePosition(point.X * 2f, point.Y * 2f, slotZ,
-                                    nearFrame.Height, nearFrame.BoundsLeft, nearFrame.BoundsTop, scale: 3);
-                                nearImage = new ZoomImage(nearTexture, nearX / 2f - x, nearY / 2f - y,
-                                    nearFrame.Width / 2f, nearFrame.Height / 2f, null);
-                            }
-                        }
+                        if (zoomFrameIndex is not { } idx || idx < 0 || idx >= art.Frames.Count) return null;
+                        var zoomFrame = art.Frames[idx];
+                        if (!FrameHasPixels(zoomFrame.Width, zoomFrame.Height)) return null;
+                        var zoomTexture = UploadRuntimeSlotFrame(zoomFrame, idx);
+                        if (zoomTexture < 0) return null;
+                        var (zx, zy) = RuntimeSlotSpritePosition(point.X * zoomFactor, point.Y * zoomFactor, slotZ,
+                            zoomFrame.Height, zoomFrame.BoundsLeft, zoomFrame.BoundsTop, scale: zoomScale);
+                        return new ZoomImage(zoomTexture, zx / zoomFactor - x, zy / zoomFactor - y,
+                            zoomFrame.Width / zoomFactor, zoomFrame.Height / zoomFactor, null);
                     }
+                    var nearImage = ZoomRuntimeSlotImage(nearFrameIndex, zoomScale: 3, zoomFactor: 2f);
                     var objectDepth = camera.DepthOrder(tileX, tileY);
                     sprites.Add(new SceneSprite(texture, x, y, frame.Width, frame.Height, false, owner.Id,
                         objectDepth + 1.5f + slotIndex * 0.0001f + depthLayer, 1, Level: Math.Min(owner.Position.Height, viewLevel),
-                        Room: null, Near: nearImage));
+                        Room: null, Near: nearImage, Far: null, HideAtFarZoom: true));
                     return true;
                 }
 
@@ -3023,9 +3176,8 @@ internal static class SceneExporter
                     var selector = registry.Find(selectorGuid);
                     if (selector is null) return;
 
-                    // DrawSpriteSlot (00438198.c:40, 126-161, 178) disables room lighting for the entire pass and
-                    // resolves BMP_ 2005/2006 for People (004e8d99.c:127) or CatalogStringsID + 2000/+4000 for Objects
-                    // (004cc548.c:33, 93) at medium/near zoom.
+                    // Renders speech icons unlit, resolving BMP# 2005/2006 for avatars or CatalogStringsID
+                    // + 2000/+4000 for objects at medium and near zoom.
                     var isPerson = selector.Definition[ObjdField.Type] == 2;
                     if (LoadSelectorSpeechImage(selectorGuid, selector, isPerson, scale: 2, recordMissing: true) is not { } image)
                         return;
@@ -3042,39 +3194,34 @@ internal static class SceneExporter
                     var objectDepth = camera.DepthOrder(tileX, tileY);
                     sprites.Add(new SceneSprite(image.Texture, x, y, image.Width, image.Height, false, owner.Id,
                         objectDepth + 1.5f + depthSlotIndex * 0.0001f + 0.00002f, 1, Level: Math.Min(owner.Position.Height, viewLevel),
-                        Room: null, Near: nearImage));
+                        Room: null, Near: nearImage, HideAtFarZoom: true));
                 }
 
-                // Mac DrawSpriteSlot draws SpriteSlot +0x2c before the main art. That field is set to
-                // IconGroup::GetBalloonSpriteID by TrySetBalloon (ObjectSim.s 0x100F0F34; 00438198.c:41-58).
+                // Skips balloon background sprites at far zoom.
                 EmitSprite(slot.ReadWord(0x2c), RuntimeSlotOverlayFrame(scale: 2), "balloon",
                     depthLayer: 0f, nearFrameIndex: RuntimeSlotOverlayFrame(scale: 3));
 
-                // A selector-backed slot (+0x14 == -1) draws a PersonFinder/Product speech image through
-                // DrawSpriteSlot's selector branch. Ordinary SPR# sprites use the animation frame counter.
+                // Selector-backed slots render dynamic speech icons, whereas standard sprite slots render
+                // fixed SPR# frames indexed by animation frame.
                 if (spriteId >= 0)
                     EmitSprite(spriteId, RuntimeSlotSpriteFrame(scale: 2, slot.ReadWord(0x20)), "sprite",
                         depthLayer: 0.00002f, nearFrameIndex: RuntimeSlotSpriteFrame(scale: 3, slot.ReadWord(0x20)));
                 else
                     EmitSelectorSpeechImage(slot, slotIndex);
 
-                // Mac draws SpriteSlot +0x30 after the selector or ordinary sprite; TrySetBalloon stores
-                // IconGroup 1, entry 3 here when its label flag is set.
                 EmitSprite(slot.ReadWord(0x30), RuntimeSlotOverlayFrame(scale: 2), "label",
                     depthLayer: 0.00004f, nearFrameIndex: RuntimeSlotOverlayFrame(scale: 3));
             }
         }
 
         Lap("meshes");
-        foreach (var item in world.WalkOrder)
+        void EmitDynamicWorldObject(XObject item, XPerson? carrier)
         {
-            if (item is XPerson) continue;
-            var carrier = (ContainmentParent(world, item) ?? (item[ObjectData.ContainerId] != 0 ? world.ObjectById(item[ObjectData.ContainerId]) : null)) as XPerson;
             if (carrier is not null)
             {
-                if (!avatarParts.ContainsKey(carrier.Id)) continue;
-                // cXPerson::Draw (00459f0f.c:25-177) only draws 2D contained props in Slots[1, 3, 4, 5] when the
-                // corresponding VitaBoy registration exists; Slots[2] is the 3D head-indicator slot (0058dc76.c:149-209).
+                if (!avatarParts.ContainsKey(carrier.Id)) return;
+                // Contained 2D props in avatar slots 1, 3, 4, and 5 render only when a bone registration
+                // exists, while slot 2 is reserved for the 3D head indicator.
                 var slotHier = item[ObjectData.SlotHierNumber];
                 var hasRegistration = slotHier switch
                 {
@@ -3083,17 +3230,17 @@ internal static class SceneExporter
                     4 => avatarGeometry.HeadAttachmentPosition(carrier).HasValue,
                     _ => false,
                 };
-                if (!hasRegistration) continue;
+                if (!hasRegistration) return;
             }
             else
             {
-                if (item.Position.Height < 1 || item.Position.Height > viewLevel) continue;
-                if (item.Position.X < 0 || item.Position.Y < 0) continue;
+                if (item.Position.Height < 1 || item.Position.Height > viewLevel) return;
+                if (item.Position.X < 0 || item.Position.Y < 0) return;
             }
-            // Portals, NPC controllers and phone lines are service objects with draw groups but no visible art.
-            // The original draw skips them through the stack-object Hidden variable (LotSceneExporter's BuildDynamic).
-            if (item[ObjectData.Hidden] != 0) continue;
-            if (item.Definition[(int)ObjdField.SubIndex] < 0 && item.Definition[(int)ObjdField.MasterId] != 0) continue;
+            // Service objects such as portals, controllers, and phone lines define draw groups without
+            // visible artwork and are skipped when the Hidden flag is set.
+            if (item[ObjectData.Hidden] != 0) return;
+            if (item.Definition[(int)ObjdField.SubIndex] < 0 && item.Definition[(int)ObjdField.MasterId] != 0) return;
             var guid = (uint)(item.TypeRecord?.Key ?? 0);
             if (wallMode == "down" || wallMode == "cutaway")
             {
@@ -3104,27 +3251,69 @@ internal static class SceneExporter
                           item[ObjectData.WallPlacementFlags], item[ObjectData.Direction],
                           unresetPortalFallback: world.ChangedCodeTypeGuids.Contains(guid))
                     : wallObjectIds.Contains(item.Id);
-                if (lowered) continue;
+                if (lowered) return;
             }
-            if (guid == 2179383033u) continue; // Pedestrian portal, skipped by BuildDynamic even when not hidden
+            if (guid == 2179383033u) return; // Skips the pedestrian portal, which has no visible artwork.
             var entry = registry.Find(guid);
-            if (entry is null) continue;
+            if (entry is null) return;
             var itemLevel = item.Position.Height >= 1 ? item.Position.Height : (carrier?.Position.Height ?? 1);
             EmitObject(entry, guid, item.Id, item.Position.X / 16f, item.Position.Y / 16f, itemLevel,
                 item[ObjectData.Direction], item[ObjectData.Graphic], item.DynamicSpriteFlags, item);
             EmitRuntimeSlotSprites(item);
         }
-        if (!hasLiveObjects)
+
+        var useSubTickCache = animating && directAnimation && subTickAlpha > 0f &&
+            updates == kept.LastAnimatedUpdates &&
+            kept.CachedNonCarriedObjectSprites is not null &&
+            kept.CachedSubTickLights is not null &&
+            kept.CachedSubTickWindows is not null;
+
+        if (useSubTickCache)
         {
-            foreach (var door in savedDoors)
+            sprites.AddRange(kept.CachedNonCarriedObjectSprites!);
+            foreach (var item in world.WalkOrder)
             {
-                if (animating && world.ObjectById(door.Id) is not null) continue;
-                if ((wallMode == "down" || wallMode == "cutaway") &&
-                    IsWallObjectLowered(door.Level, door.TileX, door.TileY, door.Flags1,
-                        door.Flags2 != 0 ? door.Flags2 : 0xc000, door.WallPlacement, door.Direction, unresetPortalFallback: true))
+                if (item is XPerson) continue;
+                if (item[ObjectData.ContainerId] == 0 && item[ObjectData.ParentId] == 0) continue;
+                var carrier = (ContainmentParent(world, item) ?? (item[ObjectData.ContainerId] != 0 ? world.ObjectById(item[ObjectData.ContainerId]) : null)) as XPerson;
+                if (carrier is not null) EmitDynamicWorldObject(item, carrier);
+            }
+        }
+        else
+        {
+            List<(XObject Item, XPerson Carrier)>? carriedObjects = null;
+            foreach (var item in world.WalkOrder)
+            {
+                if (item is XPerson) continue;
+                var carrier = (ContainmentParent(world, item) ?? (item[ObjectData.ContainerId] != 0 ? world.ObjectById(item[ObjectData.ContainerId]) : null)) as XPerson;
+                if (carrier is not null)
+                {
+                    (carriedObjects ??= []).Add((item, carrier));
                     continue;
-                EmitObject(door.Entry, door.Guid, door.Id, door.X, door.Y, door.Level, door.Direction,
-                    door.Graphic, door.DynamicSpriteFlags);
+                }
+                EmitDynamicWorldObject(item, null);
+            }
+            if (!hasLiveObjects)
+            {
+                foreach (var door in savedDoors)
+                {
+                    if (animating && world.ObjectById(door.Id) is not null) continue;
+                    if ((wallMode == "down" || wallMode == "cutaway") &&
+                        IsWallObjectLowered(door.Level, door.TileX, door.TileY, door.Flags1,
+                            door.Flags2 != 0 ? door.Flags2 : 0xc000, door.WallPlacement, door.Direction, unresetPortalFallback: true))
+                        continue;
+                    EmitObject(door.Entry, door.Guid, door.Id, door.X, door.Y, door.Level, door.Direction,
+                        door.Graphic, door.DynamicSpriteFlags);
+                }
+            }
+            if (animating && directAnimation)
+            {
+                kept.CachedNonCarriedObjectSprites = sprites.Count == 0 ? Array.Empty<SceneSprite>() : sprites.ToArray();
+            }
+            if (carriedObjects is not null)
+            {
+                foreach (var (item, carrier) in carriedObjects)
+                    EmitDynamicWorldObject(item, carrier);
             }
         }
         Lap("items");
@@ -3142,10 +3331,36 @@ internal static class SceneExporter
             var tileY = avatarAnchor.Y;
             var personRooms = world.LotRoomMaps.GetValueOrDefault(personLevel);
             var parts = avatarParts.GetValueOrDefault(person.Id) ?? [];
+            var isGhostOrLivingGhost = (person[PersonData.IsGhost] & 1) != 0 || (person[PersonData.IsLivingGhost] & 1) != 0;
+            var displayFlags = person[PersonData.RenderDisplayFlags];
+            // Applies avatar ghost tinting: ghosts use RGBA (17/255, 1, 241/255, 128/255), while display
+            // flags bits 1 and 0 select cyan or yellow translucent tints.
+            float[]? avatarTint = isGhostOrLivingGhost
+                ? [17f / 255f, 1f, 241f / 255f, 128f / 255f]
+                : (displayFlags & 2) != 0
+                    ? [17f / 255f, 1f, 128f / 255f, 128f / 255f]
+                    : (displayFlags & 1) != 0
+                        ? [248f / 255f, 248f / 255f, 1f, 128f / 255f]
+                        : null;
+            ZoomImage? avatarShadow = null;
+            ZoomImage? avatarShadowNear = null;
+            ZoomImage? avatarShadowFar = null;
+            // Suppresses avatar floor shadows for ghosts and living ghosts.
+            if (house != 99 && parts.Count > 0 && person[PersonData.Sitting] == 0 && !person.AnimatorPoolTile &&
+                (person[ObjectData.Flags] & 4) == 0 && !isGhostOrLivingGhost)
+            {
+                var groundAltitude = (personLevel - 1) * EntityTransform.StoryHeight + Elevation(tileX, tileY) / 40f;
+                var personShadowLight = TileSpriteLightByte(ResolveSubtileRoom(personRooms, tileX, tileY, person));
+                static ZoomImage? CompactShadow(ZoomImage? z) => z is null
+                    ? null
+                    : z with { X = z.X + z.Width * 0.26f, Y = z.Y + z.Height * 0.26f, Width = z.Width * 0.48f, Height = z.Height * 0.48f };
+                avatarShadow = CompactShadow(FloorShadowAt(16, 65, personShadowLight, 2, tileX, tileY, groundAltitude));
+                avatarShadowNear = CompactShadow(FloorShadowAt(16, 65, personShadowLight, 3, tileX, tileY, groundAltitude));
+                avatarShadowFar = CompactShadow(FloorShadowAt(16, 65, personShadowLight, 1, tileX, tileY, groundAltitude));
+            }
             var partIndex = 0;
             foreach (var part in parts)
             {
-                // Named by content, so a Sim standing still reuses its texture frame after frame.
                 var name = $"avatar-{person.Id}-{partIndex}-{part.TextureHash}.{part.Encoding}";
                 if (!kept.AvatarTextures.TryGetValue(name, out var texture))
                 {
@@ -3162,11 +3377,16 @@ internal static class SceneExporter
                     vertices[vIdx] = new Vertex(vertex.X, vertex.Y, vertex.Z, vertex.U, vertex.V,
                         vertex.Nx, vertex.Ny, vertex.Nz);
                 }
-                var room = part.IgnoreRoomLighting || house == 99
+                var applyTint = avatarTint is not null && !part.IgnoreRoomLighting;
+                var room = part.IgnoreRoomLighting || house == 99 || applyTint
                     ? null
                     : ResolveSubtileRoom(personRooms, tileX, tileY, person);
                 meshes.Add(new Mesh(texture, person.Id, camera.DepthOrder(tileX, tileY), vertices,
-                    Math.Min(personLevel, viewLevel), room));
+                    Math.Min(personLevel, viewLevel), room,
+                    FloorShadow: partIndex == 0 ? avatarShadow : null,
+                    FloorShadowNear: partIndex == 0 ? avatarShadowNear : null,
+                    FloorShadowFar: partIndex == 0 ? avatarShadowFar : null,
+                    Tint: applyTint ? avatarTint : null));
                 partIndex++;
             }
             if (avatarGeometry.Censor(person) is { } censor)
@@ -3214,8 +3434,8 @@ internal static class SceneExporter
                     for (var column = 1; column < Math.Min(grid.Size - 1, lotSize * 2); column++)
                     {
                         if (!grid.Has(row, column)) continue;
-                        // Cell geometry is in tile units. Add the existing scene's story and flat-tile terrain
-                        // elevation here; overhanging vertices must not sample neighbouring terrain independently.
+                        // Calculates roof vertex elevation using the base tile terrain elevation so
+                        // overhanging eaves do not sample neighboring terrain heights.
                         var altitude = level * EntityTransform.StoryHeight + Elevation(column / 2, row / 2) / 40;
                         var placed = RoofCellMesh.Build(grid, row, column, settings.Pitch).Select(vertex =>
                             (Position: new Microsoft.Xna.Framework.Vector3(vertex.X, altitude + vertex.Height, vertex.Y),
@@ -3244,24 +3464,38 @@ internal static class SceneExporter
             }
         }
 
-        // FUN_00467ee7's light list and the window tiles, in the same camera space as the sprites; the scene shift below
-        // moves the lights with everything else.
         var lights = new List<SceneLighting.Light>();
         var windows = new List<SceneLighting.Window>();
+        SceneLighting.Light[]? cachedLights = null;
+        SceneLighting.Window[]? cachedWindows = null;
         Lap("avatars");
-        foreach (var item in world.WalkOrder)
+        if (useSubTickCache)
         {
-            if (SceneLighting.IsWindow(item))
-                windows.Add(new SceneLighting.Window(item.Position.X >> 4, item.Position.Y >> 4, item.Position.Height));
-            if (!SceneLighting.IsLightSource(item) || item.Position.Height > viewLevel) continue;
-            var lightX = item.Position.X / 16f;
-            var lightY = item.Position.Y / 16f;
-            var altitude = (item.Position.Height - 1) * EntityTransform.StoryHeight + Elevation(lightX, lightY) / 40 +
-                SceneLighting.LightLift;
-            var point = camera.Project(lightX, lightY, altitude * 40);
-            var toward = camera.CameraPoint(lightX, lightY);
-            lights.Add(new SceneLighting.Light(point.X, point.Y, toward.X + toward.Y + 0.8f * altitude,
-                item[ObjectData.LightingContribution0100], item.Position.Height));
+            cachedLights = kept.CachedSubTickLights!;
+            cachedWindows = kept.CachedSubTickWindows!;
+        }
+        else
+        {
+            foreach (var item in world.WalkOrder)
+            {
+                if (SceneLighting.IsWindow(item))
+                    windows.Add(new SceneLighting.Window(item.Position.X >> 4, item.Position.Y >> 4, item.Position.Height));
+                if (!SceneLighting.IsLightSource(item) || item.Position.Height > viewLevel) continue;
+                var lightX = item.Position.X / 16f;
+                var lightY = item.Position.Y / 16f;
+                var altitude = (item.Position.Height - 1) * EntityTransform.StoryHeight + Elevation(lightX, lightY) / 40 +
+                    SceneLighting.LightLift;
+                var point = camera.Project(lightX, lightY, altitude * 40);
+                var toward = camera.CameraPoint(lightX, lightY);
+                lights.Add(new SceneLighting.Light(point.X, point.Y, toward.X + toward.Y + 0.8f * altitude,
+                    item[ObjectData.LightingContribution0100], item.Position.Height));
+            }
+            if (animating && directAnimation)
+            {
+                kept.CachedSubTickLights = lights.Count == 0 ? Array.Empty<SceneLighting.Light>() : lights.ToArray();
+                kept.CachedSubTickWindows = windows.Count == 0 ? Array.Empty<SceneLighting.Window>() : windows.ToArray();
+                kept.LastAnimatedUpdates = updates;
+            }
         }
 
         if (animating)
@@ -3278,17 +3512,18 @@ internal static class SceneExporter
             }
             var dx = kept.ShiftX;
             var dy = kept.ShiftY;
+            var lightCount = cachedLights is not null ? cachedLights.Length : lights.Count;
             SceneLighting.Light[] shiftedLights;
-            if (lights.Count == 0)
+            if (lightCount == 0)
             {
                 shiftedLights = Array.Empty<SceneLighting.Light>();
             }
             else
             {
-                shiftedLights = new SceneLighting.Light[lights.Count];
-                for (var i = 0; i < lights.Count; i++)
+                shiftedLights = new SceneLighting.Light[lightCount];
+                for (var i = 0; i < lightCount; i++)
                 {
-                    var light = lights[i];
+                    var light = cachedLights is not null ? cachedLights[i] : lights[i];
                     shiftedLights[i] = light with { X = light.X + dx, Y = light.Y + dy };
                 }
             }
@@ -3296,10 +3531,13 @@ internal static class SceneExporter
                 ? animatedBuilt with
                 {
                     Lights = shiftedLights,
-                    Windows = windows.Count == 0 ? Array.Empty<SceneLighting.Window>() : windows.ToArray(),
+                    Windows = cachedWindows is not null
+                        ? cachedWindows
+                        : windows.Count == 0 ? Array.Empty<SceneLighting.Window>() : windows.ToArray(),
                 }
                 : null;
-            var newTextureCount = textures.Count - animationStart;
+            var baseTextureCount = kept.BaseTextureCount;
+            var newTextureCount = textures.Count - baseTextureCount;
             Texture[] animatedTextures;
             if (newTextureCount <= 0)
             {
@@ -3308,7 +3546,7 @@ internal static class SceneExporter
             else
             {
                 animatedTextures = new Texture[newTextureCount];
-                textures.CopyTo(animationStart, animatedTextures, 0, newTextureCount);
+                textures.CopyTo(baseTextureCount, animatedTextures, 0, newTextureCount);
             }
 
             SceneSprite[] animatedSprites;
@@ -3338,6 +3576,44 @@ internal static class SceneExporter
             var dynamicMeshCount = 0;
             for (var i = 0; i < meshes.Count; i++)
                 if (meshes[i].ObjectID > 0) dynamicMeshCount++;
+            if (directAnimation)
+            {
+                var directMeshes = dynamicMeshCount == 0
+                    ? Array.Empty<DirectAnimationMesh>()
+                    : new DirectAnimationMesh[dynamicMeshCount];
+                var directOut = 0;
+                for (var i = 0; i < meshes.Count; i++)
+                {
+                    var mesh = meshes[i];
+                    if (mesh.ObjectID <= 0) continue;
+                    directMeshes[directOut++] = new DirectAnimationMesh(
+                        mesh.Texture, mesh.ObjectID, mesh.Depth, mesh.Level, mesh.Room,
+                        ShiftAnimationShadow(mesh.FloorShadow),
+                        ShiftAnimationShadow(mesh.FloorShadowNear),
+                        ShiftAnimationShadow(mesh.FloorShadowFar),
+                        mesh.Vertices, dx, dy, mesh.Tint);
+                }
+
+                CensorRect[] directCensors;
+                if (censorRects.Count == 0)
+                {
+                    directCensors = Array.Empty<CensorRect>();
+                }
+                else
+                {
+                    directCensors = new CensorRect[censorRects.Count];
+                    for (var i = 0; i < censorRects.Count; i++)
+                    {
+                        var rect = censorRects[i];
+                        directCensors[i] = rect with { X = rect.X + dx, Y = rect.Y + dy };
+                    }
+                }
+
+                return new DirectAnimationFrame(
+                    revision, sequence, updates, baseTextureCount, animatedLighting,
+                    animatedTextures, animatedSprites, directMeshes, directCensors);
+            }
+
             var animatedMeshes = new object[dynamicMeshCount];
             var meshOut = 0;
             for (var i = 0; i < meshes.Count; i++)
@@ -3350,6 +3626,7 @@ internal static class SceneExporter
                     FloorShadow = ShiftAnimationShadow(mesh.FloorShadow),
                     FloorShadowNear = ShiftAnimationShadow(mesh.FloorShadowNear),
                     FloorShadowFar = ShiftAnimationShadow(mesh.FloorShadowFar),
+                    tint = mesh.Tint,
                     vertices = PackVertices(mesh.Vertices, dx, dy),
                 };
             }
@@ -3375,7 +3652,7 @@ internal static class SceneExporter
                 baseRevision = revision,
                 sequence,
                 updates,
-                textureStart = animationStart,
+                textureStart = baseTextureCount,
                 lighting = animatedLighting,
                 missingResources = missingResources.Count == 0 ? Array.Empty<string>() : missingResources.Order().ToArray(),
                 textures = animatedTextures,
@@ -3451,11 +3728,22 @@ internal static class SceneExporter
 
         var inMemory = SimsSimulation.InMemorySessionAssets.IsInMemoryPath(directory);
         if (!inMemory) Directory.CreateDirectory(directory);
-        // Every file is named by what it draws, so one already written this session is still right.
         Lap("lighting");
         var previousWritten = retain?.Kept is Kept prevKept ? prevKept.Written : null;
+        var prunedOldRevisionFiles = false;
         if (inMemory)
         {
+            if (previousWritten is not null && SimsSimulation.InMemorySessionAssets.TotalBytesUnder(directory) > 32L * 1024 * 1024)
+            {
+                foreach (var stale in previousWritten)
+                {
+                    if (!files.ContainsKey(stale))
+                    {
+                        SimsSimulation.InMemorySessionAssets.DeleteFile(Path.Combine(directory, stale));
+                    }
+                }
+                prunedOldRevisionFiles = true;
+            }
             foreach (var pair in files)
             {
                 if (previousWritten is not null && previousWritten.Contains(pair.Key)) continue;
@@ -3473,62 +3761,95 @@ internal static class SceneExporter
             });
         }
         var path = Path.Combine(directory, $"scene-{revision}.json");
-        var scene = new
-        {
-            schemaVersion = 1,
+        var soundSources = world.PositionalSoundOwners
+            .Select(id => world.ObjectById(id))
+            .Where(item => item is not null && item.Position.Height >= 1)
+            .Select(item =>
+            {
+                var source = item!;
+                var tileX = source.Position.X / 16f + 0.5f;
+                var tileY = source.Position.Y / 16f + 0.5f;
+                var altitude = (source.Position.Height - 1) * EntityTransform.StoryHeight + Elevation(tileX, tileY) / 40f;
+                return new SoundSourceRecord(source.Id, source.Position.Height, tileX, tileY, altitude * 40f);
+            }).ToArray();
+        var exported = new ExportedLotScene(
             house,
-            width = sceneWidth,
-            height = sceneHeight,
-            lotWidth = lotSize,
-            lotHeight = lotSize,
+            sceneWidth,
+            sceneHeight,
+            lotSize,
             floorDiagonals,
-            terrainHeights = TerrainHeights(lot, lotSize),
-            cameraOrientation = camera.Orientation,
-            originX = -shiftX,
-            originY = -shiftY,
+            TerrainHeights(lot, lotSize),
+            camera.Orientation,
+            -shiftX,
+            -shiftY,
             wallMode,
-            wallsUp = wallMode == "up",
             roofsVisible,
             viewLevel,
-            stories = Stories(lot),
+            Stories(lot),
             lighting,
-            textures,
-            sprites,
-            soundSources = world.PositionalSoundOwners
-                .Select(id => world.ObjectById(id))
-                .Where(item => item is not null && item.Position.Height >= 1)
-                .Select(item =>
-                {
-                    var source = item!;
-                    var tileX = source.Position.X / 16f + 0.5f;
-                    var tileY = source.Position.Y / 16f + 0.5f;
-                    var altitude = (source.Position.Height - 1) * EntityTransform.StoryHeight + Elevation(tileX, tileY) / 40f;
-                    return new { objectID = source.Id, level = source.Position.Height, x = tileX, y = tileY, z = altitude * 40f };
-                }).ToArray(),
-            placementVertices = terrain.Select(vertex => new { x = vertex.X, y = vertex.Y - placementLift, r = vertex.R, g = vertex.G, b = vertex.B,
-                dr = vertex.Dr, dg = vertex.Dg, db = vertex.Db, grass = vertex.Grass }).ToArray(),
-            terrainVertices = terrain.Select((vertex, index) =>
+            textures.ToArray(),
+            sprites.ToArray(),
+            soundSources,
+            terrain.ToArray(),
+            placementLift,
+            meshes.ToArray(),
+            censorRects.ToArray(),
+            ["native engine scene"],
+            missingResources.Order().ToArray());
+        static object BuildJsonScene(ExportedLotScene payload) => new
+        {
+            schemaVersion = 1,
+            house = payload.House,
+            width = payload.Width,
+            height = payload.Height,
+            lotWidth = payload.LotSize,
+            lotHeight = payload.LotSize,
+            floorDiagonals = payload.FloorDiagonals,
+            terrainHeights = payload.TerrainHeights,
+            cameraOrientation = payload.CameraOrientation,
+            originX = payload.OriginX,
+            originY = payload.OriginY,
+            wallMode = payload.WallMode,
+            wallsUp = payload.WallMode == "up",
+            roofsVisible = payload.RoofsVisible,
+            viewLevel = payload.ViewLevel,
+            stories = payload.Stories,
+            lighting = payload.Lighting,
+            textures = payload.Textures,
+            sprites = payload.Sprites,
+            soundSources = payload.SoundSources.Select(s => new { objectID = s.ObjectID, level = s.Level, x = s.X, y = s.Y, z = s.Z }).ToArray(),
+            placementVertices = payload.Terrain.Select(vertex => new
+            {
+                x = vertex.X, y = vertex.Y - payload.PlacementLift, r = vertex.R, g = vertex.G, b = vertex.B,
+                dr = vertex.Dr, dg = vertex.Dg, db = vertex.Db, grass = vertex.Grass,
+            }).ToArray(),
+            terrainVertices = payload.Terrain.Select((vertex, index) =>
             {
                 var tileIndex = index / 6;
-                var tx = tileIndex % lotSize;
-                var ty = tileIndex / lotSize;
-                var v = (tx == 0 || tx == lotSize - 1 || ty == 0 || ty == lotSize - 1) ? terrain[tileIndex * 6] : vertex;
-                return new { x = v.X, y = v.Y, r = v.R, g = v.G, b = v.B, dr = v.Dr, dg = v.Dg, db = v.Db, grass = v.Grass };
+                var tx = tileIndex % payload.LotSize;
+                var ty = tileIndex / payload.LotSize;
+                var v = (tx == 0 || tx == payload.LotSize - 1 || ty == 0 || ty == payload.LotSize - 1) ? payload.Terrain[tileIndex * 6] : vertex;
+                return new
+                {
+                    x = v.X, y = v.Y, r = v.R, g = v.G, b = v.B,
+                    dr = v.Dr, dg = v.Dg, db = v.Db, grass = v.Grass,
+                };
             }).ToArray(),
-            meshes,
-            censorRects,
-            limitations = new[] { "native engine scene" },
-            missingResources = missingResources.Order().ToArray(),
+            meshes = payload.Meshes,
+            censorRects = payload.CensorRects,
+            limitations = payload.Limitations,
+            missingResources = payload.MissingResources,
         };
         Lap("write");
         if (retain is not null)
         {
             kept.Textures = textures;
+            kept.BaseTextureCount = textures.Count;
             kept.SpriteTextures = spriteTextures;
             kept.SpeechImageTextures = speechImageTextures;
             kept.SpriteDepthTextures = spriteDepthTextures;
             kept.FloorShadowTextures = floorShadowTextures;
-            var mergedWritten = previousWritten is not null
+            var mergedWritten = previousWritten is not null && !prunedOldRevisionFiles
                 ? new HashSet<string>(previousWritten, StringComparer.Ordinal)
                 : new HashSet<string>(files.Count, StringComparer.Ordinal);
             foreach (var key in files.Keys) mergedWritten.Add(key);
@@ -3553,14 +3874,15 @@ internal static class SceneExporter
         }
         if (inMemory)
         {
-            SimsSimulation.InMemorySessionAssets.StoreFile(path, JsonSerializer.SerializeToUtf8Bytes(scene, Json));
+            SimsSimulation.InMemorySessionAssets.StoreScene(path, exported,
+                () => JsonSerializer.SerializeToUtf8Bytes(BuildJsonScene(exported), Json));
             SimsSimulation.InMemorySessionAssets.PruneOldScenes(directory, revision - 3);
         }
         else
         {
             using (var stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.Read, 65536))
             {
-                JsonSerializer.Serialize(stream, scene, Json);
+                JsonSerializer.Serialize(stream, BuildJsonScene(exported), Json);
             }
         }
         Lap("json");
@@ -3568,10 +3890,13 @@ internal static class SceneExporter
         return path;
     }
 
-    // An object's art never changes while the lot runs, and every animation frame reads it again.
     private static readonly ConcurrentDictionary<(IffFile File, ushort Id), DrawGroup> groupCache = new();
     private static readonly ConcurrentDictionary<(IffFile File, ushort Id), DepthSprite> depthSpriteCache = new();
     private static readonly ConcurrentDictionary<(IffFile File, ushort Id), Sprite> spriteCache = new();
+    private static readonly ConcurrentDictionary<(IffFile File, int PaletteId, int SpriteKey, int Frame), byte[]> partRgbaBytesCache = new();
+    private static readonly ConcurrentDictionary<(IffFile File, int SpriteId, int Frame), byte[]> partDepthBytesCache = new();
+    private static readonly ConcurrentDictionary<(IffFile File, int Shadow, int Attenuation, int Zoom), (int Width, int Height, byte[]? Bytes)> floorShadowBytesCache = new();
+    private static readonly ConcurrentDictionary<(int Configuration, int Width, int Height), byte[]> archDepthBytesCache = new();
 
     private static T Cached<T>(ConcurrentDictionary<(IffFile File, ushort Id), T> cache, IffFile file, IffChunk chunk, Func<T> read) =>
         cache.GetOrAdd((file, chunk.Id), _ => read());
@@ -3601,7 +3926,6 @@ internal static class SceneExporter
         return data;
     }
 
-    // The scene is exported once a second; the artwork files and the floor directory scan never change while the lot runs.
     private static readonly ConcurrentDictionary<string, IffFile> artworkFiles = new(StringComparer.Ordinal);
     private static readonly ConcurrentDictionary<string, IffFile?> optionalArtworkFiles = new(StringComparer.Ordinal);
     private static readonly ConcurrentDictionary<string, Dictionary<int, string>> dynamicFloors = new(StringComparer.Ordinal);
@@ -3630,7 +3954,8 @@ internal static class SceneExporter
         return heights;
     }
 
-    /// <summary>The raw vertex heights (0 to 0x40) of the lot's Arry 0, row-major as y * size + x, for the client's terrain tools.</summary>
+    /// <summary>The raw vertex heights (0 to 64) of the lot's Arry 0 chunk, ordered row-major as y * size +
+    /// x.</summary>
     private static short[] TerrainHeights(IffFile lot, int lotSize)
     {
         var result = new short[lotSize * lotSize];
@@ -3649,8 +3974,8 @@ internal static class SceneExporter
         if (array is null) return grass;
         for (var x = 0; x < Size; x++)
         for (var y = 0; y < Size; y++)
-            // TerrainComponent reads Arry 6 as a signed change and subtracts it from 127, so a raw 255 means
-            // grass state 128, not a negative value clamped to green.
+            // Arry 6 stores grass state as a signed delta subtracted from 127, where a raw byte of 255
+            // represents grass state 128.
             grass[x * Size + y] = unchecked((byte)(127 - array.Element(x, y)[0]));
         return grass;
     }
@@ -3668,7 +3993,6 @@ internal static class SceneExporter
         }
         else if (standard is not null)
         {
-            // The standard layer stores the one-byte floor pattern index.
             for (var x = 0; x < Size; x++)
             for (var y = 0; y < Size; y++)
                 floors[x * Size + y] = standard.Element(x, y)[0];
@@ -3700,14 +4024,13 @@ internal static class SceneExporter
                 ? entity[ObjectData.ParentId]
                 : (short)0;
         if (key <= 0) return null;
-        // Sims.exe stores a manager-table key in ContainerId (+0x7e), not an object Id. The object and world both
-        // expose that table; neither ObjectById lookup is valid here when an Id collides with another manager slot.
+        // Container identifiers store object table slot keys rather than raw object IDs, requiring table
+        // lookup rather than direct object ID resolution.
         return entity.ObjectTableEntry(key) ?? world.ObjectTableEntry(key);
     }
 
-    /// <summary>Mac SAnimator::Tick gets object slot 1 from the owner and resolves that slot's object ID before
-    /// applying the owner's HEAD bone transform. cXObject::GetObjectSlot adds one for its sentinel record, so the
-    /// saved slot vector's entry 2 is logical object slot 1 (the named HEAD slot on a Sim).</summary>
+    /// <summary>Determines whether an attached object targets the head bone slot, resolving logical object
+    /// slot 1 located at slot array index 2 due to an initial sentinel record.</summary>
     internal static bool HeadSlotTargets(SimulationWorld world, XPerson owner, XObject attached)
     {
         if (owner.Slots.Count <= 2) return false;
@@ -3724,14 +4047,9 @@ internal static class SceneExporter
         Func<XPerson, Microsoft.Xna.Framework.Vector3>? headAttachmentPosition = null)
     {
         var hierarchySlot = entity[ObjectData.SlotHierNumber];
-        // FUN_00432771 normalizes an authored hierarchy index by adding one. A zero hierarchy is instead used by the
-        // displaced tile-root path in FUN_00432a70; it stays at the child's saved world position.
-        // In 00459f0f.c:25-162, cXPerson::Draw draws contained objects in person.Slots:
-        // - hierarchySlot == 1 (Slots[1]): right hand (handPosition)
-        // - hierarchySlot == 2 (Slots[2]): if entity is XPerson, raw HEAD bone (headPosition); else authored slot 1
-        // - hierarchySlot == 3 (Slots[3]): pelvis (pelvisPosition)
-        // - hierarchySlot == 4 (Slots[4]): head attachment registration (headAttachmentPosition)
-        // - hierarchySlot == 5 (Slots[5]): right hand (handPosition)
+        // Contained objects map hierarchy slots to person bones: slots 1 and 5 to the right hand, slot 2 to
+        // the head bone or authored slot 1, slot 3 to the pelvis, and slot 4 to head attachment
+        // registration.
         if (hierarchySlot == 2 && container is XPerson person && entity is XPerson)
             return headPosition(person);
         if (hierarchySlot is 1 or 5 && container is XPerson handSim && entity is not XPerson && handPosition != null)
@@ -3749,7 +4067,6 @@ internal static class SceneExporter
         entity is not null && entity[ObjectData.SlotHierNumber] > 0 &&
         (entity[ObjectData.ContainerId] > 0 || entity[ObjectData.ParentId] > 0);
 
-    // FUN_00439195 (00439195.c:10-25): rotates (dx, dy) on cardinal directions 0, 2, 4, 6 and zeroes odd diagonal directions.
     private static (float X, float Y) RotateCardinalOffset(int direction, float dx, float dy) => (direction & 7) switch
     {
         0 => (dx, dy),
@@ -3774,16 +4091,14 @@ internal static class SceneExporter
     internal static PaletteColor[]? PaletteFor(IffFile file, int paletteId) =>
         objectPaletteCache.GetOrAdd((file, paletteId), static key =>
         {
-            // SPR2/SPR# headers carry a resource chunk ID, not a legacy palette index. Object palettes commonly
-            // use IDs above 1000 (for example the wall sprites use PALT 1538); replacing those with PALT 0 turns
-            // otherwise valid object art into unrelated colors. Fall back only when the named chunk is absent.
+            // SPR2 and SPR# headers store PALT resource chunk IDs rather than palette indices, and object
+            // palettes frequently use chunk IDs above 1000.
             var chunk = key.PaletteId is >= 0 and <= ushort.MaxValue
                 ? key.File.Find(ResourceType.Palt, (ushort)key.PaletteId)
                 : null;
             chunk ??= key.File.OfType(ResourceType.Palt).FirstOrDefault();
             return chunk is null ? null : Palette.Read(key.File, chunk).Colors.ToArray();
         });
-
 
     private static LotArray? ReadWalls(IffFile lot, int level) => ReadArray(lot, level == 1 ? 2 : 102);
 

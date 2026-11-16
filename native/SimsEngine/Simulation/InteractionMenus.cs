@@ -5,9 +5,13 @@ using SimsEngine.Formats;
 
 namespace SimsEngine.Simulation;
 
-/// <summary>The DAT_006e50e0/50ac/50a8 manual-menu context; FUN_004588f5 appends named candidate copies.</summary>
-public sealed class InteractionMenuContext
+public sealed partial class InteractionMenuContext
 {
+    [GeneratedRegex(
+        @"\$(?<name>TokenNameLocal|NameLocal|NameAttrib|CatalogLocal|FameTitleLocal|TimeLocal|JobOffer|JobDesc|NeighborLocal|Neighbor|Attrib|Local|Job|Grade|FamilyAssets|Family|Object|Me)(?=[:]|[^A-Za-z0-9]|$)(?::(?<first>[0-9]+)(?::(?<second>[0-9]+))?)?",
+        RegexOptions.CultureInvariant)]
+    private static partial Regex MenuTokenRegex();
+
     private readonly SimulationWorld world;
     public InteractionMenuContext(SimulationWorld world) => this.world = world;
     public ActionQueueSlot? Current { get; internal set; }
@@ -15,7 +19,7 @@ public sealed class InteractionMenuContext
     internal void AddBase(ActionQueueSlot action)
     {
         var copy = action.Copy();
-        copy.ActionText ??= action.Owner?.TypeRecord?.Interactions?.Interactions.FirstOrDefault(entry => entry.TtaIndex == action.RawDword10)?.Name
+        copy.ActionText ??= world.EffectiveInteractions(action.Owner)?.Interactions.FirstOrDefault(entry => entry.TtaIndex == action.RawDword10)?.Name
             ?? throw new NotSupportedException("Native interaction name is unavailable in TTAs or the action BHAV label.");
         Choices.Add(copy);
     }
@@ -29,28 +33,19 @@ public sealed class InteractionMenuContext
         Choices.Add(copy);
     }
 
-    /// <summary>Expands the dynamic string commands of a dialog string the way FUN_004360c1 does through FUN_0044bf5a, with
-    /// <paramref name="actor"/> as the running object. Unlike a menu label, a command that cannot be resolved stays in the
-    /// text, as in Sims.exe.</summary>
+    /// <summary>Expands dynamic string tokens in dialog text, leaving unresolved tokens intact in the
+    /// output.</summary>
     internal string Expand(string text, XObject actor, StackFrame frame)
         => SubstituteMenuText(text, actor, actor, frame, 0, strict: false);
 
-    /// <summary>
-    /// FUN_0044bf5a parses dynamic string commands while Sims.exe builds candidate labels and dialog text; each command
-    /// takes up to two digit-only ":number" arguments (FUN_0044cb36 collects bytes accepted by
-    /// FUN_006368c3's numeric-character class before conversion). REA found 16 Windows literal-table entries at
-    /// 0x6c4044–0x6c4100. The Mac reference parser's 18-entry table also includes $Me and $Job (ObjectSim.s and
-    /// data.s), so the Windows literal list alone is not the complete cross-version spelling inventory. This parser
-    /// implements those 18 reference spellings. There is no "$$" escape in Sims.exe: "$$Local:2" keeps the first "$" and
-    /// expands "$Local:2". Commands that cannot be resolved stay in the text, matching the original parser behavior.
-    /// </summary>
+    /// <summary>Expands dynamic menu tokens with up to two numeric arguments, supporting 18 reference token
+    /// types without dollar-escape sequences while preserving unresolved tokens.</summary>
     private string SubstituteMenuText(string text, XObject? actor, XObject? owner, StackFrame frame, int depth, bool strict = true)
     {
         if (depth > 10) return text;
         if (depth == 0) { FamilyOutput = 0; NeighborOutput = 0; }
         var person = actor as XPerson;
-        // Mac ObjectSim.s 0x100EF9AC–0x100EF9D8 expands $Me using custom instance Name when set,
-        // otherwise the actor selector's GetCatalogName. __sinit_:ObjectSim_cpp binds that token at 0x100F2E18–0x100F2E30.
+        // Expands $Me using custom instance name if present, otherwise catalog name.
         var actorName = (!string.IsNullOrEmpty(actor?.Name) ? actor.Name : null) ?? actor?.TypeRecord?.CatalogName ??
             (person is not null && world.Neighbors.TryGetValue(person[PersonData.NeighborId], out var neighbor)
                 ? neighbor.Name : null) ?? actor?.TypeRecord?.Name;
@@ -59,8 +54,7 @@ public sealed class InteractionMenuContext
             : world.ObjectById(frame.StackObject) ?? owner;
         var objectName = ObjectName(stackObject);
         var neighborLocalAborted = false;
-        var expanded = Regex.Replace(text,
-            @"\$(?<name>TokenNameLocal|NameLocal|NameAttrib|CatalogLocal|FameTitleLocal|TimeLocal|JobOffer|JobDesc|NeighborLocal|Neighbor|Attrib|Local|Job|Grade|FamilyAssets|Family|Object|Me)(?=[:]|[^A-Za-z0-9]|$)(?::(?<first>[0-9]+)(?::(?<second>[0-9]+))?)?",
+        var expanded = MenuTokenRegex().Replace(text,
             match =>
             {
                 var name = match.Groups["name"].Value;
@@ -95,23 +89,23 @@ public sealed class InteractionMenuContext
                 }
                 catch (UnresolvedMenuToken) { return match.Value; }
                 catch (NotSupportedException) when (!strict) { return match.Value; }
-            }, RegexOptions.CultureInvariant);
+            });
         return expanded;
     }
 
-    /// <summary>Sims.exe FUN_0044cb36 finds a command by name and each handler skips an argument that is not a local of the
-    /// frame, so a recognized command whose value cannot be read stays in the text instead of failing the menu.</summary>
+    /// <summary>Preserves recognized menu tokens whose arguments reference invalid local variables instead
+    /// of failing menu creation.</summary>
     private sealed class UnresolvedMenuToken(string message) : NotSupportedException(message);
 
-    /// <summary>FUN_004034e6: work.iff STR# 0x1001 entry <paramref name="index"/> + 1 (one-based), the empty string when
-    /// the table is shorter. The command is skipped when the index is not a local of the frame (FUN_0044bf5a).</summary>
+    /// <summary>Retrieves the school grade string from career resources by 1-based index, returning empty
+    /// text if the index is out of bounds.</summary>
     private string Grade(short[] locals, int index) => (uint)index >= locals.Length ? string.Empty
         : world.CareerHost is CareerCatalog careers ? careers.GradeString(index, world.Language) ?? string.Empty : string.Empty;
 
     private string? FameTitle(int level) => (uint)level > 10 ? string.Empty : world.MenuTextSources?.FameTitle(level);
 
-    /// <summary>$Family: the name of the family of the neighbor the stack object names (FUN_0042573e, neighbor +0xee).
-    /// It also stores the family into the second word of the output record (<see cref="FamilyOutput"/>).</summary>
+    /// <summary>Resolves the family name for the specified neighbor and records the family ID in the output
+    /// record.</summary>
     private string? FamilyOfNeighbor(short oneBasedNeighborId)
     {
         var neighbor = world.NeighborManagerEntry(oneBasedNeighborId);
@@ -122,21 +116,17 @@ public sealed class InteractionMenuContext
         return name;
     }
 
-    /// <summary>The family number a <c>$FamilyAssets</c> local holds (FUN_00425db3 searches the family list by it).</summary>
     private static int FamilyNumberOfLocal(short value) => value;
 
-    /// <summary>The second word of the output record FUN_0044bf5a fills for its caller: the family <c>$Family</c> named
-    /// (family +0x10c), or 0 when no <c>$Family</c> was resolved. FUN_0044cc47 passes it on with the message.</summary>
+    /// <summary>Contains the family ID resolved during string token substitution, or zero if unreferenced.</summary>
     public short FamilyOutput { get; private set; }
 
-    /// <summary>The first word of that record: the one-based neighbor index <c>$Neighbor</c> named, or 0.</summary>
+    /// <summary>Contains the 1-based neighbor ID resolved during string token substitution, or zero if
+    /// unreferenced.</summary>
     public short NeighborOutput { get; private set; }
 
-    /// <summary>$NeighborLocal: FUN_0042573e finds the manager entry, FUN_0045741b takes its type-record key and FUN_004e988f
-    /// finds that key in the neighbor table; a key that is missing there stops every later $NeighborLocal command
-    /// (<paramref name="aborted"/>), while a missing manager entry only skips this one. FUN_004e9d82 then writes the
-    /// neighbor's name and its family's name, family first when the interface asks for it (vtable +0x84, taken to be the
-    /// East Asian languages).</summary>
+    /// <summary>Expands the $NeighborLocal token with the neighbor and family name, formatting family first
+    /// for East Asian languages. A missing neighbor table entry aborts subsequent evaluations.</summary>
     private string? NeighborLocal(int index, ref bool aborted)
     {
         var entry = world.NeighborTableEntry(unchecked((short)index));
@@ -151,9 +141,8 @@ public sealed class InteractionMenuContext
         return world.Language is 15 or 17 or 18 or 20 ? family + " " + name : name + " " + family;
     }
 
-    // Sims.exe cXObject::ParseUIString gets the actor's inventory by neighbor id, treats the
-    // command's local as a zero-based token index, then resolves that token GUID through the
-    // object folder and returns selector catalog string 0 (Mac ParseUIString, 0x100EFE24+).
+    // Resolves an actor's inventory token by zero-based index to an object GUID, returning catalog string
+    // 0.
     private string TokenNameLocal(XPerson? person, int index)
     {
         if (person is null || index < 0 || world.ObjectRegistry is null) return string.Empty;
@@ -164,8 +153,8 @@ public sealed class InteractionMenuContext
         return entry?.CatalogString(0, world.Language) ?? string.Empty;
     }
 
-    /// <summary>FUN_0044bf5a reads the career and level from the command's two locals; when either argument is missing
-    /// it uses the running Sim's own job type and promotion level (person +0x5fc and +0x5fe).</summary>
+    /// <summary>Reads the career and level from the command's local variables, falling back to the Sim's
+    /// current job type and promotion level if either argument is omitted.</summary>
     private static (short Career, int Level) JobArguments(XPerson? person, short[] locals, int careerIndex, int levelIndex, string token)
     {
         if (careerIndex < 0 || levelIndex < 0)
@@ -189,7 +178,6 @@ public sealed class InteractionMenuContext
         return careers.JobText(career, level, description ? JobTextKind.Description : JobTextKind.Title, IsFemale(person), world.Language) ?? string.Empty;
     }
 
-    /// <summary>Person +0x60e bit 0 (FUN_0044bf5a), the Gender field.</summary>
     private static bool IsFemale(XPerson? person) => person is not null && (person[PersonData.Gender] & 1) != 0;
 
     private string NeighborName(short oneBasedNeighborId)
@@ -234,8 +222,8 @@ public sealed class InteractionMenuContext
 
 public static class InteractionMenus
 {
-    /// <summary>FUN_0045846c / FUN_0043532b resolves the clicked object's interaction-group lead (+0x10 == -group)
-    /// when MasterId != 0 and InteractionGroup &gt; 0, otherwise preserving the clicked object itself.</summary>
+    /// <summary>Resolves the clicked object's interaction-group lead when it belongs to a multi-tile group,
+    /// otherwise preserving the clicked object itself.</summary>
     public static XObject Target(SimulationWorld world, XObject clicked)
     {
         if (clicked.Definition is { Length: > (int)ObjdField.MasterId } def &&
@@ -252,6 +240,28 @@ public static class InteractionMenus
                     partDef[(int)ObjdField.InteractionGroup] == -group)
                     return part;
             }
+            if (clicked.MultiTileMasterId == 0)
+            {
+                // Saved lots occasionally omit MultiTileMasterId on a sub-part while the head still links
+                // via MultiTileNextId.
+                foreach (var obj in world.WalkOrder)
+                {
+                    if (obj.MultiTileNextId == 0) continue;
+                    visited.Clear();
+                    XObject? groupLead = null;
+                    var containsClicked = false;
+                    for (var part = obj; part is not null && visited.Add(part.Id);
+                         part = part.MultiTileNextId == 0 ? null : world.ObjectById(part.MultiTileNextId))
+                    {
+                        if (groupLead is null &&
+                            part.Definition is { Length: > (int)ObjdField.InteractionGroup } partDef &&
+                            partDef[(int)ObjdField.InteractionGroup] == -group)
+                            groupLead = part;
+                        if (part.Id == clicked.Id) containsClicked = true;
+                        if (containsClicked && groupLead is not null) return groupLead;
+                    }
+                }
+            }
         }
         return clicked;
     }
@@ -266,9 +276,8 @@ public static class InteractionMenus
         {
             AppendForTarget(world, person, target, context);
 
-            // cObjPickerTool::DoMenu (0048d4dc.c:27-39; Mac ObjPickerTool.s, 0x1017C108–0x1017C174) walks the
-            // house ObjectIterator at the clicked object's tile when the clicked object yielded no menu entries,
-            // including peers whose OBJD field 91 bit 0 is set and whose selector type is not 8.
+            // When a clicked object yields no menu entries, walks other objects on the same tile whose OBJD
+            // field 91 bit 0 is set and selector type is not 8.
             if (context.Choices.Count == 0)
             {
                 var tileX = clicked.Position.X >> 4;
@@ -293,8 +302,15 @@ public static class InteractionMenus
     private static void AppendForTarget(SimulationWorld world, XPerson person, XObject target,
         InteractionMenuContext context)
     {
-        // FUN_00458708 (00458708.c lines 24-38) & cObjPickerTool::DoMenu (0048d6b6.c lines 32-138):
-        // iterate TTAB interactions in index order (0..count-1) without alphabetical sorting.
+        // Pet actors can only inspect interaction targets matching type GUID 0x7c4.
+        if ((person.AnimatorBodyStringMode & 6) != 0)
+        {
+            var guid = (ushort)target.Definition[(int)ObjdField.Guid1] | ((uint)(ushort)target.Definition[(int)ObjdField.Guid2] << 16);
+            if (target.TypeRecord?.Key != 0x7c4 && guid != 0x7c4u)
+                return;
+        }
+
+        // Iterates TTAB interactions in index order without alphabetical sorting.
         var entries = target.TypeRecord?.Interactions?.Interactions;
         if (entries is null) return;
 
@@ -305,12 +321,11 @@ public static class InteractionMenus
             }).ToArray();
         InteractionTestEvaluator.Evaluate(world, person, candidates, false);
 
-        // ObjTestSim::AppendInteractionsForMenu also offers this target Sim's
-        // person-to-person TTAB entries whose JoiningIndex points at the actor's
-        // currently running joinable interaction (Mac ObjTestSim.s, 0x100FD214–0x100FD2E8).
+        // Offers the target Sim's person-to-person interactions whose joining index matches the actor's
+        // active joinable interaction.
         if (target is XPerson && person.CurrentActionRecord is { Owner: not null } active)
         {
-            var activeEntry = active.Owner.TypeRecord?.Interactions?.Interactions
+            var activeEntry = world.EffectiveInteractions(active.Owner)?.Interactions
                 .FirstOrDefault(entry => entry.TtaIndex == active.RawDword10 && (entry.Flags & 2) != 0);
             if (activeEntry is not null)
             {
@@ -319,9 +334,8 @@ public static class InteractionMenus
                     .Select(entry => new ActionQueueSlot
                         {
                             Person = person, Owner = target, Secondary = target,
-                            // ObjTestSim::AppendInteractionsForMenu uses the person-to-person Interaction
-                            // constructor here. That constructor writes record kind 1 and SetStackVars puts
-                            // the active Sim's manager index in parameter 0 before the guard runs.
+                            // For person-to-person interactions, sets record kind 1 and places the active
+                            // Sim's manager index in parameter 0 before running the guard.
                             RecordKind = 1,
                             RawDword10 = entry.TtaIndex, Threshold = 50,
                             ActionTree = entry.ActionTree,
@@ -336,7 +350,6 @@ public static class InteractionMenus
     internal static string? String(StackFrame frame, short table, int index, byte language)
     {
         if (frame.Table is not BehaviorScope scope) return null;
-        // FUN_00401f6f returns the current code scope's private resource file (+8).
         return String(scope.Private, unchecked((ushort)table), unchecked((ushort)index), language);
     }
 

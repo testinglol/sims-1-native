@@ -2,9 +2,6 @@ using System.Globalization;
 
 namespace SimsSDL.Core;
 
-/// <summary>
-/// The seven controls in <c>cWinNeighborhoodUL::BuildFilterToolbar</c> and <c>ProcessFilterToolbar</c>.
-/// </summary>
 public sealed class NeighborhoodLotFilter
 {
     public static IReadOnlyList<int> Masks { get; } = [16, 32, 8, 4, 2, 64, 1];
@@ -68,15 +65,10 @@ public static class NeighborhoodTravel
     }
 }
 
-/// <summary>
-/// The STR# 134 (<c>NghRollover</c>) entry a neighborhood lot popup shows,
-/// as Mac <c>cWinLotPopup::GetPopupIndex</c> picks it.
-/// </summary>
+/// <summary>Resolves the string index in <c>STR# 134</c> (<c>NghRollover</c>) displayed by neighborhood lot
+/// popups.</summary>
 public static class LotPopupIndex
 {
-    /// <summary>
-    /// The neighborhood screen's lot mode (<c>cWinNeighborhood</c> +0xcc).
-    /// </summary>
     public enum Mode
     {
         Browse = 0,
@@ -86,9 +78,7 @@ public static class LotPopupIndex
         Visit = 4,
     }
 
-    /// <summary>
-    /// <c>Neighborhood::GetZoningType</c>: 1 residential, 2 community, 0 for a lot the zoning table does not list.
-    /// </summary>
+    /// <summary>Defines lot zoning types: 1 for residential, 2 for community, and 0 for unlisted lots.</summary>
     public enum Zoning
     {
         Unlisted = 0,
@@ -96,9 +86,6 @@ public static class LotPopupIndex
         Community = 2,
     }
 
-    /// <summary>
-    /// Selects the STR# 134 entry index for a neighborhood lot popup.
-    /// </summary>
     public static int Index(
         Mode mode,
         Zoning zoning,
@@ -139,10 +126,6 @@ public static class LotPopupIndex
     }
 }
 
-/// <summary>
-/// The lot popup text as Mac <c>cWinLotPopup::SetHouseInfo</c> (and <c>Sims.exe 0x0054fcb8</c>) builds it:
-/// the street line and <c>"\n\n"</c>, then the body.
-/// </summary>
 public static class LotPopupText
 {
     public record struct Lot(
@@ -156,15 +139,10 @@ public static class LotPopupText
         string FamilyNetWorth,
         int FamilyFriends);
 
-    /// <summary>
-    /// The moving-in family's name and <c>MovingInFamilyCanAfford</c> outputs:
-    /// its cash and the cash left after the price.
-    /// </summary>
     public record struct MovingIn(string Name, string Cash, string Remaining);
 
-    /// <summary>
-    /// Downtown, Vacation Island, Studio Town and Magic Town lots show only their name and description.
-    /// </summary>
+    /// <summary>Identifies expansion pack destination lots (Downtown 21–30, Vacation Island 40–48, Studio
+    /// Town 81–89, and Magic Town 93–99), which display only name and description.</summary>
     public static bool IsPackLot(int house) =>
         house is (>= 21 and <= 30) or (>= 40 and <= 48) or (>= 81 and <= 89) or (>= 93 and <= 99);
 
@@ -245,9 +223,6 @@ public static class LotPopupText
 
 public static class TutorialReset
 {
-    /// <summary>
-    /// <c>cSimsApp::ResetTutorial</c> uses <c>CopyFileA</c> with fail-if-exists, then clears the read-only attribute.
-    /// </summary>
     public static void Copy(string source, string importDirectory)
     {
         string destination = Path.Combine(importDirectory, "Tutorial.FAM");

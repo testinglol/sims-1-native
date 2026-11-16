@@ -3,10 +3,9 @@ using SimsEngine.Formats;
 
 namespace SimsEngine.World;
 
-/// <summary>The build catalog's floor patterns and their prices. FUN_004a01ca fills the pattern map from Build.iff's
-/// STR# 0x82: pattern p (1 up to 29, the loop runs while the string index 3p - 2 is below 0x56) takes the numeric string at 0-based index 3(p - 1), then its name and its
-/// description. FUN_004a15df returns that price, or 0 for a pattern the map lacks. Patterns that come from separate
-/// .flr files begin at 256 and are assigned by the installed resource list.</summary>
+/// <summary>Manages floor catalog patterns and prices loaded from Build.iff STR# 0x82 (triplets of price,
+/// name, and description for built-in patterns 1 through 29). Standalone .flr patterns begin at index 256.
+/// </summary>
 public sealed class FloorCatalog
 {
     private readonly Dictionary<int, int> prices = [];
@@ -15,10 +14,12 @@ public sealed class FloorCatalog
 
     private FloorCatalog() { }
 
-    /// <summary>Build.iff STR# 0x80 string 0, the terrain tools' price per unit of height ("Raise" costs 1).</summary>
+    /// <summary>Price per unit of height for terrain modification tools, loaded from Build.iff STR# 0x80
+    /// string 0.</summary>
     public int TerrainPrice() => terrainPrice;
 
-    /// <summary>Build.iff STR# 0x85 pond/water tool price per tile (pattern 65534).</summary>
+    /// <summary>Price per tile for the pond and water tool (pattern 65534), loaded from Build.iff STR#
+    /// 0x85.</summary>
     public int WaterPrice() => prices.GetValueOrDefault(65534, 10);
 
     public static FloorCatalog Read(IffFile build, byte language = 1, IEnumerable<KeyValuePair<int, int>>? dynamicFloors = null)
@@ -32,8 +33,8 @@ public sealed class FloorCatalog
             && StringTable.Read(build, terrainChunk).ForLanguage(language) is { Count: > 0 } terrainStrings
             && int.TryParse(terrainStrings[0].Trim(), out var unit))
             catalog.terrainPrice = unit;
-        // FUN_004a01ca reads the separate water catalog from Build.iff STR# 0x85.
-        // Its first triple is the pool (65535), followed by the pond (65534).
+        // Build.iff STR# 0x85 defines the pool tool (pattern 65535) followed by the pond tool (pattern
+        // 65534).
         if (build.Find(ResourceType.Str, 0x85) is { } waterChunk)
         {
             var waterStrings = StringTable.Read(build, waterChunk).ForLanguage(language);
@@ -50,7 +51,6 @@ public sealed class FloorCatalog
         return catalog;
     }
 
-    /// <summary>Reads Build.iff from the game's GameData folder (or the game root of a flat install).</summary>
     public static FloorCatalog Open(string game, byte language = 1, IEnumerable<KeyValuePair<int, int>>? dynamicFloors = null)
     {
         foreach (var folder in new[] { ObjectRegistry.Resolve(game, "GameData"), game })
@@ -64,9 +64,8 @@ public sealed class FloorCatalog
         throw new FileNotFoundException("Build.iff was not found", game);
     }
 
-    /// <summary>TS1's standalone .flr resources follow the 29 Build.iff entries, beginning at ID 256. Their STR# 0
-    /// supplies the catalog price; filename order is kept stable so the same installed resource set always has the same
-    /// IDs when the native engine loads a lot without initializing the legacy content provider.</summary>
+    /// <summary>Standalone .flr floor files begin at ID 256, obtaining catalog prices from STR# 0. Filename
+    /// ordering ensures stable pattern ID assignment across loads.</summary>
     private static IEnumerable<KeyValuePair<int, int>> ReadDynamicFloors(string gameData, byte language)
     {
         foreach (var (pattern, path) in DynamicFiles(gameData))
@@ -79,8 +78,6 @@ public sealed class FloorCatalog
         }
     }
 
-    /// <summary>The shared native ID-to-resource assignment, used by pricing, catalog icons and scene export.
-    /// It is stable for an unchanged installation; native save interchange across different installations is separate.</summary>
     public static IEnumerable<KeyValuePair<int, string>> DynamicFiles(string gameData)
     {
         var root = ObjectRegistry.Resolve(gameData, "Floors");
@@ -99,6 +96,5 @@ public sealed class FloorCatalog
 
     public IReadOnlyCollection<int> Patterns => prices.Keys;
 
-    /// <summary>FUN_004a15df: the pattern's price, 0 when it is not in the catalog.</summary>
     public int Price(int pattern) => prices.GetValueOrDefault(pattern);
 }

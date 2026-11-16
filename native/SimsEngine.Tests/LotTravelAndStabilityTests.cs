@@ -23,17 +23,17 @@ public sealed class LotTravelAndStabilityTests
         context.World.PersonRecordNeighborIds.Add(2);
         context.World.Clock.Restore(9, 15, 0);
 
-        // temporary3 == 2 only persists without switching lots.
+        // A travel mode of 2 persists destination data without queuing a lot switch.
         context.World.RunGenericSimsCall11Native(me, 21, 1, 0, 2);
         Assert.Null(context.World.PendingLotSwitch);
 
-        // temporary3 == 0 requests solo travel using scoped/self person target.
+        // A travel mode of 0 requests solo travel for the targeted individual.
         var scope = context.World.InteractionExecutorScope(me);
         scope.AddOrIncrement(1, 0, 1234);
         context.World.RunGenericSimsCall11Native(me, 21, 1, 0, 0);
         Assert.Equal(new SimulationWorld.LotSwitchRequest(21, 1234, 7), context.World.PendingLotSwitch);
 
-        // temporary3 == 1 requests whole-family travel (PersonGuid == 0).
+        // A travel mode of 1 requests household travel, transferring all family members.
         context.World.PendingLotSwitch = null;
         context.World.RunGenericSimsCall11Native(me, -1, 0, 30, 1);
         Assert.Equal(new SimulationWorld.LotSwitchRequest(-1, 0, 7), context.World.PendingLotSwitch);
@@ -74,7 +74,6 @@ public sealed class LotTravelAndStabilityTests
         var parent = world.Add(new XObject(1, PrimitiveTestWorld.Definition()) { Position = new ObjectPosition(168, 168, 1) });
         var child = world.Add(new XObject(2, PrimitiveTestWorld.Definition()) { Position = new ObjectPosition(-16, -16, 1) });
 
-        // Force a degenerate mutual-slot cycle that could arise in corrupted/live saves.
         parent.Slots.AddRange([0, child.ClockManagerIndex]);
         child.Slots.AddRange([0, parent.ClockManagerIndex]);
         parent[ObjectData.ContainerId] = child.ClockManagerIndex;
@@ -143,7 +142,6 @@ public sealed class LotTravelAndStabilityTests
             var travellerGuid = traveller.TypeRecord!.Key;
             var familyNumber = traveller[PersonData.FamilyNumber];
 
-            // Seed GenericSimsCall 11 arrival clock (14:25) and trigger solo lot switch to Downtown lot 21.
             var scope = homeWorld.InteractionExecutorScope(traveller);
             scope.AddOrIncrement(2, 7, 14);
             scope.AddOrIncrement(2, 8, 25);
@@ -174,8 +172,6 @@ public sealed class LotTravelAndStabilityTests
             Assert.Equal(14, awayWorld.Clock.Hour);
             Assert.Equal(25, awayWorld.Clock.Minute);
 
-            // Arrival on Downtown lot 21 immediately instantiates the traveller (FUN_004e9855), selects them,
-            // and runs 30 ticks without simulation errors.
             var arrivedTraveller = awayWorld.WalkOrder.OfType<XPerson>()
                 .FirstOrDefault(p => p.TypeRecord?.Key == travellerGuid);
             Assert.NotNull(arrivedTraveller);
@@ -190,13 +186,13 @@ public sealed class LotTravelAndStabilityTests
             Assert.True(SimulationWorld.IsInsideLotEdge(arrivedTraveller),
                 $"Expected arrived traveller on House 21 to be placed onto lot, got ({arrivedTraveller.Position.X},{arrivedTraveller.Position.Y},{arrivedTraveller.Position.Height})");
 
-            // Home family house assignment in Neighborhood.iff must remain untouched (House 5) while away.
+            // A household's primary lot assignment in the neighborhood file remains unchanged while
+            // visiting a community lot.
             var midNgh = IffFile.Open(Path.Combine(userData, "Neighborhood.iff"));
             var midFamily = midNgh.OfType(ResourceType.Parse("FAMI")).Select(c => Family.Read(midNgh, c))
                 .First(f => f.Members.Contains(unchecked((uint)travellerGuid)));
             Assert.Equal(5, midFamily.HouseNumber);
 
-            // Trigger return home (-1) and verify restoration of House 5.
             awayWorld.PendingLotSwitch = new SimulationWorld.LotSwitchRequest(-1, 0, familyNumber);
             server.BatchRun(1);
             var homeEvents = DrainEvents();

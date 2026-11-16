@@ -12,7 +12,6 @@ public sealed class RelationshipPrimitiveTests
         return definition;
     }
 
-    // The running object is 1 and the stack object is 2; both are plain objects.
     private static (TreeContext Context, SimulationWorld World, XObject Me, XObject Stack) ObjectWorld(short[]? locals = null)
     {
         var world = new SimulationWorld();
@@ -21,7 +20,6 @@ public sealed class RelationshipPrimitiveTests
         return (new TreeContext(world, me, new StackFrame(2, [], locals ?? new short[] { 0, 0 })), world, me, stack);
     }
 
-    // The running object and the stack object are persons with neighbor records 1 and 2.
     private static (TreeContext Context, SimulationWorld World, XPerson Me, XPerson Stack) PersonWorld()
     {
         var world = new SimulationWorld();
@@ -35,8 +33,6 @@ public sealed class RelationshipPrimitiveTests
         return (new TreeContext(world, me, new StackFrame(2, [], [0, 0])), world, me, stack);
     }
 
-    // The value index is byte 0, the mode byte 1, the flags byte 2, the local index byte 3, the variable's owner byte 4
-    // and its data the short at bytes 6 and 7.
     private static byte[] Operand(byte index = 0, byte mode = 0, byte flags = 0, byte local = 0, DataOwner owner = DataOwner.Temporary, short data = 0) =>
         [index, mode, flags, local, (byte)owner, 0, (byte)data, (byte)(data >> 8)];
 
@@ -57,7 +53,6 @@ public sealed class RelationshipPrimitiveTests
     public void ObjectListModeResolvesStackKeyThroughTheManagerVectorNotTheObjectStackTable()
     {
         var (context, world, me, stack) = ObjectWorld();
-        // Give +0xdc a conflicting result. FUN_0044d1bc uses FUN_00407498 on the frame's +0xf0 manager key.
         me.SetObjectTableEntry(2, me);
         me.Relationships.Resize(me.Id, 1);
         me.Relationships.Resize(stack.Id, 1);
@@ -224,7 +219,6 @@ public sealed class RelationshipPrimitiveTests
         world.NeighborWalkOrder[1] = target;
         world.Neighbors[34] = owner;
         world.Neighbors[32] = target;
-        // Stack object key 2 resolves manager slot 2, whose record ID is 32.
         owner.Relationships.Resize(32, 1);
         owner.Relationships.Set(32, 0, 71);
 

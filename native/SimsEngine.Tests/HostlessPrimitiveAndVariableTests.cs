@@ -64,7 +64,7 @@ public sealed class HostlessPrimitiveAndVariableTests
 
         var result = GenericSimsCallPrimitive.Execute(context, GenericOperand(0x0c));
         Assert.Equal(PrimitiveResult.True, result);
-        // Transformation norm 1 rotates (10, 20) -> (63 - 20, 10) = (43, 10). me.Temporaries[0] = -(43 + 10) = -53.
+        // Transformation norm 1 rotates coordinates (x, y) to (63 - y, x) on the 64x64 lot grid.
         Assert.Equal(-53, me.Temporaries[0]);
     }
 
@@ -74,24 +74,19 @@ public sealed class HostlessPrimitiveAndVariableTests
         var (context, me, _) = PrimitiveTestWorld.Create();
         context.World.Host = null;
 
-        // Call 0x10
         Assert.Equal(PrimitiveResult.True, GenericSimsCallPrimitive.Execute(context, GenericOperand(0x10)));
 
-        // Call 0x18
         me.Temporaries[0] = 0;
         me.Temporaries[1] = 0;
         Assert.Equal(PrimitiveResult.True, GenericSimsCallPrimitive.Execute(context, GenericOperand(0x18)));
 
-        // Call 0x1d
         me.Temporaries[0] = 0;
         me.Temporaries[1] = 0;
         Assert.Equal(PrimitiveResult.True, GenericSimsCallPrimitive.Execute(context, GenericOperand(0x1d)));
 
-        // Call 0x1e
         me.Temporaries[0] = 0;
         Assert.Equal(PrimitiveResult.True, GenericSimsCallPrimitive.Execute(context, GenericOperand(0x1e)));
 
-        // Call 0x1f
         me.Temporaries[0] = 0;
         Assert.Equal(PrimitiveResult.True, GenericSimsCallPrimitive.Execute(context, GenericOperand(0x1f)));
         Assert.Equal((short)0, me.Temporaries[1]);
@@ -116,11 +111,9 @@ public sealed class HostlessPrimitiveAndVariableTests
             FameFriendThresholds = [5],
         };
 
-        // Call 0x22
         var res22 = GenericSimsCallPrimitive.Execute(context, GenericOperand(0x22));
         Assert.True(res22 == PrimitiveResult.True || res22 == PrimitiveResult.False);
 
-        // Call 0x24
         var res24 = GenericSimsCallPrimitive.Execute(context, GenericOperand(0x24));
         Assert.True(res24 == PrimitiveResult.True || res24 == PrimitiveResult.False);
     }
@@ -149,25 +142,21 @@ public sealed class HostlessPrimitiveAndVariableTests
         var levelOne = RoomMap.Build(new IffFile(ChunkBuilder.File(("Arry", 2, walls.ToArray())), "room-level-1.iff"), 1, 4, 1);
         context.World.LoadRoomMaps(new Dictionary<int, RoomMap> { [1] = levelOne });
 
-        // Room -5 (outside)
         me.Temporaries[0] = -5;
         Assert.Equal(0, Variables.Get(context, DataOwner.RoomByTemporary0, 0));
         Assert.Equal(1, Variables.Get(context, DataOwner.RoomByTemporary0, 1));
         Assert.Equal(0, Variables.Get(context, DataOwner.RoomByTemporary0, 2));
         Assert.Equal(0, Variables.Get(context, DataOwner.RoomByTemporary0, 3));
 
-        // Valid room
         var validRoom = unchecked((short)levelOne.RoomAt(1, 0));
         me.Temporaries[0] = validRoom;
         Assert.Equal(0, Variables.Get(context, DataOwner.RoomByTemporary0, 0));
-        Assert.Equal(1, Variables.Get(context, DataOwner.RoomByTemporary0, 2)); // Level 1 -> 1
+        Assert.Equal(1, Variables.Get(context, DataOwner.RoomByTemporary0, 2));
         Assert.True(Variables.Get(context, DataOwner.RoomByTemporary0, 3) >= 0);
 
-        // Invalid room throws BadRoomIdSpecified
         me.Temporaries[0] = 999;
         Assert.Throws<SimulationException>(() => Variables.Get(context, DataOwner.RoomByTemporary0, 2));
 
-        // Invalid field throws BadRoomValueRequested
         Assert.Throws<SimulationException>(() => Variables.Get(context, DataOwner.RoomByTemporary0, 4));
     }
 
@@ -187,11 +176,9 @@ public sealed class HostlessPrimitiveAndVariableTests
         var neighbor = new NeighborState(1, PrimitiveTestWorld.Definition()) { TypeRecordKey = 0x12345678 };
         context.World.Neighbors[1] = neighbor;
 
-        // Mode 5 (token 1)
         byte[] operand5 = [5, 0, 0, 0, 0, 0, 0, 0];
         Assert.Equal(PrimitiveResult.True, ManageInventoryPrimitive.Execute(context, operand5));
 
-        // Mode 6 (token 3)
         byte[] operand6 = [6, 0, 0, 0, 0, 0, 0, 0];
         Assert.Equal(PrimitiveResult.True, ManageInventoryPrimitive.Execute(context, operand6));
     }
@@ -216,11 +203,9 @@ public sealed class HostlessPrimitiveAndVariableTests
         me.IdleFloat7A8 = -100;
         context.World.Host = null;
 
-        // Without flag 1, idle for input clears flag and returns True
         byte[] operandClear = [0, 0, 0, 0, 0, 0, 0, 0];
         Assert.Equal(PrimitiveResult.True, IdleForInputPrimitive.Execute(context, operandClear));
 
-        // With flag 1 and empty queue, returns True
         byte[] operandWait = [0, 0, 1, 0, 0, 0, 0, 0];
         Assert.Equal(PrimitiveResult.True, IdleForInputPrimitive.Execute(context, operandWait));
     }
@@ -231,10 +216,8 @@ public sealed class HostlessPrimitiveAndVariableTests
         var (context, me, _) = PrimitiveTestWorld.Create();
         context.World.Host = null;
 
-        // FacingClear returns true without wall map
         Assert.True(context.World.FacingClear(10, 10, 1, 0));
 
-        // FindLocationFor: searches lot coordinates natively
         var stackObj = context.World.Add(new XObject(2, PrimitiveTestWorld.Definition()));
         context.Frame.StackObject = stackObj.Id;
         byte[] findOperand = [0, 0, 0, 0, 0, 0, 0, 0];

@@ -7,7 +7,6 @@ namespace SimsEngine.Tests;
 
 public sealed class SnapshotPrimitiveTests
 {
-    // Operand: word 0 (the parameter index), word 1 (the mode) and byte 4 (the flags).
     private static byte[] Operand(short mode, byte flags, short index = 0) =>
         [(byte)index, (byte)(index >> 8), (byte)mode, (byte)(mode >> 8), flags, 0, 0, 0];
 
@@ -55,8 +54,6 @@ public sealed class SnapshotPrimitiveTests
         return (context with { Frame = frame }, me, stack);
     }
 
-    /// <summary>The running object (100, direction <paramref name="direction"/>) and a stack object (5) at (10, 20, 3) with
-    /// direction <paramref name="stackDirection"/>.</summary>
     private static (TreeContext Context, XPerson Me, PrimitiveTestHost Host, XObject Stack) Lot(short direction = 0, short stackDirection = 0)
     {
         var (context, me, host) = PrimitiveTestWorld.Create(stackObject: 5);
@@ -88,18 +85,18 @@ public sealed class SnapshotPrimitiveTests
     {
         var (context, _, host, _) = Lot(stackDirection: 2);
         Assert.Equal(PrimitiveResult.True, SnapshotPrimitive.Execute(context, Operand(2, 0)));
-        Assert.Equal(["RunSnapshot(100,null,26,20,3,-1,False,2,False,null)"], host.Calls);
+        Assert.Equal(["RunSnapshot(100,null,26,20,3,-1,False,0,False,null)"], host.Calls);
     }
 
     [Fact]
-    public void ModeTwoPassesTheStackObjectsDirectionIntoTheDifference()
+    public void ModeTwoPreservesTheRunningObjectsDirectionIntoTheDifference()
     {
         var (context, me, host, _) = Lot(direction: 6, stackDirection: 2);
         me.Position = new ObjectPosition(30, 40, 0);
 
         Assert.Equal(PrimitiveResult.True, SnapshotPrimitive.Execute(context, Operand(2, 1)));
 
-        Assert.Equal(["RunSnapshot(100,null,26,20,3,-1,False,2,False,20,4,4)"], host.Calls);
+        Assert.Equal(["RunSnapshot(100,null,26,20,3,-1,False,6,False,20,4,0)"], host.Calls);
     }
 
     [Fact]
@@ -108,7 +105,6 @@ public sealed class SnapshotPrimitiveTests
         var (context, me, host, _) = Lot();
         me.Position = new ObjectPosition(30, 40, 0);
         Assert.Equal(PrimitiveResult.True, SnapshotPrimitive.Execute(context, Operand(1, 0b101)));
-        // The difference is running-object Y, X and direction minus the projected position and chosen direction.
         Assert.Equal(["RunSnapshot(100,5,10,20,3,0,False,0,True,20,20,0)"], host.Calls);
     }
 
@@ -354,7 +350,6 @@ public sealed class SnapshotPrimitiveTests
         Assert.Equal(PrimitiveResult.True, SnapshotPrimitive.Execute(context, Operand(1, 0)));
 
         Assert.Equal(stack.Position, me.Position);
-        // The Sim is written into the stack object's first real footprint slot.
         Assert.Equal([0, me.ClockManagerIndex], stack.Slots);
     }
 
@@ -433,7 +428,6 @@ public sealed class SnapshotPrimitiveTests
     public void NativeSnapshotFreeLotSlotFlag0800BypassesTheEarlyRouteWallGate()
     {
         var (context, me, _) = NativeSlotLot(blockedRoute: true);
-        // One tile off the stack object so the placement does not overlap it, across the blocked route edge.
         var slot = new RoutingSlotRequest { X = 0, Y = 16, SnapTargetSlot = -1, Flags = 0x800 };
         context.World.LotRoutingSlots.Add(slot);
         var expected = LotGeometry.SlotPosition(context.StackObject!.Position,
@@ -535,7 +529,7 @@ public sealed class SnapshotPrimitiveTests
 
         Assert.Equal(PrimitiveResult.True, SnapshotPrimitive.Execute(context, Operand(0, 1)));
 
-        // Direction 2 rotates (X=3.9, Y=-2.1) to ((int)-(-2.1), (int)3.9) = (2, 3).
+        // Direction 2 applies a 90-degree coordinate rotation that maps offset (X, Y) to (-Y, X).
         Assert.Equal(initialPosition.X - stack.Position.X + 2, me.AnimatorDisplacementX);
         Assert.Equal(initialPosition.Y - stack.Position.Y + 3, me.AnimatorDisplacementY);
         Assert.Equal(initialDirection - me[ObjectData.Direction], me.AnimatorDisplacementDirection);

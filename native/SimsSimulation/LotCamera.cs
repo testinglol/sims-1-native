@@ -32,8 +32,8 @@ internal readonly struct LotCamera(int orientation, int lotWidth, int lotHeight)
         _ => new Vector2(LotWidth - y, x)
     };
 
-    /// <summary>Rotate a camera-space displacement back into lot coordinates. This is the linear part of
-    /// <see cref="SourcePoint"/>, without its lot-edge translation.</summary>
+    /// <summary>Rotates a camera-space displacement vector back into lot coordinates without applying
+    /// origin translations.</summary>
     public Vector2 SourceVector(float x, float y) => Orientation switch
     {
         0 => new Vector2(x, y),
@@ -84,14 +84,8 @@ internal readonly struct LotCamera(int orientation, int lotWidth, int lotHeight)
 
     public int UnrotateJunction(int flags) => new LotCamera((4 - Orientation) % 4, LotWidth, LotHeight).RotateJunction(flags);
 
-    /// <summary>Turns source-lot junction arm bits into the screen arm bits the walls.iff junction sheets (SPR#
-    /// 4096-4098 / 5120-5122, frame = DAT_006cd440[bits] - 1, drawn by FUN_0053c3dc) are keyed by. The art fixes each
-    /// bit to a screen direction: 1 up-right, 2 up-left, 4 down-left, 8 down-right, 16 up, 32 left, 64 down,
-    /// 128 right. With <see cref="ProjectCamera"/> that is 1 = -y, 2 = -x, 4 = +y, 8 = +x, 16 = -x-y, 32 = -x+y,
-    /// 64 = +x+y and 128 = +x-y in camera space. A source vector (sx, sy) becomes camera vector (-sy, sx) per quarter
-    /// turn (the inverse of <see cref="SourceVector"/>), which moves every arm one bit DOWN its nibble
-    /// (1 -> 8 -> 4 -> 2 -> 1, 16 -> 128 -> 64 -> 32 -> 16). <see cref="RotateJunction"/> shifts the other way, which
-    /// mirrors every corner and T junction by 180 degrees at camera orientations 1 and 3.</summary>
+    /// <summary>Converts lot junction arm bits into screen arm bits for wall junction sprites by rotating
+    /// directional nibbles per camera quarter-turn.</summary>
     public int CameraJunction(int flags)
     {
         var shift = (4 - Orientation) % 4;

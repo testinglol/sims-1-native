@@ -243,8 +243,8 @@ public sealed class LookTowardsPrimitiveTests
         context.World.TickAvatarAnimations(person);
 
         Assert.Equal(1, person.AnimatorLocomotionFadeGate);
-        Assert.Equal(1, person.AnimatorRouteTransitionState); // Mac enters +0x280=1 before scheduling +0x1b8.
-        Assert.Equal(1, person.AnimatorPoolTransitionState); // Mac's same fade branch also writes +0x288=1.
+        Assert.Equal(1, person.AnimatorRouteTransitionState);
+        Assert.Equal(1, person.AnimatorPoolTransitionState);
         Assert.True(person.NativeRoute!.LocomotionFadeEndMils > person.AnimatorMilliseconds);
         var fade = playback.SaveState();
         Assert.True(fade.PracticeWeightFadeActive);
@@ -262,7 +262,7 @@ public sealed class LookTowardsPrimitiveTests
         context.World.TickAvatarAnimations(person);
 
         Assert.Equal(0, person.NativeRoute!.LocomotionFadeEndMils);
-        Assert.Equal(2, person.NativeRoute.AnimatorFollowState); // Tick redispatches the matching terminal pose in the same pass.
+        Assert.Equal(2, person.NativeRoute.AnimatorFollowState);
         Assert.Equal(-1, person.NativeRoute.MotionAnimationIndex);
         Assert.Equal(3, person.AnimatorControlState);
         Assert.Null(person.AnimationPlayback);
@@ -282,7 +282,7 @@ public sealed class LookTowardsPrimitiveTests
             LocomotionMarkerTwo: new AvatarAnimationMarker(0.75f, "rfoot"));
         context.World.StandardWalkFallbackAnimationTable[(150, 20)] = clip;
         context.World.LocomotionStrideResolver = (_, _) => (100f, 80f);
-        person[ObjectData.RoutePreference] = 1; // Door portal functions set person data 9 around the route.
+        person[ObjectData.RoutePreference] = 1;
         person.AnimationPlayback = new AvatarAnimationPlayback(clip, false, true) { RouteDriven = true };
         person.AnimatorControlState = 9;
         person.AnimatorRootX = 170f;
@@ -295,7 +295,7 @@ public sealed class LookTowardsPrimitiveTests
         context.World.TickAvatarAnimations(person);
 
         var route = person.NativeRoute!;
-        Assert.Equal(0, route.LocomotionFadeEndMils); // No marker fade on this branch.
+        Assert.Equal(0, route.LocomotionFadeEndMils);
         Assert.Equal(-1, route.AnimatorFollowState);
         Assert.Equal(170f, route.TransitionTargetX);
         Assert.Equal(180f, route.TransitionTargetY);
@@ -303,8 +303,7 @@ public sealed class LookTowardsPrimitiveTests
         Assert.Equal(1, person.AnimatorRouteTransitionState);
         Assert.Equal(1, person.AnimatorLocomotionFadeGate);
         Assert.Equal(1, person.AnimatorPoolTransitionState);
-        Assert.NotNull(person.AnimationPlayback); // The arrival keeps the walk practice.
-        // The stored +0x28c/+0x290 direction, not the target direction, sets the repeated step.
+        Assert.NotNull(person.AnimationPlayback);
         Assert.Equal(170f, person.AnimatorRootX!.Value, 4);
         Assert.True(person.AnimatorRootY > 180f);
         Assert.Equal(0f, person.AnimatorProjectedRootStepX, 4);
@@ -337,7 +336,6 @@ public sealed class LookTowardsPrimitiveTests
 
         RouteExecutor.TickRouteRootMovement(context.World, person, null);
 
-        // Zero +0x288: +0x188=3, +0x180=-1, +0x1bc/+0x1c0 = the current root, and no step (0x1035115C–0x103511E8).
         var route = person.NativeRoute!;
         Assert.Equal(3, person.AnimatorControlState);
         Assert.Equal(1, person.AnimatorRouteTransitionState);
@@ -371,7 +369,6 @@ public sealed class LookTowardsPrimitiveTests
 
         RouteExecutor.TickRouteRootMovement(context.World, person, null);
 
-        // Nonzero +0x288: +0x188=7, skill 0x13 backward; +0x1d4/+0x1d8 hold the terminal point (0x103511EC).
         var route = person.NativeRoute!;
         Assert.Equal(7, person.AnimatorControlState);
         Assert.Equal(1, person.AnimatorRouteTransitionState);
@@ -381,12 +378,11 @@ public sealed class LookTowardsPrimitiveTests
         Assert.True(route.PoolSwimExitPending);
         Assert.Equal(172f, route.PoolSwimExitRootX);
         Assert.Equal(180f, route.PoolSwimExitRootY);
-        Assert.Equal(1, route.AnimatorFollowState); // +0x180 is unchanged while state 7 plays.
+        Assert.Equal(1, route.AnimatorFollowState);
 
-        person.AnimationPlayback = null; // State 7 substitutes phase 1 when the primary practice is gone.
+        person.AnimationPlayback = null;
         context.World.TickAvatarAnimations(person);
 
-        // The terminal branch restores +0x1d4/+0x1d8 and maps +0x280=1 to +0x180=-1 (0x1035025C–0x103502A4).
         Assert.Equal(3, person.AnimatorControlState);
         Assert.Equal(172f, person.AnimatorRootX);
         Assert.Equal(180f, person.AnimatorRootY);
@@ -397,7 +393,6 @@ public sealed class LookTowardsPrimitiveTests
     private static PrimitiveResult RunLookTowardsStep(in TreeContext context, ReadOnlySpan<byte> operand)
     {
         var result = LookTowardsPrimitive.Execute(context, operand);
-        // Native tests step the source object callback and its later SAnimator::Tick separately.
         if (context.World.Host is null && context.Me is XPerson person)
             context.World.TickAvatarAnimations(person);
         return result;
@@ -421,21 +416,17 @@ public sealed class LookTowardsPrimitiveTests
         return result;
     }
 
-    // The mode is at byte 0; the target comes from the executing frame.
+    // The turn mode is stored in word 0, while the target object identifier is stored in word 2.
     private static byte[] Operand(int mode, short target = unchecked((short)0xEEEE)) =>
         [(byte)mode, (byte)(mode >> 8), 0xEE, 0xEE, (byte)target, (byte)(target >> 8), 0xEE, 0xEE];
 
     private static SimulationError Fails(Action action) => Assert.Throws<SimulationException>(action).Error;
 
-    // Me is person 100 at (170, 180). The stack object is object 2 at (190, 200) unless the test removes it.
     private static (TreeContext Context, XPerson Me, PrimitiveTestHost Host) World(short stackObject = 2)
     {
         var (context, me, host) = PrimitiveTestWorld.Create(stackObject: stackObject);
         me.Position = new ObjectPosition(170, 180, 0);
-        // The source person OBJD permits placement on ground level; the minimal primitive fixture leaves this data
-        // word zero unless a test sets it explicitly.
         me[ObjectData.AllowedHeightFlags] = 1;
-        // The synthetic lot has no terrain data; allow the source placement validator's empty ground class.
         me[ObjectData.PlacementFlags] = 0x0800;
         me.TypeRecord = new TypeRecord(0x1234) { FootprintMask = 0 };
         context.World.Add(new XObject(2, PrimitiveTestWorld.Definition(0)) { Position = new ObjectPosition(190, 200, 0) });
@@ -450,8 +441,6 @@ public sealed class LookTowardsPrimitiveTests
         return (new TreeContext(world, me, new StackFrame(2, [], [0, 0])), me);
     }
 
-    // Shares the route fixture's walk clips, including the synthetic locomotion markers and stride inputs that
-    // activate SAnimator::Tick's terminal fade; without them the follow root never settles on its endpoint.
     private static void AddWalkClips(SimulationWorld world) => GoToRoutingSlotPrimitiveTests.AddWalkClips(world);
 
     [Fact]
@@ -494,7 +483,6 @@ public sealed class LookTowardsPrimitiveTests
         var (context, _, host) = World(stackObject: 3);
         host.TurnStatusAnswer = 0;
         Assert.Equal(PrimitiveResult.True, RunLookTowardsStep(context, Operand(3, 3)));
-        // 2 * (170, 180) - (210, 220) = (130, 140).
         Assert.Equal("TurnTowards(100,130,140)", host.Calls[0]);
     }
 
@@ -540,8 +528,8 @@ public sealed class LookTowardsPrimitiveTests
         Assert.Equal(PrimitiveResult.Stop, RunDirectWalkFollowStep(context, 3));
 
         var route = Assert.IsType<RouteState>(person.NativeRoute);
-        Assert.Equal(31f * 42f / 1000f * 1.2f, route.MotionFrame, 3); // Practice::Apply: elapsed / (skill duration / scale).
-        Assert.Equal(1.4f, person.AnimatorWalkingScale, 3); // FollowOneStep reads the prior 1.2 before Tick eases again.
+        Assert.Equal(31f * 42f / 1000f * 1.2f, route.MotionFrame, 3);
+        Assert.Equal(1.4f, person.AnimatorWalkingScale, 3);
         Assert.Equal(person.AnimatorWalkingScale, route.MotionPlaybackScale, 3);
     }
 
@@ -594,9 +582,6 @@ public sealed class LookTowardsPrimitiveTests
 
         Assert.Equal(PrimitiveResult.Stop, StartDirectWalkFollow(context, 3));
 
-        // The first root-motion increment is less than one FTile unit. Mac still calls cXPerson::Place,
-        // which enters cXObject::Place's function-9 path for this unchanged discrete position.
-        // SAnimator::Tick owns root motion, so the placement runs from the animator tick.
         Assert.Throws<NotSupportedException>(() => context.World.TickAvatarAnimations(person));
     }
 
@@ -611,13 +596,10 @@ public sealed class LookTowardsPrimitiveTests
         var originalPosition = person.Position;
         var originalRootX = person.AnimatorRootX;
         var originalRootY = person.AnimatorRootY;
-        person[ObjectData.AllowedHeightFlags] = 0; // cXObject::CanPlace rejects the next ground-level step.
+        person[ObjectData.AllowedHeightFlags] = 0;
 
         Assert.Equal(PrimitiveResult.Stop, RunDirectWalkFollowStep(context, 3));
 
-        // A rejected CanPlace sets +0x180=3 and leaves the route block without storing +0x80/+0x84
-        // (SAnimator.s 0x10351060–0x10351070); the gait practice itself still ticks. The next follow
-        // callback sees +0x180=3 and ends the follow.
         Assert.Equal(originalPosition, person.Position);
         Assert.Equal(originalRootX, person.AnimatorRootX);
         Assert.Equal(originalRootY, person.AnimatorRootY);
@@ -652,9 +634,8 @@ public sealed class LookTowardsPrimitiveTests
         Assert.Equal(1.6f, person.NativeRoute!.MotionPlaybackScale);
     }
 
-    // The route-entry gate takes the standing-adjust start clip only when the lookahead offset
-    // (StdAnimDist(loop) * 8/3) exceeds StdAnimDist(start) * 16/3 (SAnimator.s 0x10350B98, 0x10350E28–0x10350E7C),
-    // so these fixtures give the start clips a shorter stride than the loops.
+    // Locomotion route entry selects a start clip only when the loop clip lookahead distance exceeds twice
+    // the start clip distance.
     private const float StartClipDistance = 0.25f;
 
     [Fact]
@@ -672,7 +653,7 @@ public sealed class LookTowardsPrimitiveTests
                 new System.Numerics.Vector3(1f, 0f, 0f), samples, 1000f);
 
         Assert.Equal(PrimitiveResult.Stop, StartDirectWalkFollow(context, 2));
-        person.AnimatorRouteTransitionState = 1; // Exercise start-to-loop behavior after the +0x280 route-entry branch.
+        person.AnimatorRouteTransitionState = 1;
         context.World.TickAvatarAnimations(person);
         var result = PrimitiveResult.Stop;
         for (var tick = 0; tick < 128 && person.NativeRoute?.MotionAnimationIndex != 22; tick++)
@@ -712,7 +693,7 @@ public sealed class LookTowardsPrimitiveTests
                 new System.Numerics.Vector3(1f, 0f, 0f), samples, 1000f);
 
         Assert.Equal(PrimitiveResult.Stop, StartDirectWalkFollow(context, 3));
-        person.AnimatorRouteTransitionState = 1; // Exercise start-to-loop behavior after the +0x280 route-entry branch.
+        person.AnimatorRouteTransitionState = 1;
         context.World.TickAvatarAnimations(person);
         var result = PrimitiveResult.Stop;
         for (var tick = 0; tick < 128 && person.NativeRoute?.MotionAnimationIndex != 19; tick++)
@@ -794,7 +775,7 @@ public sealed class LookTowardsPrimitiveTests
                 new System.Numerics.Vector3(15f, 0f, 0f), samples, 1000f);
 
         Assert.Equal(PrimitiveResult.Stop, StartDirectWalkFollow(context, 3));
-        person.AnimatorRouteTransitionState = 1; // Hold the source state beyond the initial route-entry dispatch.
+        person.AnimatorRouteTransitionState = 1;
         Assert.Equal(0, person.AnimatorPoolTransitionState);
         context.World.TickAvatarAnimations(person);
         Assert.Equal(1, person.AnimatorPoolTransitionState);
@@ -928,7 +909,8 @@ public sealed class LookTowardsPrimitiveTests
     {
         var (context, _, host) = World();
         Assert.Equal(SimulationError.BadParameterInLookTowardsPrimitive, Fails(() => RunLookTowardsStep(context, Operand(mode))));
-        // The range check comes before the started flag, so a turn that is running is refused too.
+        // Parameter range validation precedes the in-progress check, so invalid parameters fail even while
+        // a turn is already executing.
         context.Frame.Waiting = true;
         Assert.Equal(SimulationError.BadParameterInLookTowardsPrimitive, Fails(() => RunLookTowardsStep(context, Operand(mode))));
         Assert.Empty(host.Calls);
@@ -943,7 +925,6 @@ public sealed class LookTowardsPrimitiveTests
         Assert.Equal(new[] { "TurnTowards(100,190,200)", "TurnStatus(100)" }, host.Calls);
         Assert.True(context.Frame.Waiting);
 
-        // The started flag is set, so the second tick does not turn again and does not try to start a turn.
         host.Calls.Clear();
         Assert.Equal(PrimitiveResult.Stop, RunLookTowardsStep(context, Operand(2, 2)));
         Assert.Equal(new[] { "TurnStatus(100)" }, host.Calls);
@@ -999,7 +980,6 @@ public sealed class LookTowardsPrimitiveTests
     [InlineData("dogfemale", 3)]
     [InlineData("catmale", 4)]
     [InlineData("catfemale", 5)]
-    // No compareNoCase match falls through to SAnimator.s 0x10358818 without writing +0x60e.
     [InlineData("unknown", null)]
     public void ResetSuitsBodyStringEntryThirteenSelectsTheMacAnimatorMode(string value, int? expected)
     {

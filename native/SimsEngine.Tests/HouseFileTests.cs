@@ -5,7 +5,6 @@ using Xunit;
 
 namespace SimsEngine.Tests;
 
-/// <summary>Family, neighbour and neighbourhood chunks built in the Sims.exe resource stream layout (FUN_00464faf).</summary>
 public class HouseFileTests
 {
     private static ChunkBuilder Persist(int version, string tag, bool swap = false) =>
@@ -225,7 +224,7 @@ public class HouseFileTests
     {
         var builder = Persist(0x49, "NGBH");
         for (short index = 0; index < 16; index++) builder.S16((short)(index + 100));
-        builder.Raw(new byte[16]); // Empty version-64 SimInventory vector count and trailing extension bytes.
+        builder.Raw(new byte[16]);
         var (file, chunk) = builder.InFile("NGBH");
         var data = NeighborhoodData.Read(file, chunk);
         Assert.True(data.HasUnparsedExtendedObjectList);
@@ -343,12 +342,12 @@ public class HouseFileTests
             offset += 4;
         }
         for (short index = 0; index < 0x10; index++) Write16(index);
-        Write32(99); // legacy global 16
-        Write32(100); // +0x98
-        Write16(101); // +0x1a8
-        Write32(102); // +0x90
-        Write32(103); // +0xac
-        Write32(104); // stored time
+        Write32(99);
+        Write32(100);
+        Write16(101);
+        Write32(102);
+        Write32(103);
+        Write32(104);
         var (file, chunk) = new ChunkBuilder().Raw(body).InFile("SIMI");
         var state = SimulationState.Read(file, chunk);
 
@@ -364,7 +363,8 @@ public class HouseFileTests
     [Fact]
     public void LotArrayDecodesRunsWithEvenPadding()
     {
-        // 2 x 3 x 1: a repeat of 4 (header, byte, pad to even), then a literal of 2 (no pad needed at 28).
+        // Array chunk run-length encoding pads repeat runs to 16-bit boundaries, while literal runs require
+        // no padding.
         var (file, chunk) = new ChunkBuilder().S16(0).S16(0).S32(2).S32(3).S32(1).U32(1)
             .U16(0x8004).U8(7).U8(0xEE).U16(2).U8(1).U8(2)
             .InFile("Arry", 8);
@@ -380,7 +380,8 @@ public class HouseFileTests
         var (raw, rawChunk) = new ChunkBuilder().S16(0).S16(0).S32(1).S32(2).S32(2).U32(0).Raw([1, 2, 3, 4]).InFile("Arry", 0);
         Assert.Equal([1, 2, 3, 4], LotArray.Read(raw, rawChunk).Data);
 
-        // Old layout: element size 1, 2 rows, width 2, elements from 2 * 4 + 8 = 16.
+        // Legacy array chunk headers specify element size, row count, and column width, with element data
+        // starting after the header and row offset table.
         var (old, oldChunk) = new ChunkBuilder().S16(1).S16(2).S16(2).Raw(new byte[10]).Raw([5, 6, 7, 8]).InFile("Arry", 0);
         var array = LotArray.Read(old, oldChunk);
         Assert.True(array.OldLayout);
@@ -410,8 +411,8 @@ public class HouseFileTests
         Assert.Throws<ResourceFormatException>(() => LotArray.Read(file, chunk));
     }
 
-    /// <summary>Packs FUN_00464696 fields most significant bit first: a 0 bit for zero, else a 1 bit, the two-bit width
-    /// index and the value in that many bits.</summary>
+    /// <summary>Packs fields most significant bit first: a 0 bit for zero, or a 1 bit followed by a two-bit
+    /// width index and the value in that many bits.</summary>
     private sealed class FieldWriter
     {
         private readonly List<bool> _bits = [];
@@ -440,7 +441,6 @@ public class HouseFileTests
     [Fact]
     public void TypeAttributesReadCodedFieldsWithSignExtension()
     {
-        // One type: GUID in 32 bits, two attributes: -1 in 5 bits (11111) and 300 in 13 bits.
         var fields = new FieldWriter()
             .Field(1, 0, 6)
             .Field(0x12345678, 3, 32)
@@ -461,14 +461,14 @@ public class HouseFileTests
     [Fact]
     public void CodedStreamReadsAStringFromTheNextWholeByte()
     {
-        // A byte field (width 2: value 1) takes 5 bits; the string starts at the next byte and pads to even.
+        // Bit-packed field streams align to the next byte boundary before writing strings, which are then
+        // padded to 16-bit alignment.
         var fields = new FieldWriter().Field(1, 0, 2);
         var (file, chunk) = Persist(0, "TEST").Raw(fields.Bytes()).EvenString("ab").U8(0x84).InFile("TEST", 0);
         var stream = new PersistReader(file, chunk);
         stream.BeginFieldCoding();
         Assert.Equal(1, stream.Byte());
         Assert.Equal("ab", stream.String());
-        // The next field starts a fresh byte: 0x84 is 1, width index 0 (5 bits), 00100.
         Assert.Equal(4, stream.Int16());
     }
 
@@ -527,7 +527,8 @@ public class HouseFileTests
     [Fact]
     public void LotObjectsReadTheListThenOneBlockPerObject()
     {
-        // Header 12, flag 12, list 13..18, first block offset 19..22, state 23..25, next offset 26..29 (none), tail.
+        // ObjM chunks consist of a header, flags, an object list, and chained state data blocks linked by
+        // relative offsets.
         var (file, chunk) = Persist(0x45, "ObjM").U8(0).S16(5).S16(2).S16(0)
             .U32(26 - PersistReader.HeaderSize).Raw([0xAA, 0xBB, 0xCC]).U32(0)
             .S16(7).U32(1).S16(9).EvenString("n")
@@ -537,7 +538,7 @@ public class HouseFileTests
         Assert.Equal((short)5, item.ObjectId);
         Assert.Equal((short)2, item.TypeIndex);
         Assert.Equal([0xAA, 0xBB, 0xCC], item.State);
-        Assert.Null(item.Head); // too short for the head every object writes
+        Assert.Null(item.Head);
         Assert.Equal((short)7, objects.Object0xA8);
         Assert.Equal([(short)9], objects.ObjectList0x38);
         Assert.Equal("n", objects.Name);
@@ -574,7 +575,6 @@ public class HouseFileTests
         var types = ObjectTypeTable.Read(typeFile, typeChunk);
         var chair = Definition(type: 4, masterId: 0);
 
-        // Without the definitions the class is unknown, so the block stays raw.
         Assert.Null(Assert.Single(LotObjects.Read(file, chunk, types).Objects).Decoded);
         var decoded = Assert.Single(LotObjects.Read(file, chunk, types, Find(chair)).Objects).Decoded;
         Assert.NotNull(decoded);
@@ -601,13 +601,13 @@ public class HouseFileTests
         Assert.Null(decoded.Person);
         Assert.Null(decoded.MultiTile);
 
-        // A state that stops short of its block is reported.
         var (shortFile, shortChunk) = Persist(0x45, "ObjM").U8(0).S16(5).S16(1).S16(0)
             .U32((uint)(end + 2 - PersistReader.HeaderSize)).Raw(objectState.ToArray()).S16(0).U32(0)
             .S16(0).U32(0).EvenString("").InFile("ObjM", 1);
         Assert.Throws<ResourceFormatException>(() => LotObjects.Read(shortFile, shortChunk, types, Find(chair)));
 
-        // A portal part (a master id and OBJD type 8) writes the multi-tile fields and its floats before the u32.
+        // Portal parts (OBJD type 8 with a master ID) serialize multi-tile offset fields and floating-point
+        // positions before trailing block integers.
         var portalState = new ChunkBuilder().Raw(state.ToArray()).S32(1).S32(2).S32(3).S32(4).S32(5).S32(6).S16(5)
             .U32(1).F32(2.5f).S32(99);
         var portalHead = Persist(0x45, "ObjM").U8(0).S16(5).S16(1).S16(0);
@@ -639,7 +639,8 @@ public class HouseFileTests
         Assert.False(LotObjects.IsPlaceholder(0xABCD));
     }
 
-    /// <summary>A 16-field OBJD with GUID 0xABCD and the given type (field 9) and master id (field 10).</summary>
+    /// <summary>Creates a 16-field OBJD definition with the specified object type in field 9 and master ID
+    /// in field 10.</summary>
     private static Objd Definition(ushort type, ushort masterId)
     {
         var fields = new ushort[16];

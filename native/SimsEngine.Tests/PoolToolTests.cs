@@ -60,7 +60,6 @@ public sealed class PoolToolTests
         var budget = new Budget(5000);
         var tool = new PoolTool(new SimulationWorld(), floors, pools, tiles, terrain, walls, catalog, budget);
 
-        // Existing floor tile on (10, 10) and outer perimeter wall on TopLeft edge of (10, 10) (separating (10,10) from non-pool (9,10))
         floors[10, 10] = 1;
         walls[10, 10][0] = 1;
         walls[9, 10][0] = 4;
@@ -71,12 +70,10 @@ public sealed class PoolToolTests
         Assert.Equal(65535, floors[10, 10]);
         Assert.True(pools.IsPool(10, 10, 1));
 
-        // Extending pool to (9, 10) across the wall at (10, 10) bit 1 must be refused as blocked-by-wall
         var blockedAcrossExisting = tool.Rectangle(9, 10, 9, 10, erase: false);
         Assert.False(blockedAcrossExisting.Applied);
         Assert.Equal("blocked-by-wall", blockedAcrossExisting.Refused);
 
-        // Interior wall inside a new pool drag rectangle must also be refused
         walls[20, 20][0] = 1;
         walls[19, 20][0] = 4;
         var blockedInterior = tool.Rectangle(19, 20, 20, 20, erase: false);
@@ -100,7 +97,6 @@ public sealed class PoolToolTests
         var poolTool = new PoolTool(world, floors, pools, tiles, terrain, walls, catalog, budget, water: water);
         Assert.True(poolTool.Rectangle(10, 10, 10, 10, erase: false).Applied);
 
-        // Start erase drag on sloped non-pool tile (9, 10) covering pool tile (10, 10)
         terrain.SetHeight(9, 10, 4);
         var erasedPool = poolTool.Rectangle(9, 10, 10, 10, erase: true);
         Assert.True(erasedPool.Applied);

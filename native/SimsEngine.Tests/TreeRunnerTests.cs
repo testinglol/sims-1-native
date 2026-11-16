@@ -3,8 +3,6 @@ using SimsEngine.Simulation;
 
 namespace SimsEngine.Tests;
 
-/// <summary>The tree runner's first cut: branch, return and error exits, the Type 4 start rule, and
-/// dispatch of Expression on TreeStack with Sims.exe's illegal-primitive error, following FUN_00452288.</summary>
 public class TreeRunnerTests
 {
     private sealed class TreeTable(Bhav root, Bhav child) : ITreeTable
@@ -150,7 +148,6 @@ public class TreeRunnerTests
         return new TreeContext(world, me, new StackFrame(0, [], []));
     }
 
-    // Expression operand: lhs u16, rhs u16, operator byte, lhs owner, rhs owner (8 temporary, 7 literal).
     private static byte[] Expr(short lhs, short rhs, byte op) =>
         [(byte)lhs, (byte)(lhs >> 8), (byte)rhs, (byte)(rhs >> 8), 0, op, 8, 7];
 
@@ -178,7 +175,6 @@ public class TreeRunnerTests
     [Fact]
     public void RemovingMeInsideARunToReturnDoesNotEndItAndTheFlagIsRestored()
     {
-        // FUN_00474b22 clears DAT_006c4d5c for the nested run and restores it on the way out.
         var context = World(out _);
         var tree = Tree(0, (0x12, 0xFE, 0xFF, [0, 0, 0, 0, 0, 0, 0, 0]));
         Assert.True(TreeRunner.Run(context, tree));
@@ -248,8 +244,6 @@ public class TreeRunnerTests
     [Fact]
     public void LastUnportedOpcodeNowDispatches()
     {
-        // Opcode 0x10 was the last listed-but-unported opcode; it now reaches its primitive, which reports the
-        // missing stack object (error 15) instead of throwing NotImplementedException.
         var context = World(out _);
         Assert.Equal(SimulationError.NoStackObjectPresentWhenRequired, Fails(() => { TreeRunner.Run(context, Tree(0, (0x10, 0xFE, 0xFF, new byte[8]))); }));
     }
@@ -257,7 +251,6 @@ public class TreeRunnerTests
     [Fact]
     public void PersonOnlyOpcodesAreIllegalForOtherObjects()
     {
-        // Only the person vtable runs FUN_0045cd1f; other objects reach FUN_00452288's default, error 5.
         var world = new SimulationWorld { Host = new Host() };
         var item = world.Add(new XObject(2, new short[XObject.DefinitionCount]));
         var context = new TreeContext(world, item, new StackFrame(0, [], []));
@@ -290,7 +283,6 @@ public class TreeRunnerTests
     public void RandomNumberIsDispatchedAndBranches()
     {
         var context = PrimitiveWorld(out var me, out var host);
-        // Result: temporary 1 (owner 8). Range: literal 4 (owner 7). 7 % 4 = 3.
         var tree = Tree(0, (8, 0xFE, 0xFF, new byte[] { 1, 0, 8, 0, 4, 0, 7, 0 }));
         Assert.True(TreeRunner.Run(context, tree));
         Assert.Equal(2, me.Temporaries[1]);
@@ -302,7 +294,6 @@ public class TreeRunnerTests
         var context = PrimitiveWorld(out var me, out _);
         me.Temporaries[0] = 2;
         context.World.Add(new XObject(2, PrimitiveTestWorld.Definition())).TypeRecord = new TypeRecord(0x1234);
-        // Type 0x1234 (dword), object id from temporary 0 (owner 8).
         var match = Tree(0, (0x20, 0xFE, 0xFF, new byte[] { 0x34, 0x12, 0, 0, 0, 0, 8, 0 }));
         Assert.True(TreeRunner.Run(context, match));
         var other = Tree(0, (0x20, 0xFE, 0xFF, new byte[] { 0x35, 0x12, 0, 0, 0, 0, 8, 0 }));
@@ -315,7 +306,6 @@ public class TreeRunnerTests
         var context = PrimitiveWorld(out var me, out _);
         context.World.Add(new XObject(5, PrimitiveTestWorld.Definition()));
         context.World.Add(new XObject(6, PrimitiveTestWorld.Definition()));
-        // Mode 1, with the flag: temporary 0 (owner 8) takes the id of the walk's first object, the person.
         var tree = Tree(0, (0x1f, 0xFE, 0xFF, new byte[] { 0, 0, 0, 0, 0x81, 8, 0, 0 }));
         Assert.True(TreeRunner.Run(context, tree));
         Assert.Equal(me.Id, me.Temporaries[0]);
@@ -325,7 +315,6 @@ public class TreeRunnerTests
     public void SleepWithoutAParameterIsStackNumberError()
     {
         var context = PrimitiveWorld(out _, out _);
-        // The tree has no parameters, so parameter 0 is out of range.
         var tree = Tree(0, (0, 0xFE, 0xFF, new byte[8]));
         Assert.Equal(SimulationError.StackNumberOutOfRange, Fails(() => { TreeRunner.Run(context, tree); }));
     }
@@ -341,7 +330,8 @@ public class TreeRunnerTests
         {
             TypeRecord = new TypeRecord(typeGuid),
         });
-        // Mode 4 resolves the type GUID from bytes 0–3 and writes the first match to temporary 0.
+        // Find Object mode 4 matches objects by the 32-bit GUID in operand bytes 0–3 and stores the first
+        // matching object ID.
         var operand = new byte[] { 0x78, 0x56, 0x34, 0x12, 0x84, 8, 0, 0 };
         var tree = Tree(0, (0x1f, 0xFE, 0xFF, operand));
 

@@ -92,7 +92,6 @@ public sealed class OriginalBuildOverlay
         }
         catch
         {
-            // Keep provided base font if the 7pt font is absent.
         }
         _tooltipFont = loadedTooltipFont;
 
@@ -359,7 +358,8 @@ public sealed class OriginalBuildOverlay
             : null;
     }
 
-    /// <summary>cWinRoof (0052921e, 0052a053): pattern grid starts at cWinRoof x=70 (canvas x=608) and ScrollRight sits at canvas.width - 14.</summary>
+    /// <summary>Calculates the number of roof pattern columns fitting between the grid origin at x=608 and
+    /// the right scroll button at canvas width minus 14.</summary>
     public static int RoofColumns(CGSize canvas)
     {
         if (!double.IsFinite(canvas.Width))
@@ -463,13 +463,15 @@ public sealed class OriginalBuildOverlay
         var size = new CGSize(image.Size.Width / 4.0, image.Size.Height);
         if (ShowsRoofPanel)
         {
-            // cWinRoof::Init (0052921e) places ScrollLeft at (58, 20) inside cWinRoof (538, canvas.height - 95) -> (596, canvas.height - 75).
+            // Positions the left roof scroll button at (596, canvas height - 75) and the right button at
+            // (canvas width - 14, canvas height - 75).
             return new CGRect(forward ? canvas.Width - 14 : 596, canvas.Height - 75, size.Width, size.Height);
         }
         return OriginalBuildLayout.Arrow(forward, size, canvas);
     }
 
-    /// <summary>cWinRoof::Init (0052921e) reads STR# 147 entries 11 "(10;71)", 0 "(10;50)", 2 "(10;30)", 4 "(10;1)" and subtracts 4 from X inside cWinRoof (538, canvas.height - 95).</summary>
+    /// <summary>Calculates roof pitch button rectangles from coordinate pairs stored in string table 147,
+    /// applying a 4-pixel horizontal offset.</summary>
     private CGRect RoofPitchControl(int index, CGSize canvas)
     {
         double[] yOffsets = [71, 50, 30, 1];
@@ -639,7 +641,8 @@ public sealed class OriginalBuildOverlay
         return null;
     }
 
-    /// <summary>A catalog icon at its own size: the first frame of the item's icon sheet (or second frame when selected/hovered per 004cca1c), or CatalogUnknown.bmp's first half.</summary>
+    /// <summary>Extracts a catalog icon from its sprite sheet, using the first frame for normal display,
+    /// the second frame for selected or hovered states, or the first half of the fallback texture.</summary>
     public static OriginalGameplayOverlay.Part Icon(
         OriginalGameplayOverlay.Image? image,
         GameplayPanelState.Image? iconSpec,
@@ -660,7 +663,6 @@ public sealed class OriginalBuildOverlay
             new Vector4(col / columns, 0f, 1f / columns, 1f / rows));
     }
 
-    /// <summary>The icon centred in a thumbnail frame, scaled down to fit inside its border (004cca1c integer centering).</summary>
     public static OriginalGameplayOverlay.Part Fit(OriginalGameplayOverlay.Part icon, CGRect rect)
     {
         var size = icon.Rect.Size;
@@ -679,10 +681,8 @@ public sealed class OriginalBuildOverlay
     private OriginalGameplayOverlay.Part IconAt(int index, GameplayPanelState.Image? iconSpec, bool highlighted = false) =>
         Icon(index >= 0 && index < _icons.Count ? _icons[index] : null, iconSpec, _unknown, highlighted);
 
-    /// <summary>
-    /// cWinCatalogBtn::CreateButton (004cc877.c lines 58-66) + GetToolTipWindow (004cc9df.c lines 12-14):
-    /// immediate price tag tooltip colored black when affordable or red (RGB 255, 0, 0) when budget &lt; item.price.
-    /// </summary>
+    /// <summary>Renders the catalog price tag tooltip, styling text black when affordable or red when the
+    /// item price exceeds the current budget.</summary>
     private OriginalGameplayOverlay.Image? PriceTooltip(int price, bool unaffordable)
     {
         string key = $"{price}:{(unaffordable ? 1 : 0)}";
@@ -990,7 +990,8 @@ public sealed class OriginalBuildOverlay
                     result.Add(new OriginalGameplayOverlay.Part(_roofPatternTemplate, rect, new Vector4(uvX, 0f, 0.25f, 1f)));
                     if (index < _icons.Count && _icons[index] is { } roofImage && roofImage.Size.Width > 0 && roofImage.Size.Height > 0)
                     {
-                        // FUN_0052984c draws the roof texture inside the 36x36 area at (+4, +4) of roofpatterntemplate.bmp.
+                        // Draws the roof pattern texture within a 36x36 pixel area offset (+4, +4) inside
+                        // the template frame.
                         double w = Math.Min(36.0, roofImage.Size.Width);
                         double h = Math.Min(36.0, roofImage.Size.Height);
                         double ox = 4.0 + Math.Floor((36.0 - w) / 2.0);
@@ -1003,7 +1004,8 @@ public sealed class OriginalBuildOverlay
                 }
                 else if (Kind == BuildCatalogPage.CatalogKind.Water && item.Guid is null)
                 {
-                    // FUN_004cd2d8 lines 168 & 179: PoolToolIcon.bmp and WaterToolIcon.bmp are 4-frame 45x45 button sheets.
+                    // Pool and water tool icons use 4-frame 45x45 button sheets indexed by selection and
+                    // hover state.
                     var toolSheet = item.Id == 65535 ? _poolToolIcon : _waterToolIcon;
                     float uvX = chosen ? 0.25f : hovered ? 0.50f : 0f;
                     result.Add(new OriginalGameplayOverlay.Part(toolSheet, rect, new Vector4(uvX, 0f, 0.25f, 1f)));

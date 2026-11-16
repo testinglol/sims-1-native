@@ -5,23 +5,13 @@ using SimsSDL.UI;
 
 namespace SimsSDL;
 
-/// <summary>
-/// The original control panel over a live lot, as the macOS renderer composes it: the panel background, the gameplay
-/// (or buy, build or options) panel, the universal controls and the speed controls.
-/// </summary>
 public sealed class LiveUI
 {
     public GameContent Content { get; }
     public SimsBitmapFont Font { get; }
 
-    /// <summary>
-    /// <c>cWinPictureInPicture</c> (00525664) and <c>cWinDisposePanel</c> (0050ca1a / 0050cca5) draw captions/prompts in <c>variablesans_12.ffn</c>.
-    /// </summary>
     public SimsBitmapFont MediumFont { get; }
 
-    /// <summary>
-    /// <c>cSimsApp::InitInstance</c> (004ef301) assigns <c>DAT_006f2abc</c> (<c>variablesans_18.ffn</c>, 004ff397 / 00607dbc) to <c>cTSAppSplashWindow</c>.
-    /// </summary>
     public SimsBitmapFont SplashFont { get; }
 
     public OriginalGameplayOverlay Gameplay { get; }
@@ -35,32 +25,20 @@ public sealed class LiveUI
     public OriginalBudgetReportOverlay BudgetReport { get; }
     public OriginalSoundOptionsOverlay SoundOptions { get; }
 
-    /// <summary>
-    /// The hovered catalog item's description box in buy and build mode.
-    /// </summary>
     public OriginalCatalogPopup CatalogPopup { get; }
 
     private readonly UITexture _panel;
     private readonly UITexture _backPatch;
 
-    /// <summary>
-    /// The original startup artwork (<c>Res_Other.RT</c> kSimsLogo = 9003, <c>Other/setup*.bmp</c>) and a black fill for its letterbox.
-    /// </summary>
     private readonly UITexture? _setup;
     private readonly UITexture? _splashCopyrightTexture;
     private readonly UITexture _black = new(1, 1, [0, 0, 0, 255]);
 
-    /// <summary>
-    /// <c>cWinTravelLoadScreen</c> (00441311, 004fc4ab, 00525af7): full-screen vehicle loading screen shown during lot travel.
-    /// </summary>
     public OriginalTravelLoadScreen? TravelLoadScreen { get; set; }
     private (OriginalTravelLoadScreen Screen, bool HighRes, UITexture Texture)? _cachedTravelLoadTexture;
 
     private bool _loading;
 
-    /// <summary>
-    /// Whether the startup or travel loading screen covers the window while a neighborhood map or lot loads.
-    /// </summary>
     public bool Loading
     {
         get => _loading;
@@ -80,9 +58,6 @@ public sealed class LiveUI
 
     private string? _loadingText;
 
-    /// <summary>
-    /// The progress line drawn under the startup artwork while <see cref="Loading"/> (STR# 155, <c>cTSAppSplashWindow::SetMessage</c> 005ee8e1).
-    /// </summary>
     public string? LoadingText
     {
         get => _loadingText;
@@ -116,7 +91,6 @@ public sealed class LiveUI
             }
             catch (ContentError)
             {
-                // Keep prior splash ticker if a progress string fails rasterization.
             }
         }
     }
@@ -128,14 +102,8 @@ public sealed class LiveUI
     public bool HelpVisible { get; set; }
     public bool BudgetReportVisible { get; set; }
 
-    /// <summary>
-    /// The picture-in-picture window's image (<c>cWinPictureInPicture::BuildImage</c>), null while the window is closed.
-    /// </summary>
     public OriginalGameplayOverlay.Image? PictureInPicture { get; set; }
 
-    /// <summary>
-    /// <c>cWinPictureInPicture::OpenForObject</c> (00525256.c:45-51) selects 100x100 (&lt;=0), 200x200 (1), or 300x300 (&gt;=2).
-    /// </summary>
     public static CGSize PictureInPictureSize(int sizeIndex) =>
         OriginalPictureInPictureLayout.Size(sizeIndex);
 
@@ -161,10 +129,6 @@ public sealed class LiveUI
     private readonly UITexture? _closeBoxTexture;
     private (string Text, int Width, List<OriginalGameplayOverlay.Image> Lines)? _cachedPipCaption;
 
-    /// <summary>
-    /// <c>cWinDisposePanel</c> (00509b69.c:220-232, 0050ca1a.c, 0050cca5.c): replaces the right control subpanel (<c>x &gt;= 220</c>)
-    /// whenever the Hand tool holds a placed object in Buy or Build mode.
-    /// </summary>
     public sealed class DisposePanelState
     {
         public int ObjectID { get; set; }
@@ -216,10 +180,8 @@ public sealed class LiveUI
     public CGRect DisposePanelRect(CGSize canvas) =>
         new(220, canvas.Height - 100, Math.Max(0, canvas.Width - 220), 100);
 
-    /// <summary>
-    /// <c>cWinPictureInPicture::OpenForObject</c> (00525256.c:57-83): bottom-right above the control panel
-    /// (<c>x = parentW - pipW - 5</c>, <c>y = parentH - pipH - (5 minimized | 105 normal | 155 expanded/tutorial)</c>).
-    /// </summary>
+    /// <summary>Positions the picture-in-picture window at the bottom-right above the control panel, offset
+    /// vertically by 5 pixels when minimized, 105 pixels when normal, or 155 pixels when expanded.</summary>
     public CGRect? PictureInPictureRect(CGSize canvas, double scale)
     {
         _ = scale;
@@ -234,9 +196,6 @@ public sealed class LiveUI
             expandedPanel);
     }
 
-    /// <summary>
-    /// <c>cWinPictureInPicture::Init</c> (00525055.c:36-56) + <c>OpenForObject</c> (00525256.c:52-56): 12x11 CloseBox.bmp at <c>(pipW - 16, 4)</c>.
-    /// </summary>
     public CGRect? PictureInPictureCloseRect(CGSize canvas, double scale)
     {
         if (PictureInPictureRect(canvas, scale) is not { } frame)
@@ -254,10 +213,6 @@ public sealed class LiveUI
     private string? _tutorialIconKey;
     private const double TutorialPanelHeight = 150;
 
-    /// <summary>
-    /// Mac <c>cTSWinTutorialHighlight</c>: <c>CPanel/TutHigh.bmp</c> (kTutorialHighlightBMP 4980), three frames, placed by
-    /// <c>cTSWin::HiliteForTutorial</c> when a UI Effect flashes a shown button and hidden when one is flashed off.
-    /// </summary>
     private readonly UITexture? _tutorialHighlightTexture;
     public (CGRect Button, double ShownAt)? TutorialHighlight { get; private set; }
 
@@ -346,9 +301,6 @@ public sealed class LiveUI
         }
     }
 
-    /// <summary>
-    /// The selected Sim's head rendered by the host at the menu's head orientation; the nine-frame sheet stands in until it arrives.
-    /// </summary>
     public OriginalGameplayOverlay.Image? PieHeadImage { get; private set; }
 
     public OriginalDialogOverlay? GameDialog { get; set; }
@@ -366,43 +318,22 @@ public sealed class LiveUI
 
     public ushort RoofStyle { get; set; } = 16;
 
-    /// <summary>
-    /// The neighborhood map (the base map, or a travel map over a lot), and Select a Family over it.
-    /// </summary>
     public OriginalNeighborhoodOverlay? Neighborhood { get; set; }
     public OriginalFamilyPickerOverlay? FamilyPicker { get; set; }
 
-    /// <summary>
-    /// The scrolling credits, opened from the neighborhood banner.
-    /// </summary>
     public OriginalCreditsOverlay? Credits { get; set; }
 
-    /// <summary>
-    /// Create a Family, shown in place of the lot while a new household is made.
-    /// </summary>
     public OriginalHouseholdCreationOverlay? HouseholdCreation { get; set; }
 
-    /// <summary>
-    /// The wardrobe or pet carousel over the lot.
-    /// </summary>
     public OriginalOutfitPickerOverlay? OutfitPicker { get; set; }
     public GenericSimsCallChooserOverlay? GenericSimsCallPicker { get; set; }
 
-    /// <summary>
-    /// A pack-declared plugin panel over the lot; modal like the original option panels.
-    /// </summary>
     public OriginalPluginPanelOverlay? PluginPanel { get; set; }
 
-    /// <summary>
-    /// Where the last draw list wants the Sim preview: after item <c>Index</c>, inside <c>Rects</c> in canvas pixels.
-    /// </summary>
     public (int Index, IReadOnlyDictionary<int, Vector4> Rects)? PreviewPlacement { get; private set; }
 
     public UIDevice Device { get; }
 
-    /// <summary>
-    /// Whether the lot and its control panel are on screen.
-    /// </summary>
     public bool ShowsLot => !Loading && Neighborhood is null && HouseholdCreation is null;
 
     public static float AutomaticUIScale(int width, int height, float pixelDensity) =>
@@ -458,19 +389,19 @@ public sealed class LiveUI
             return true;
         }
 
-        if (Buy.Choose(guid, Gameplay.State?.Budget))
-        {
-            if (BuildMode)
-                Build.CancelSelection();
-            return true;
-        }
-
         if (BuildMode && Build.ObjectTool is not null)
         {
             Build.ChooseObject(guid, Gameplay.State?.Budget);
             if (Build.SelectedObjectGUID != guid)
                 return false;
             Buy.Selection.ChooseCatalog(guid);
+            return true;
+        }
+
+        if (Buy.Choose(guid, Gameplay.State?.Budget))
+        {
+            if (BuildMode)
+                Build.CancelSelection();
             return true;
         }
 
@@ -585,10 +516,6 @@ public sealed class LiveUI
         }
     }
 
-    /// <summary>
-    /// Mac <c>Tut_FlashButtonByImageID</c>, <c>Tut_FlashPersonPanelButton</c> and <c>Tut_FlashRelButton</c>:
-    /// find the button, then <c>cTSWin::HiliteForTutorial</c> shows the highlighter over it when the button is shown, or hides it.
-    /// </summary>
     public void TutorialFlash(string target, int value, bool on)
     {
         if (_lastLogicalCanvas is not { } canvas)
@@ -659,10 +586,8 @@ public sealed class LiveUI
             TutorialHighlight = null;
     }
 
-    /// <summary>
-    /// <c>cTSWinTutorialHighlight</c>'s frame and rect: the timer runs at 6 frames a second (<c>0.5 + 1000 / 6</c> ms) and steps the
-    /// frame 0, 1, 2, 1, 0; <c>HiliteForTutorial</c> centres the window on the button and puts its bottom 3 pixels above it.
-    /// </summary>
+    /// <summary>Calculates the tutorial highlight animation frame and placement, cycling frames 0, 1, 2, 1,
+    /// 0 at 6 Hz and centering the indicator 3 pixels above the target button.</summary>
     private (CGRect Rect, int Frame)? TutorialHighlightDraw(UITexture texture)
     {
         if (TutorialHighlight is not { } highlight)
@@ -716,9 +641,6 @@ public sealed class LiveUI
         PieHeadImage = CreateOverlayImage(width, height, pixels);
     }
 
-    /// <summary>
-    /// Applies a host state report (the <c>state</c> or <c>result</c> of an event) to the panels.
-    /// </summary>
     public void Update(IReadOnlyDictionary<string, JsonElement> state, string root)
     {
         ArgumentNullException.ThrowIfNull(state);
@@ -729,7 +651,6 @@ public sealed class LiveUI
             ? modeStr
             : (WallsUp ? "up" : "down");
 
-        // Only the panel's fields are re-encoded; the lot objects in the state are large.
         var buffer = new ArrayBufferWriter<byte>();
         using (var writer = new Utf8JsonWriter(buffer))
         {
@@ -810,7 +731,6 @@ public sealed class LiveUI
                     string key = $"{safeFile}:{columns}x{rows}";
                     if (string.Equals(_tutorialIconKey, key, StringComparison.Ordinal) && TutorialIcon is not null)
                     {
-                        // The host reports state repeatedly; keep the existing texture until its resource changes.
                         return;
                     }
 
@@ -833,10 +753,6 @@ public sealed class LiveUI
         _tutorialIconKey = null;
     }
 
-    /// <summary>
-    /// Whether a universal control is drawn in its selected column, which <c>cTSWinBtn::CalcRowCol</c> takes for a toggle
-    /// button whose state (+0xd8) is not 0.
-    /// </summary>
     public bool IsSelected(OriginalUniversalControl.Action action) => action switch
     {
         OriginalUniversalControl.Action.Live => !BuyMode && !BuildMode && !OptionsMode && !Camera.Visible,
@@ -852,10 +768,6 @@ public sealed class LiveUI
         _ => false
     };
 
-    /// <summary>
-    /// The image ids of the shown buttons whose state is set: the selected universal controls, and the selected
-    /// subpanel tab while the live panel shows.
-    /// </summary>
     public List<int> SetButtonImages(int speed)
     {
         var images = new List<int>();
@@ -891,14 +803,8 @@ public sealed class LiveUI
             image.Size.Height / TutorialIconRows);
     }
 
-    /// <summary>
-    /// The lot's game clock in minutes after midnight, from the last state report.
-    /// </summary>
     public int? ClockMinutes { get; private set; }
 
-    /// <summary>
-    /// <c>Res_Other.RT</c> kSimsLogo (9003 / 0x232b): language-specific startup splash artwork (004ef301, 005ee2fe).
-    /// </summary>
     public static string SetupBitmapPath(int languageCode) => languageCode switch
     {
         2 => "UIGraphics/Other/setupuk.bmp",
@@ -921,9 +827,6 @@ public sealed class LiveUI
         _ => "UIGraphics/Other/setup.bmp"
     };
 
-    /// <summary>
-    /// <c>Res_Nbhd.RT</c> travel loadscreen bitmaps (004fc4ab, <c>cWinTravelLoadScreen::Init</c> 00525af7): 800x600 or 1024x768 when width &gt; 800.
-    /// </summary>
     private UITexture? TravelLoadTexture(OriginalTravelLoadScreen screen, bool highRes)
     {
         if (_cachedTravelLoadTexture is { } cached && cached.Screen == screen && cached.HighRes == highRes)
@@ -942,15 +845,11 @@ public sealed class LiveUI
             }
             catch
             {
-                // Try the next fallback resource path.
             }
         }
         return null;
     }
 
-    /// <summary>
-    /// The panel's draw list for a canvas in pixels.
-    /// </summary>
     public List<UIDraw> Draws(Vector2 canvas, float scale, int speed)
     {
         var draws = new List<UIDraw>();
@@ -969,7 +868,6 @@ public sealed class LiveUI
         {
             float screenScale = (float)FullscreenOverlayScale(size, scale);
             var screenLogical = new CGSize(canvas.X / screenScale, canvas.Y / screenScale);
-            float scaleCap = MathF.Max(0.25f, scale);
 
             if (Loading)
             {
@@ -980,20 +878,16 @@ public sealed class LiveUI
                         ?? TravelLoadTexture(screen, false)
                         ?? TravelLoadTexture(screen, true)) is { } travelTex)
                 {
-                    // cWinTravelLoadScreen::Init (00525af7, 004fc4ab): centers 800x600 or 1024x768 art at 1:1 native pixel density.
-                    float fit = MathF.Min(scaleCap, MathF.Min(canvas.X / travelTex.Width, canvas.Y / travelTex.Height));
+                    float fit = MathF.Max(0.001f, MathF.Min(canvas.X / travelTex.Width, canvas.Y / travelTex.Height));
                     float width = travelTex.Width * fit;
                     float height = travelTex.Height * fit;
                     draws.Add(new UIDraw(travelTex, new Vector4((canvas.X - width) / 2f, (canvas.Y - height) / 2f, width, height)));
                 }
                 else
                 {
-                    // cTSAppSplashWindow (005ee090, 005ee47b, 005ee60b, 005ee8e1): 800x600 setup.bmp centered at 1:1 native density over black,
-                    // copyright line (STR# 154 entry 5) at y = height - 3 * lineHeight (498), and 1000 ms sliding progress
-                    // ticker (STR# 155) at y = height - (lineHeight * 3) / 2 (549) in variablesans_18.ffn.
                     float boxWidth = _setup?.Width ?? 800;
                     float boxHeight = _setup?.Height ?? 600;
-                    float fit = MathF.Min(scaleCap, MathF.Min(canvas.X / boxWidth, canvas.Y / boxHeight));
+                    float fit = MathF.Max(0.001f, MathF.Min(canvas.X / boxWidth, canvas.Y / boxHeight));
                     float splashW = boxWidth * fit;
                     float splashH = boxHeight * fit;
                     float splashX = (canvas.X - splashW) / 2f;
@@ -1060,7 +954,6 @@ public sealed class LiveUI
                 return draws;
             }
 
-            // Create a Family and the neighborhood screens replace the lot; their layouts are in canvas pixels capped at native uiScale.
             if (HouseholdCreation is not null)
             {
                 var hcItems = HouseholdCreation.DrawItems(size, scale);
@@ -1120,13 +1013,8 @@ public sealed class LiveUI
 
         if (!minimizedLive)
         {
-            // FUN_0050a673 blits BackPatch (resource 2036, 52x100) at (DAT_006f35e0, DAT_006f35e4) = (168, 50), the bridge that joins the
-            // universal cluster's arc to the mode panel; the cluster draws over it.
             draws.Add(new UIDraw(_backPatch, new Vector4(168f * scale, top + 50f * scale, _backPatch.Width * scale, _backPatch.Height * scale)));
 
-            // The mode panel (FUN_00509b69 loads PanelBack, resource 4910, 804x100 at x = 220) starts its light-slate gradient at x = 220,
-            // transitions to flat RGB(0,0,82) navy across columns 281..797, and terminates in a 6px 3D right bevel cap at columns 798..803.
-            // Always span the full bottom width (x = 220..logical.width) in all modes, stretching flat navy column 797 and capping at logical.width - 6.
             var panelSlices = OriginalUIScalingLayout.GetPanelBackLayout(
                 logical.Width,
                 expandsToCanvas: true,
@@ -1206,8 +1094,6 @@ public sealed class LiveUI
 
         if (disposeActive && DisposePanel is { } dispose)
         {
-            // cWinDisposePanel::Draw (0050cca5.c:68-73, 138-146): DrawIconic centered in (220, H-100, 168, 100),
-            // and STR# 136 prompt wrapped in variablesans_12.ffn RGB(195, 205, 205) at (398, H-88, 390, 40).
             if (dispose.Preview is { } preview && preview.Size.Width > 0 && preview.Size.Height > 0)
             {
                 double fit = Math.Min(1.0, Math.Min(160.0 / preview.Size.Width, 92.0 / preview.Size.Height));
@@ -1223,6 +1109,8 @@ public sealed class LiveUI
 
             var promptLines = DisposePromptImages(dispose);
             double lineH = MediumFont.LineHeight;
+            double totalPromptH = promptLines.Count * lineH;
+            double promptTop = logical.Height - 100 + Math.Floor((100.0 - totalPromptH) / 2.0);
             for (int lineIndex = 0; lineIndex < promptLines.Count; lineIndex++)
             {
                 var line = promptLines[lineIndex];
@@ -1230,7 +1118,7 @@ public sealed class LiveUI
                     continue;
                 var lineRect = new CGRect(
                     398 - 3,
-                    logical.Height - 88 + lineIndex * lineH - 3,
+                    promptTop + lineIndex * lineH - 3,
                     line.Size.Width,
                     line.Size.Height);
                 draws.Add(new UIDraw(line.Texture, ScaledRect(lineRect)));
@@ -1243,7 +1131,6 @@ public sealed class LiveUI
         for (int index = 0; index < OriginalUniversalControl.All.Count; index++)
         {
             var control = OriginalUniversalControl.All[index];
-            // FUN_005e3a26: col 0 = normal, col 1 = selected, col 2 = hovered, col 3 = disabled.
             bool enabled = control.Enabled && IsControlEnabled(control.Kind);
             float buttonFrame = !enabled ? 3f
                 : IsSelected(control.Kind) ? 1f
@@ -1286,13 +1173,10 @@ public sealed class LiveUI
             {
                 if (modalPaused && speed > 0)
                 {
-                    // cWinControlPanel::UpdateFromCPState (0053b6eb.c:18-25) + SetPauseMode(1) (0053b871.c:7-8, 27):
-                    // when a blocking modal dialog pauses a running lot, Pause shows row 1 (solid red ||) and Speed 1/2/3 unhighlight.
                     row = 1f;
                 }
                 else if (speed == 0 && OptionsPanel.PlayOptions.InterfaceEffects && _livePauseStartedAt is { } started)
                 {
-                    // SetPauseMode(2) (0053b871.c:22-27) + OnTimer (0053b666.c:16-19): 500ms cyan/red || toggle while user-paused.
                     int halfSeconds = (int)(Math.Max(0.0, CurrentUptime() - started) * 2.0);
                     row = halfSeconds % control.Rows;
                 }
@@ -1352,7 +1236,7 @@ public sealed class LiveUI
             }
             else if (PieMenu.CenterLabel is null && Gameplay.PieHead is { } spriteHead && PieMenu.Layout is { } layoutFromSprite)
             {
-                // Nine frames, three by three: facing the player, then toward each spoke clockwise from the top.
+                // Nine frames: center faces player, remaining 8 point clockwise from top.
                 double width = spriteHead.Size.Width / 3.0;
                 double height = spriteHead.Size.Height / 3.0;
                 int headFrame = PieMenu.Highlighted is int hi
@@ -1369,7 +1253,6 @@ public sealed class LiveUI
                     new Vector4((headFrame % 3) / 3f, (headFrame / 3) / 3f, 1f / 3f, 1f / 3f)));
             }
 
-            // cWinPieMenu::Draw (005eae1b.c lines 36-40): submenu parent title tab centered in white (+0x38 = states[2]).
             if (PieMenu.CenterLabel is { } centerLabel && PieMenu.Layout is { } centerLayout)
             {
                 var bounds = new CGRect(
@@ -1430,8 +1313,6 @@ public sealed class LiveUI
         {
             draws.Add(new UIDraw(pipImage.Texture, ScaledRect(frame)));
 
-            // cWinPictureInPicture::BuildImage (00525664.c:44-59): optional STR# 0x131 caption in variablesans_12.ffn
-            // RGB(195, 205, 205) wrapped to width - 10 at bottom-left (5, height - 5 - linesH).
             if (!string.IsNullOrEmpty(PictureInPictureCaption))
             {
                 var lines = PipCaptionImages(PictureInPictureCaption, Math.Max(20, (int)frame.Width - 10));
@@ -1451,13 +1332,11 @@ public sealed class LiveUI
                 }
             }
 
-            // cWinPictureInPicture::BuildImage (00525664.c:82): 2px solid black border drawn inside the PiP window bounds.
             draws.Add(new UIDraw(_pictureInPictureBorder, ScaledRect(new CGRect(frame.MinX, frame.MinY, frame.Width, 2))));
             draws.Add(new UIDraw(_pictureInPictureBorder, ScaledRect(new CGRect(frame.MinX, frame.MaxY - 2, frame.Width, 2))));
             draws.Add(new UIDraw(_pictureInPictureBorder, ScaledRect(new CGRect(frame.MinX, frame.MinY + 2, 2, Math.Max(0, frame.Height - 4)))));
             draws.Add(new UIDraw(_pictureInPictureBorder, ScaledRect(new CGRect(frame.MaxX - 2, frame.MinY + 2, 2, Math.Max(0, frame.Height - 4)))));
 
-            // cWinPictureInPicture::Init (00525055.c:36-56) + OpenForObject (00525256.c:52-56): CloseBox.bmp at (pipW - 16, 4).
             if (_closeBoxTexture is not null && PictureInPictureCloseRect(logical, scale) is { } closeRect)
             {
                 float col = PictureInPictureClosePressed ? 1f : PictureInPictureCloseHovered ? 2f : 0f;
@@ -1662,7 +1541,6 @@ public sealed class LiveUI
 
         void DrawTileButton(CGRect bounds, int state)
         {
-            // FUN_005f730f (cWinTileBtn::OnPaint): 3-slice horizontal button from WinBtn.bmp (7px left cap, stretched 2px center, 7px right cap).
             float sheetW = dialog.ButtonSheetWidth;
             float framePx = sheetW / 4f;
             float basePx = state * framePx;
@@ -1689,7 +1567,6 @@ public sealed class LiveUI
 
         void DrawPeopleFramedPortrait(OriginalDialogOverlay.Image portrait, CGRect targetRect, Vector4 uv)
         {
-            // FUN_004360c1 (lines 266-285): center <=41x43 Sim portraits inside 45x45 PeopleTemplate.bmp instead of stretching 35x41 to 45x45.
             double w = portrait.FrameSize.Width;
             double h = portrait.FrameSize.Height;
             if (w > 0 && h > 0 && w <= 41 && h <= 43 && dialog.PeopleTemplate is { } template)
@@ -1743,11 +1620,9 @@ public sealed class LiveUI
         }
         else if (dialog.Dialog.IsBookScreen)
         {
-            // FUN_00511453 (cWinMagicBook::OnPaint) draws PopupInfoTiles.bmp (0xbc0) as a 9-sliced frame around the 600x382 window.
             var art = dialog.LotFrame;
             DrawNineSliceFrame(art.Texture, art.Edge, frame);
 
-            // Left header at (49, 8) width 240; right header (selected spell/recipe title) at (331, 8) width 240 (FUN_005109fe).
             for (int lineIdx = 0; lineIdx < dialog.BookTitleLines.Count; lineIdx++)
             {
                 var titleLine = dialog.BookTitleLines[lineIdx];
@@ -1758,8 +1633,6 @@ public sealed class LiveUI
             if (dialog.BookDetailTitle is { } detailTitle)
                 AddCentred(detailTitle, frame.MinX + 451, frame.MinY + 8);
 
-            // Left page: 4 rows of 240x68 using Nbhd/SpellPickItemBkg.bmp (3 vertical frames: normal, selected, hovered)
-            // and 3 ingredient buttons per active row (CatalogBtn.bmp frame 0 + 37x37 BMP_ icon, FUN_004ebd1d + FUN_004ccc2f).
             foreach (var row in dialog.BookRows)
             {
                 if (dialog.BookRowBackground is { } rowBg)
@@ -1789,14 +1662,12 @@ public sealed class LiveUI
                 }
             }
 
-            // FUN_004ecbce fills any remaining (< 4) row slots on the last page with the normal row frame.
             if (dialog.BookRowBackground is { } emptyRowBg)
             {
                 foreach (var emptyRect in dialog.BookEmptyRowRects)
                     AddPart(emptyRowBg.Texture, emptyRect, new Vector4(0f, 0f, 1f, 1f / 3f));
             }
 
-            // Right page description at (331, 54) width 240, RGB(195, 205, 205) text directly on navy (FUN_005109fe line 245 SetDrawBorder(0)).
             for (int index = 0; index < dialog.BookDetail.Count; index++)
             {
                 var line = dialog.BookDetail[index];
@@ -1805,11 +1676,9 @@ public sealed class LiveUI
                     new CGRect(dialog.BookDetailRect.MinX, dialog.BookDetailRect.MinY + index * dialog.Font.LineHeight, line.Size.Width, line.Size.Height));
             }
 
-            // Right page station illustration at (420, 232) size 130x90 (FUN_00511453 lines 26-37).
             if (dialog.BookStationImage is { } station)
                 AddPart(station.Texture, dialog.BookStationRect);
 
-            // Bottom bar: 3-slice WinBtn Back, Page X of Y, 3-slice WinBtn Next (FUN_005109fe lines 86-123).
             if (dialog.BookBackLabels is { } backLabels)
             {
                 int backState = !dialog.CanBookBack ? 3

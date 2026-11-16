@@ -3,8 +3,8 @@ using SimsEngine.Formats;
 
 namespace SimsEngine.World;
 
-/// <summary>The lot's grass layer (Arry 6, one signed byte per tile). TerrainComponent subtracts it from 127, so a tile's
-/// grass state is 127 minus the stored change (0 is greenest, 255 is bare); a lot without the array is all 127.</summary>
+/// <summary>The lot grass layer stored in Arry 6 as one signed byte per tile. Tile grass state is 127 minus
+/// the stored value, where 0 is greenest and 255 is bare; omitted layers default to 127.</summary>
 public sealed class LotGrass
 {
     private readonly LotArray? shape;

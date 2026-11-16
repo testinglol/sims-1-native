@@ -5,7 +5,6 @@ namespace SimsEngine.Tests;
 
 public sealed class SpecialEffectPrimitiveTests
 {
-    // Operand: word 0 is the value's data, byte 2 and byte 3 the host's, byte 4 the flags and byte 5 the text.
     private static byte[] Operand(short data, byte flags = 0, byte byte2 = 0, byte byte3 = 0, byte byte5 = 0) =>
         [(byte)data, (byte)(data >> 8), byte2, byte3, flags, byte5, 0, 0];
 

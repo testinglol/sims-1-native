@@ -51,58 +51,29 @@ bool shouldBevelCorner(
     return false;
 }
 
-void main() {
-    ivec2 artDims = textureSize(art, 0);
-    vec2 texSize = vec2(artDims);
-    vec2 halfTexel = 0.5 / texSize;
-    vec2 minUV = inUVRect.xy + halfTexel;
-    vec2 maxUV = max(minUV, inUVRect.xy + inUVRect.zw - halfTexel);
-    vec2 clampedUV = clamp(inUV, minUV, maxUV);
-    vec2 texel = clampedUV * texSize;
-    vec2 fw = max(fwidth(texel), vec2(1e-4));
+vec4 catmullRomWeights(float t) {
+    float t2 = t * t;
+    float t3 = t2 * t;
+    return vec4(
+        -0.5 * t + t2 - 0.5 * t3,
+        1.0 - 2.5 * t2 + 1.5 * t3,
+        0.5 * t + 2.0 * t2 - 1.5 * t3,
+        -0.5 * t2 + 0.5 * t3
+    );
+}
 
-    // UI overlays (inDepthInterval.z == 1.0): preserve exact crisp pixel-art sub-rectangle sampling.
-    if (inDepthInterval.z > 0.5) {
-        vec2 i = floor(texel + 0.5);
-        vec2 f = texel - i;
-        vec2 sharp = (i + clamp(f / fw, -0.5, 0.5)) / texSize;
-        vec2 uv = clamp(vec2(fw.x <= 1.0 ? sharp.x : inUV.x,
-                             fw.y <= 1.0 ? sharp.y : inUV.y),
-                        minUV, maxUV);
-        color = texture(art, uv) * inTint;
-        return;
-    }
-
-    // Lot sprites with anti-aliasing disabled.
-    if (inDepthInterval.w < 0.5) {
-        ivec2 minTexel = clamp(ivec2(floor(inUVRect.xy * texSize)), ivec2(0), artDims - 1);
-        ivec2 maxTexel = clamp(ivec2(ceil((inUVRect.xy + inUVRect.zw) * texSize)) - 1, minTexel, artDims - 1);
-        ivec2 nearest = clamp(ivec2(clampedUV * texSize), minTexel, maxTexel);
-        vec4 raw = texelFetch(art, nearest, 0);
-        if (raw.a > 0.0) {
-            raw.rgb /= raw.a;
-            raw.a = 1.0;
-        }
-        color = raw * inTint;
-        return;
-    }
-
-    // Lot non-depth sprites & floor shadows with HQ subpixel + diagonal corner anti-aliasing.
-    if (max(fw.x, fw.y) > 1.25) {
-        color = texture(art, clampedUV) * inTint;
-        return;
-    }
-
-    ivec2 minTexel = clamp(ivec2(floor(inUVRect.xy * texSize)), ivec2(0), artDims - 1);
-    ivec2 maxTexel = clamp(ivec2(ceil((inUVRect.xy + inUVRect.zw) * texSize)) - 1, minTexel, artDims - 1);
+vec4 sampleBeveled(
+    vec2 texel, vec2 fw, ivec2 minTexel, ivec2 maxTexel,
+    out vec4 c00, out vec4 c10, out vec4 c01, out vec4 c11
+) {
     vec2 p = texel - 0.5;
     ivec2 i0 = ivec2(floor(p));
     vec2 f = p - vec2(i0);
 
-    vec4 c00 = fetchArtClamped(minTexel, maxTexel, i0);
-    vec4 c10 = fetchArtClamped(minTexel, maxTexel, i0 + ivec2(1, 0));
-    vec4 c01 = fetchArtClamped(minTexel, maxTexel, i0 + ivec2(0, 1));
-    vec4 c11 = fetchArtClamped(minTexel, maxTexel, i0 + ivec2(1, 1));
+    c00 = fetchArtClamped(minTexel, maxTexel, i0);
+    c10 = fetchArtClamped(minTexel, maxTexel, i0 + ivec2(1, 0));
+    c01 = fetchArtClamped(minTexel, maxTexel, i0 + ivec2(0, 1));
+    c11 = fetchArtClamped(minTexel, maxTexel, i0 + ivec2(1, 1));
 
     float semiX = mix(max(semiTap(c00.a), semiTap(c10.a)), max(semiTap(c01.a), semiTap(c11.a)), f.y);
     float semiY = mix(max(semiTap(c00.a), semiTap(c01.a)), max(semiTap(c10.a), semiTap(c11.a)), f.x);
@@ -154,6 +125,84 @@ void main() {
         }
     }
 
-    vec4 sampled = c00 * w00 + c10 * w10 + c01 * w01 + c11 * w11;
-    color = sampled * inTint;
+    return c00 * w00 + c10 * w10 + c01 * w01 + c11 * w11;
+}
+
+void main() {
+    ivec2 artDims = textureSize(art, 0);
+    vec2 texSize = vec2(artDims);
+    vec2 halfTexel = 0.5 / texSize;
+    vec2 minUV = inUVRect.xy + halfTexel;
+    vec2 maxUV = max(minUV, inUVRect.xy + inUVRect.zw - halfTexel);
+    vec2 clampedUV = clamp(inUV, minUV, maxUV);
+    vec2 texel = clampedUV * texSize;
+    vec2 fw = max(fwidth(texel), vec2(1e-4));
+    ivec2 minTexel = clamp(ivec2(floor(inUVRect.xy * texSize + vec2(1e-3))), ivec2(0), artDims - 1);
+    ivec2 maxTexel = clamp(ivec2(ceil((inUVRect.xy + inUVRect.zw) * texSize - vec2(1e-3))) - 1, minTexel, artDims - 1);
+
+    // UI & fullscreen 800x600 overlays: mipmapped minification, exact 1:1 snap, or hybrid
+    // anti-ringing Catmull-Rom + edge bevel upscaling.
+    if (inDepthInterval.z > 0.5) {
+        if (max(fw.x, fw.y) > 1.05) {
+            bool fullTexture = inUVRect.x <= 1e-4 && inUVRect.y <= 1e-4 && inUVRect.z >= 0.9999 && inUVRect.w >= 0.9999;
+            color = (fullTexture ? texture(art, clampedUV) : textureLod(art, clampedUV, 0.0)) * inTint;
+            return;
+        }
+        if (min(fw.x, fw.y) > 0.92) {
+            vec2 i = floor(texel + 0.5);
+            vec2 f = texel - i;
+            vec2 sharp = (i + clamp(f / fw, -0.5, 0.5)) / texSize;
+            vec2 uv = clamp(vec2(fw.x <= 1.0 ? sharp.x : inUV.x,
+                                 fw.y <= 1.0 ? sharp.y : inUV.y),
+                            minUV, maxUV);
+            color = textureLod(art, uv, 0.0) * inTint;
+            return;
+        }
+
+        vec2 p = texel - 0.5;
+        ivec2 i0 = ivec2(floor(p));
+        vec2 f = p - vec2(i0);
+        vec4 c00, c10, c01, c11;
+        vec4 beveled = sampleBeveled(texel, fw, minTexel, maxTexel, c00, c10, c01, c11);
+
+        vec4 wx = catmullRomWeights(f.x);
+        vec4 wy = catmullRomWeights(f.y);
+        vec4 bicubic = vec4(0.0);
+        for (int dy = -1; dy <= 2; dy++) {
+            float ry = dy == -1 ? wy.x : (dy == 0 ? wy.y : (dy == 1 ? wy.z : wy.w));
+            vec4 rowSum =
+                fetchArtClamped(minTexel, maxTexel, i0 + ivec2(-1, dy)) * wx.x +
+                fetchArtClamped(minTexel, maxTexel, i0 + ivec2(0, dy)) * wx.y +
+                fetchArtClamped(minTexel, maxTexel, i0 + ivec2(1, dy)) * wx.z +
+                fetchArtClamped(minTexel, maxTexel, i0 + ivec2(2, dy)) * wx.w;
+            bicubic += rowSum * ry;
+        }
+        vec4 localMin = min(min(c00, c10), min(c01, c11));
+        vec4 localMax = max(max(c00, c10), max(c01, c11));
+        bicubic = clamp(bicubic, localMin, localMax);
+
+        float contrast = max(max(colorDist(c00, c10), colorDist(c01, c11)),
+                             max(colorDist(c00, c01), colorDist(c10, c11)));
+        float edgeBlend = smoothstep(0.18, 0.42, contrast);
+        color = mix(bicubic, beveled, edgeBlend) * inTint;
+        return;
+    }
+
+    // Lot sprites with anti-aliasing disabled (preserve premultiplied alpha).
+    if (inDepthInterval.w < 0.5) {
+        ivec2 nearest = clamp(ivec2(clampedUV * texSize), minTexel, maxTexel);
+        vec4 raw = texelFetch(art, nearest, 0);
+        if (raw.a < (1.0 / 255.0)) discard;
+        color = raw * inTint;
+        return;
+    }
+
+    // Lot non-depth sprites & floor shadows with HQ subpixel + diagonal corner anti-aliasing.
+    if (max(fw.x, fw.y) > 1.25) {
+        color = texture(art, clampedUV) * inTint;
+        return;
+    }
+
+    vec4 lc00, lc10, lc01, lc11;
+    color = sampleBeveled(texel, fw, minTexel, maxTexel, lc00, lc10, lc01, lc11) * inTint;
 }

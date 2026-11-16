@@ -2,12 +2,6 @@ using System.Numerics;
 
 namespace SimsSDL.UI;
 
-/// <summary>
-/// Draws one pack-declared <see cref="PanelDescription"/> with original-game primitives: the lot game dialog's
-/// <c>PopupInfoTiles</c> frame, <c>LBoxTile</c> body, <c>WinBtn</c> button sheet, original slider art for meters,
-/// and the original bitmap font. Element coordinates come from the description's 800x600 logical frame and are
-/// centered in the logical canvas like other original screens, or drawn beside the object a plugin anchored the panel to.
-/// </summary>
 public sealed class OriginalPluginPanelOverlay
 {
     public readonly record struct DrawItem(OriginalGameplayOverlay.Image Image, CGRect Rect, Vector4 UV);
@@ -27,15 +21,12 @@ public sealed class OriginalPluginPanelOverlay
         }
     }
 
-    private static readonly (byte R, byte G, byte B) NormalTextColor = (195, 205, 205); // DAT_006f2a44 (004ff397.c:26)
-    private static readonly (byte R, byte G, byte B) HoverTextColor = (255, 255, 255);  // DAT_006f2a48 (004ff397.c:29)
+    private static readonly (byte R, byte G, byte B) NormalTextColor = (195, 205, 205);
+    private static readonly (byte R, byte G, byte B) HoverTextColor = (255, 255, 255);
 
     private readonly SimsBitmapFont _font;
     private readonly UIDevice _device;
     private readonly OriginalGameplayOverlay.Image _frame;
-    /// <summary>
-    /// One slice of the frame's nine-slice sheet, as <c>OriginalDialogOverlay</c> cuts it.
-    /// </summary>
     private readonly double _frameEdge;
     private readonly OriginalGameplayOverlay.Image _body;
     private readonly OriginalGameplayOverlay.Image _button;
@@ -57,14 +48,8 @@ public sealed class OriginalPluginPanelOverlay
     public SimsBitmapFont ButtonFont { get; }
     public IReadOnlyDictionary<string, string> Values => _values;
     public string? Hovered { get; private set; }
-    /// <summary>
-    /// The object a plugin opened this panel beside, and its last rectangle in logical coordinates.
-    /// </summary>
     public int? AnchorId { get; }
     public CGRect? Anchor { get; set; }
-    /// <summary>
-    /// The lot view's height in logical points below which an anchored panel stays (above the control panel).
-    /// </summary>
     public double? LotHeight { get; set; }
 
     public OriginalPluginPanelOverlay(
@@ -100,7 +85,6 @@ public sealed class OriginalPluginPanelOverlay
             return OriginalGameplayOverlay.CreateImage(device, bitmap.Width, bitmap.Height, bitmap.Rgba, magenta: transparent);
         }
 
-        // The same navy bevelled tile the game's own lot dialogs use (see OriginalDialogOverlay.lotFrame), not GenDlg's grey outline.
         var popup = new SimsBitmap(content.Read("UIGraphics/CPanel/Backgrounds/PopupInfoTiles.bmp"));
         _frame = OriginalGameplayOverlay.CreateImage(device, popup.Width, popup.Height, popup.Rgba, magenta: false);
         _frameEdge = popup.Width / 3.0;
@@ -144,9 +128,6 @@ public sealed class OriginalPluginPanelOverlay
         }
     }
 
-    /// <summary>
-    /// Replaces the plugin-supplied binding values. Unknown bindings are kept but never drawn.
-    /// </summary>
     public void Update(IReadOnlyDictionary<string, string> values)
     {
         ArgumentNullException.ThrowIfNull(values);
@@ -286,7 +267,8 @@ public sealed class OriginalPluginPanelOverlay
                     {
                         var line = wrapped[index];
                         double y = area.Y + index * _font.LineHeight;
-                        // Rasterized lines carry 3 points of padding; clip on the glyph line itself.
+                        // Rasterized font lines include three points of padding; clipping occurs on the
+                        // glyph line itself.
                         if (y + _font.LineHeight > area.Y + area.Height + 3.0)
                         {
                             break;
@@ -380,7 +362,6 @@ public sealed class OriginalPluginPanelOverlay
     {
         if (Anchor is { } anchor)
         {
-            // Beside the object: to its right, or to its left when that runs off the window, centered on it and kept on screen.
             double width = Description.Frame.Width;
             double height = Description.Frame.Height;
             const double gap = 12.0;
@@ -397,7 +378,6 @@ public sealed class OriginalPluginPanelOverlay
                 Math.Round(Math.Max(0.0, Math.Min(y, bottom - height)), MidpointRounding.AwayFromZero));
         }
 
-        // The description is authored in 800x600 logical coordinates; center that space in wider canvases.
         double left = (canvas.Width - PanelDescription.LogicalWidth) / 2.0;
         double top = (canvas.Height - PanelDescription.LogicalHeight) / 2.0;
         return new CGPoint(Math.Max(0.0, left) + Description.Frame.X, Math.Max(0.0, top) + Description.Frame.Y);
@@ -413,7 +393,6 @@ public sealed class OriginalPluginPanelOverlay
     private CGRect CloseRect(CGSize canvas)
     {
         var panel = PanelRect(canvas);
-        // A game dialog's >=100x33 WinBtn, inside the panel's close band.
         double width = Math.Max(100.0, Math.Ceiling(_close.Size.Width) + 20.0);
         return new CGRect(Math.Floor(panel.X + panel.Width / 2.0 - width / 2.0), panel.Y + panel.Height - 41.0, width, 33.0);
     }
@@ -449,7 +428,6 @@ public sealed class OriginalPluginPanelOverlay
             }
             catch
             {
-                // Skip unrenderable lines cleanly matching Swift compactMap(try?).
             }
         }
 
@@ -496,7 +474,6 @@ public sealed class OriginalPluginPanelOverlay
 
     private void AppendTileButton(CGRect bounds, int frameIndex, List<DrawItem> items)
     {
-        // FUN_005f730f (cWinTileBtn::OnPaint): 3-slice horizontal button from WinBtn.bmp (7px left cap, stretched middle, 7px right cap).
         float framePx = _buttonSheetWidth / 4f;
         float basePx = frameIndex * framePx;
         float capPx = (float)_buttonCapWidth;

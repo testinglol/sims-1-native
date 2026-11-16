@@ -4,7 +4,6 @@ namespace SimsEngine.Tests;
 
 public sealed class ActionRecordTransitionTests
 {
-    // FUN_0045e839 copies the old record at 0x45e848, installs the input at 0x45e86f, then tests NEW +0xa50.
     [Theory]
     [InlineData(false, false)]
     [InlineData(false, true)]

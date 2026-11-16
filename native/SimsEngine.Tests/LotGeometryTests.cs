@@ -121,7 +121,6 @@ public sealed class LotGeometryTests
     public void SlotProjectionMatchesTheSourceAxisAndSignForEveryAnchorDirection(
         short direction, int expectedXOffset, int expectedYOffset)
     {
-        // FUN_005c38c0 builds the direction matrix; FUN_005c4390 applies it to the transformed SLOT vector.
         var result = LotGeometry.SlotPosition(new ObjectPosition(100, 100, 1), direction, 16, 0);
 
         Assert.Equal(new ObjectPosition(100 + expectedXOffset, 100 + expectedYOffset, 1), result);

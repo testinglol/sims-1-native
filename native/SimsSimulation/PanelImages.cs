@@ -8,10 +8,8 @@ using SimsEngine.Simulation;
 
 namespace SimsSimulation;
 
-/// <summary>
-/// The bitmaps the gameplay panel draws for Sims and queued actions, taken from the original resource files: a Sim's
-/// BMP_ 2002 "faces" from its character file (three expressions), and an object's catalog bitmap (OBJD field 41) for an
-/// action on it. The client reads them from the session directory under a name derived from their content.
+/// <summary>Resolves UI bitmaps for Sims and queued interactions from resource packages: Sim portraits use
+/// character bitmap 2002 (containing three expressions), while object interactions use catalog bitmap 41.
 /// </summary>
 internal sealed class PanelImages(string directory, ObjectRegistry registry)
 {
@@ -54,7 +52,7 @@ internal sealed class PanelImages(string directory, ObjectRegistry registry)
             if (Store(scopeFile, 2006, 1) is { } alt2006) return alt2006;
             if (Store(scopeFile, 2005, 1) is { } alt2005) return alt2005;
         }
-        // FUN_004e8d99 (004e8d99.c:216-226): falls back to UI resource 107 (0x6b, UnknownFace.bmp, 4x3) when no face bitmap is available.
+        // Falls back to UI bitmap resource 107 (4x3 grid) when no character face bitmap is available.
         return StoreUiBitmapById(107, 4, 3);
     }
 
@@ -66,10 +64,10 @@ internal sealed class PanelImages(string directory, ObjectRegistry registry)
             ?? Store(entry.File, 2005, 1);
     }
 
-    /// <summary>The Relationships panel's five-expression portrait strip (character BMP_ 2003).</summary>
+    /// <summary>Retrieves the relationship panel portrait strip from character bitmap 2003, containing five
+    /// expression frames.</summary>
     public object? NeighborPortrait(uint guid) => registry.Find(guid) is { } entry ? Store(entry.File, 2003, 5) : null;
 
-    /// <summary>The queue icon for an action on <paramref name="owner"/>: a Sim's face, or the object's catalog bitmap.</summary>
     public object? Icon(SimulationWorld world, XObject? owner)
     {
         if (owner is null) return null;
@@ -89,8 +87,8 @@ internal sealed class PanelImages(string directory, ObjectRegistry registry)
 
         if (guid != 0)
         {
-            // FUN_004ea33f (004ea33f.c:83) -> FUN_004573f9 / FUN_0043aeef: resolves multi-tile sub-objects to the
-            // master cXObjType (SubIndex == -1) before querying cProduct::GetQueueIcon (FUN_004ccc2f).
+            // Resolves multi-tile sub-objects to their master object definition (sub-index -1) before
+            // querying interaction queue icons.
             if (registry.Find(guid) is { } entry)
             {
                 var masterEntry = registry.FindAlternativeType(entry) ?? entry;
@@ -112,13 +110,13 @@ internal sealed class PanelImages(string directory, ObjectRegistry registry)
             if (Store(scopeFile, 2002, 3) is { } scopeFace) return scopeFace;
         }
 
-        // FUN_004cbf52 (004cbf52.c:297-300) & FUN_004cd130 (004cd130.c:13-25): when an object's product has neither a
-        // BMP_ icon nor a renderable DGRP (e.g. non-graphic social/controller helper objects), Sims.exe assigns static UI
-        // resource 0x256 (598, CPanel/CatalogUnknown.bmp, 90x45, 2 columns x 1 row).
+        // Falls back to UI resource 598 (two columns by one row) when an object lacks both a catalog icon
+        // bitmap and renderable draw groups.
         return StoreUiBitmapById(598, 2, 1);
     }
 
-    /// <summary>The tutorial icon bitmap is resource 300 in the current tutorial owner's private IFF, as cTutorialIcon::ObjectChanged does.</summary>
+    /// <summary>Loads the tutorial icon bitmap from resource 300 in the current tutorial controller object
+    /// file.</summary>
     public object? TutorialIcon(SimulationWorld world)
     {
         var scope = world.TutorialOwner?.TypeRecord?.BehaviorScope as BehaviorScope;
@@ -128,13 +126,13 @@ internal sealed class PanelImages(string directory, ObjectRegistry registry)
         var width = BinaryPrimitives.ReadInt32LittleEndian(data[18..]);
         var height = BinaryPrimitives.ReadInt32LittleEndian(data[22..]);
         if (width <= 0 || width > 512 || height == 0 || height < -512 || height > 512) return null;
-        // cTutorialIcon starts with one column and six rows; SetIcon switches the
-        // row count to one only for a 45-pixel-high bitmap.
+        // Tutorial icon sheets default to one column and six rows, switching to a single row when the
+        // bitmap height is 45 pixels.
         return Store(scope.Private, 300, 1, Math.Abs(height) == 45 ? 1 : 6);
     }
 
-    /// <summary>Dialog icon art (FUN_004360c1 / FUN_00524715): resolves mode 0 (Auto), mode 2 (Neighbor),
-    /// mode 3 (Indexed 5000 + operand[1]), and mode 4 (Dynamic STR# 301 specs: my, gz, gzi, guid, rel, job).</summary>
+    /// <summary>Resolves dialog icon art across SimAntics dialog modes: mode 0 (auto), mode 2 (neighbor
+    /// portrait), mode 3 (resource 5000 + index), and mode 4 (dynamic string table 301 specifiers).</summary>
     public object? DialogImage(SimulationDialogRecord record)
     {
         if (record.ImageFile is { } imageFile)
@@ -156,7 +154,6 @@ internal sealed class PanelImages(string directory, ObjectRegistry registry)
         return record.Icon is { } iconObj ? ResolveObjectOrPersonDialogThumbnail(iconObj) : null;
     }
 
-    /// <summary>An inventory tile's bitmap (FUN_0050e555): the object's catalog icon, resolved by GUID.</summary>
     public object? ItemIcon(uint guid)
     {
         if (registry.Find(guid) is not { } entry) return null;
@@ -166,11 +163,9 @@ internal sealed class PanelImages(string directory, ObjectRegistry registry)
         return Store(masterEntry.File, id, 0) ?? Store(entry.File, id, 0);
     }
 
-    /// <summary>An inventory tile's name: the first catalog string, or the original's "Unknown Item (%d)" fallback.</summary>
     public string ItemName(uint guid, byte language) =>
         registry.Find(guid)?.CatalogString(0, language) is { Length: > 0 } name ? name : $"Unknown Item ({(int)guid})";
 
-    /// <summary>The second catalog string carried to the original inventory hover tooltip.</summary>
     public string ItemDescription(uint guid, byte language) =>
         registry.Find(guid)?.CatalogString(1, language) ?? "";
 
@@ -233,24 +228,24 @@ internal sealed class PanelImages(string directory, ObjectRegistry registry)
         object? result = null;
         if (command.Equals("gz", StringComparison.OrdinalIgnoreCase) && TryParseUshort(arg, out var gzId))
         {
-            // FUN_004360c1 (004360c1.c:340-377): loads UI bitmap by resource ID and crops 1st of 3 horizontal frames.
+            // Loads a UI graphic bitmap by resource ID and crops the first of three horizontal frames for
+            // dialog presentation.
             if (ReadUiGraphicsBitmapById(gzId) is { } raw)
                 result = StoreCroppedHorizontalFrame(raw, 0, 3, compositeOnThumbTemplate: false);
         }
         else if (command.Equals("gzi", StringComparison.OrdinalIgnoreCase) && TryParseUshort(arg, out var gziId))
         {
-            // FUN_004360c1 (004360c1.c:378-380): loads UI bitmap by resource ID as a single-frame image.
             if (ReadUiGraphicsBitmapById(gziId) is { } raw)
                 result = StoreRawBmpBytes(raw, 1, 1);
         }
         else if (command.Equals("guid", StringComparison.OrdinalIgnoreCase) && TryParseUint(arg, out var guid))
         {
-            // FUN_004360c1 (004360c1.c:381-391) -> selector thumbnail (004360c1.c:195-303 + FUN_00524715).
             result = ResolveEntryDialogThumbnail(registry.Find(guid));
         }
         else if (command.Equals("rel", StringComparison.OrdinalIgnoreCase))
         {
-            // FUN_004360c1 (004360c1.c:422-477): loads character BMP_ 2003 (0x7d3) and crops the 3rd of 5 frames (index 2).
+            // Relationship dialog icons display the neutral third frame (index 2) of the five-frame
+            // character portrait strip.
             IffFile? charFile = null;
             if (TryParseUint(arg, out var relGuid) && relGuid != 0 && registry.Find(relGuid) is { } relEntry)
                 charFile = relEntry.File;
@@ -260,7 +255,8 @@ internal sealed class PanelImages(string directory, ObjectRegistry registry)
         }
         else if (command.Equals("job", StringComparison.OrdinalIgnoreCase) && int.TryParse(arg, NumberStyles.Integer, CultureInfo.InvariantCulture, out var jobIndex) && jobIndex >= 1)
         {
-            // FUN_004360c1 (004360c1.c:479-500): loads CPanel\Backgrounds\JobIconMultiPopup.bmp and crops frame (jobIndex - 1) of 11.
+            // Job icons are extracted from JobIconMultiPopup.bmp by selecting frame jobIndex - 1 from the
+            // 11-frame horizontal strip.
             if (ReadUiGraphicsFile("CPanel/Backgrounds/JobIconMultiPopup.bmp") is { } raw)
                 result = StoreCroppedHorizontalFrame(raw, jobIndex - 1, 11, compositeOnThumbTemplate: false);
         }
@@ -377,9 +373,8 @@ internal sealed class PanelImages(string directory, ObjectRegistry registry)
         return null;
     }
 
-    /// <summary>004e8d99.c + 004e739b.c + 004e93e4.c: detects face sheet grid dimensions so 105x41 / 108x41 3x1
-    /// BMP_ #2002 strips, 3x3 face sheets, 4x3 UnknownFace.bmp (180x135 / 140x123), and single-frame BMP_ #2006/#2005
-    /// all crop their neutral (col = 0, row = 0) cell cleanly.</summary>
+    /// <summary>Determines the column and row counts of a Sim face sheet by dimensions, ensuring 3x1, 3x3,
+    /// 4x3, and single-frame layouts correctly isolate the neutral cell at column 0, row 0.</summary>
     internal static (int Columns, int Rows) PersonFaceSheetGrid(int width, int height)
     {
         if ((width is 140 or 180) && height >= 120) return (4, 3);
@@ -406,8 +401,8 @@ internal sealed class PanelImages(string directory, ObjectRegistry registry)
             for (var y = 0; y < tplH; y++)
                 Buffer.BlockCopy(tplFullRgba, y * tplFullW * 4, outRgba, y * tplW * 4, tplW * 4);
 
-            // PeopleTemplate.bmp (45x45) has a 2px outer bevel on all four sides (inner area [2..42]); clamp
-            // destination inside that inner area so wider cells (e.g. UnknownFace.bmp) never overwrite the bevel.
+            // Portraits composited onto the 45x45 person template are inset within a 2-pixel outer bevel to
+            // preserve border graphics.
             var bevelX = tplW > 4 ? 2 : 0;
             var bevelY = tplH > 4 ? 2 : 0;
             var minDstX = bevelX;
@@ -448,8 +443,8 @@ internal sealed class PanelImages(string directory, ObjectRegistry registry)
         return (frameW, frameH, cropped);
     }
 
-    /// <summary>004360c1.c + FUN_004e93e4 + FUN_004e71be: composites neutral frame (0, 0) of a Sim's face sheet
-    /// onto frame 0 (45x45) of <c>CPanel/People/PeopleTemplate.bmp</c>.</summary>
+    /// <summary>Composites the neutral face frame (0, 0) of a Sim's face sheet onto the 45x45 frame of the
+    /// person portrait template.</summary>
     private object? StorePersonDialogThumbnail(byte[] faceSheetData, bool keyCornerColor = false)
     {
         try
@@ -465,7 +460,8 @@ internal sealed class PanelImages(string directory, ObjectRegistry registry)
         }
     }
 
-    /// <summary>004360c1.c:230-285 + FUN_004cbd1c: draws an object preview centered inside a 120x120 white box with a 1px dark border.</summary>
+    /// <summary>Renders an object preview centered inside a 120x120 white frame bordered by a 1-pixel dark
+    /// outline.</summary>
     private object? StoreObjectDialogBox(byte[] bmpData, int frameIndex, int frameCount)
     {
         try
@@ -523,8 +519,8 @@ internal sealed class PanelImages(string directory, ObjectRegistry registry)
         }
     }
 
-    /// <summary>Crops horizontal frame <paramref name="frameIndex"/> of <paramref name="frameCount"/> and optionally
-    /// composites it centered onto <c>cpanel\Catalog\ThumbTemplate1Frame.BMP</c> (resource 4301) per FUN_00524715.</summary>
+    /// <summary>Crops a horizontal frame from a multi-frame strip and optionally composites it centered
+    /// onto the single-frame catalog thumbnail template (resource 4301).</summary>
     private object? StoreCroppedHorizontalFrame(byte[] bmpData, int frameIndex, int frameCount, bool compositeOnThumbTemplate)
     {
         try
@@ -710,7 +706,8 @@ internal sealed class PanelImages(string directory, ObjectRegistry registry)
         uiGraphicsTable = new Dictionary<ushort, string>(DefaultUiGraphicsPaths);
         if (uiGraphicsFar is null) return;
 
-        // FUN_005a5631 / FUN_005a47ae: pair Res_*.h (#define NAME ID) with Res_*.RT (NAME = path).
+        // Maps resource identifiers to archive file paths by pairing symbol definition headers (Res_*.h)
+        // with runtime mapping tables (Res_*.RT).
         var symbolIds = new Dictionary<string, ushort>(StringComparer.OrdinalIgnoreCase);
         foreach (var entry in uiGraphicsFar.Entries.Where(e => e.Name.EndsWith(".h", StringComparison.OrdinalIgnoreCase)))
         {
@@ -773,7 +770,8 @@ internal sealed class PanelImages(string directory, ObjectRegistry registry)
         return storedCustom[cacheKey] = result;
     }
 
-    // columns 0 means "one frame, or two when width >= 46 (0x2e)" as in FUN_004ccc2f (004ccc2f.c:118-124).
+    // A column count of zero auto-detects frame counts, treating bitmaps of width 46 or greater as
+    // two-frame sheets.
     private object? Store(IffFile file, ushort id, int columns)
         => Store(file, id, columns, 1);
 

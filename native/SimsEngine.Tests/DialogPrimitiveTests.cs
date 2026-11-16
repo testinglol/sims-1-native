@@ -7,7 +7,8 @@ namespace SimsEngine.Tests;
 
 public sealed class DialogPrimitiveTests
 {
-    // Operand: byte 5 is the case and byte 7 the flags (bit 0 runs the record creation); the rest is not read.
+    // In the dialog primitive operand, byte 5 specifies the case number and byte 7 specifies flags, where
+    // bit 0 triggers record creation.
     private static byte[] Operand(byte caseNumber, byte flags = 0) => [0, 0, 0, 0, 0, caseNumber, 0, flags];
 
     private static SimulationError Fails(Action action) => Assert.Throws<SimulationException>(action).Error;

@@ -43,7 +43,8 @@ public sealed class CreatedObjectSaveTests
         try
         {
             var folder = Directory.CreateDirectory(Path.Combine(game, "Objects")).FullName;
-            // FUN_0043ae5e groups the parts of one resource file, so the root and its parts share it.
+            // Multi-tile objects defined in a single package group all root and child parts under a shared
+            // master resource.
             File.WriteAllBytes(Path.Combine(folder, "multi.iff"), ChunkBuilder.File(
                 ("OBJD", 1, DefinitionChunk(0x13570001, 0, 17, ushort.MaxValue)),
                 ("OBJD", 2, DefinitionChunk(0x13570002, 0, 17, 0)),
@@ -73,7 +74,7 @@ public sealed class CreatedObjectSaveTests
             var group = new[] { world.ObjectById(rootId)!, world.ObjectById((short)(rootId + 1))!,
                 world.ObjectById((short)(rootId + 2))! };
 
-            Assert.Null(world.ObjectById((short)(rootId + 3))); // FUN_00440b6d/FUN_0043ae5e never instantiate SubIndex -1.
+            Assert.Null(world.ObjectById((short)(rootId + 3))); // SubIndex -1 denotes an unused part slot and is never instantiated.
             Assert.Equal(3, group.Length);
             Assert.Equal(new short[] { rootId, (short)(rootId + 1), (short)(rootId + 2) },
                 group.Select(item => item.Id));
@@ -84,7 +85,7 @@ public sealed class CreatedObjectSaveTests
             Assert.All(group.Skip(1), item => Assert.Equal(rootId, item.MultiTileMasterId));
             Assert.All(group, item => Assert.Equal(0, item.SavedMultiTileState!.Value0x1A0));
             Assert.Equal(0, group[0].SavedMultiTileState!.Value0x1A4);
-            Assert.Equal(1, group[1].SavedMultiTileState!.Value0x1A4); // FUN_004318eb reads SubIndex's low byte as unsigned Y.
+            Assert.Equal(1, group[1].SavedMultiTileState!.Value0x1A4); // The low byte of SubIndex represents the part's unsigned Y tile offset.
             Assert.Equal(128, group[2].SavedMultiTileState!.Value0x1A4);
 
             var (saved, _) = world.WriteSavedLotObjectsTo(empty);
@@ -125,7 +126,7 @@ public sealed class CreatedObjectSaveTests
         fields[(int)ObjdField.NumAttributes] = 3;
         var definition = new ChunkBuilder();
         foreach (var field in fields) definition.U16(field);
-        // A waiting opcode 0x1b continuation returns false when the transient route record is absent.
+        // A resumed routing continuation evaluates to false when its transient route record is absent.
         var behavior = new ChunkBuilder().U16(0x8002).S16(1).U8(0).U8(0).U8(0).U8(0).U32(0)
             .U16(0x1b).U8(0xfe).U8(0xff).Raw(new byte[8]);
         return ChunkBuilder.File(("OBJD", 1, definition.ToArray()), ("BHAV", 4096, behavior.ToArray()));
@@ -346,8 +347,8 @@ public sealed class CreatedObjectSaveTests
             var restoredPerson = Assert.IsType<XPerson>(restored.ObjectById(person.Id));
             var restoredHeld = Assert.IsType<XObject>(restored.ObjectById(held.Id));
 
-            // FUN_0043a5fb writes the object's slot vector into ObjM; FUN_0043fe4a restores the objects and their
-            // serialized slot state before the saved continuation is resumed.
+            // Object slot assignments are serialized into the lot manifest and restored before saved thread
+            // continuations resume.
             Assert.Equal((short)0, restoredPerson.Slots[0]);
             Assert.Equal(restoredHeld.ClockManagerIndex, restoredPerson.Slots[1]);
             Assert.Equal(restoredPerson.ClockManagerIndex, restoredHeld[ObjectData.ContainerId]);
@@ -410,7 +411,7 @@ public sealed class CreatedObjectSaveTests
             var restoredPerson = Assert.IsType<XPerson>(restored.ObjectById(person.Id));
             var queued = Assert.Single(restoredPerson.WriteActionQueue());
 
-            // Sims.exe FUN_0045d099 writes the person action list through FUN_0041f1c7, including the queued ring.
+            // Person serialization saves and restores the queued interaction action ring.
             Assert.Equal(queuedBeforeSave.Id, queued.Id);
             Assert.Equal(person.Id, queued.Person);
             Assert.Equal(fridge.Id, queued.Object0x08);
@@ -736,8 +737,8 @@ public sealed class CreatedObjectSaveTests
             Assert.Equal(multi.Id, loaded.ObjectById(portal.Id)!.MultiTileMasterId);
             var removedMulti = loaded.ObjectById(multi.Id)!;
             loaded.Remove(multi.Id);
-            loaded.Add(loaded.ObjectById(person.Id)!); // Replacing an existing registration retains its walk position.
-            loaded.Add(removedMulti); // A removed and re-registered object belongs at the end.
+            loaded.Add(loaded.ObjectById(person.Id)!); // Re-registering an existing object retains its position in iteration order.
+            loaded.Add(removedMulti); // Removing and re-adding an object places it at the end of iteration order.
             var expectedOrder = loaded.WalkOrder.Select(item => item.Id).ToArray();
             var (reordered, _) = loaded.WriteSavedLotObjectsTo(updated);
             Assert.Equal(expectedOrder, SavedLotObjectLoader.Load(reordered, registry, library).WalkOrder.Select(item => item.Id));

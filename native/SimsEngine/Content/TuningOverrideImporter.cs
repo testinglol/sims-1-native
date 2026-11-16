@@ -4,9 +4,6 @@ using SimsEngine.Formats;
 
 namespace SimsEngine.Content;
 
-/// <summary>
-/// A motive advertisement override for a specific motive in an interaction.
-/// </summary>
 public sealed class MotiveOverride
 {
     public short? DeltaAdjustment { get; set; }
@@ -14,9 +11,6 @@ public sealed class MotiveOverride
     public short? ActiveFlag { get; set; }
 }
 
-/// <summary>
-/// Overrides for an interaction entry in an object's TTAB.
-/// </summary>
 public sealed class InteractionOverride
 {
     public uint? AttenuationCode { get; set; }
@@ -24,9 +18,6 @@ public sealed class InteractionOverride
     public Dictionary<int, MotiveOverride> Motives { get; } = [];
 }
 
-/// <summary>
-/// A group of interaction tuning overrides for an object GUID.
-/// </summary>
 public sealed class GuidTuningOverrideGroup
 {
     public uint Guid { get; }
@@ -42,7 +33,7 @@ public sealed class GuidTuningOverrideGroup
         for (var i = 0; i < table.Interactions.Count; i++)
         {
             var interaction = table.Interactions[i];
-            // Check if there is an override for this interaction by 0-based index or 1-based index or TtaIndex
+            // Matches overrides by 0-based index, 1-based index, or action index.
             if (!Interactions.TryGetValue(i, out var ov) &&
                 !Interactions.TryGetValue(i + 1, out ov) &&
                 !Interactions.TryGetValue(interaction.TtaIndex, out ov))
@@ -86,10 +77,7 @@ public sealed class GuidTuningOverrideGroup
     }
 }
 
-/// <summary>
-/// Reads the BCON and GUID parts of the Windows startup <c>GameData/Tuning.txt</c> import
-/// (<c>FUN_0043cc48</c> / Mac <c>ObjectFolder::ImportConstants</c>).
-/// </summary>
+/// <summary>Parses constant (BCON) and interaction advertisement overrides from GameData/Tuning.txt.</summary>
 public static class TuningOverrideImporter
 {
     private const string VersionMarker = "Version ";
@@ -127,23 +115,18 @@ public static class TuningOverrideImporter
         return group is not null ? group.Apply(table) : table;
     }
 
-    /// <summary>
-    /// Maps attenuation string ("none", "low", "medium", "high") to attenuation code (1..4)
-    /// per Mac ObjectFolder.s:3200 (GetGameAttFromDBAtt) and Sims.exe FUN_0043cc48.
-    /// </summary>
+    /// <summary>Maps attenuation name strings (none, low, medium, high) to attenuation codes 1 through 4.</summary>
     public static int GetGameAttFromDBAtt(string attenuation)
     {
         if (string.Equals(attenuation, "none", StringComparison.OrdinalIgnoreCase)) return 1;
         if (string.Equals(attenuation, "low", StringComparison.OrdinalIgnoreCase)) return 2;
         if (string.Equals(attenuation, "medium", StringComparison.OrdinalIgnoreCase)) return 3;
         if (string.Equals(attenuation, "high", StringComparison.OrdinalIgnoreCase)) return 4;
-        return 3; // Default is Medium (ObjectFolder.s:3315)
+        return 3;
     }
 
-    /// <summary>
-    /// Maps database impact values (18..37) to game advertisement kinds (1..22)
-    /// per Mac ObjectFolder.s:3325 (GetGameAdFromDBImpact) and jump table lbl_106005A4.
-    /// </summary>
+    /// <summary>Maps database motive impact values (18..37) to interaction advertisement motive types
+    /// (1..22).</summary>
     public static int GetGameAdFromDBImpact(int impact) => impact switch
     {
         18 => 3,
@@ -165,22 +148,19 @@ public static class TuningOverrideImporter
         _ => -1,
     };
 
-    /// <summary>
-    /// Maps 1..9 motive index codes from Tuning.txt to internal motive numbers (9, 6, 5, 15, 7, 8, 3, 13, 14)
-    /// per Mac ObjectFolder.s:2163 and jump table lbl_1060057C.
-    /// </summary>
+    /// <summary>Maps Tuning.txt motive indices 1 through 9 to internal motive data indices.</summary>
     public static int MapMotiveCode(int code) => code switch
     {
         0 => 0,
-        1 => 9,  // Energy
-        2 => 6,  // Comfort
-        3 => 5,  // Hunger
-        4 => 15, // Hygiene / other
+        1 => 9,
+        2 => 6,
+        3 => 5,
+        4 => 15,
         5 => 7,
-        6 => 8,  // Bladder / Fun
-        7 => 3,  // Social
-        8 => 13, // Room
-        9 => 14, // Autonomy
+        6 => 8,
+        7 => 3,
+        8 => 13,
+        9 => 14,
         _ => -1,
     };
 
@@ -227,7 +207,7 @@ public static class TuningOverrideImporter
             return issues;
         }
 
-        // FUN_0043cc48 compares the parsed value with 2 before clearing any ObjResFile overrides.
+        // Requires Tuning.txt file format version 2 before applying overrides.
         if (version != 2)
         {
             issues.Add($"Tuning.txt version {version} is not supported; Sims.exe accepts version 2.");
@@ -239,7 +219,6 @@ public static class TuningOverrideImporter
             return issues;
         }
 
-        // Clear prior constant overrides and GUID overrides
         ClearGuidOverrides();
         var clearedFiles = new HashSet<IffFile>(ReferenceEqualityComparer.Instance);
         foreach (var entry in registry.Entries)

@@ -8,23 +8,35 @@ using SimsEngine.Content;
 using SimsEngine.Formats;
 using SimsEngine.Simulation;
 
-/// <summary>Loads the animation names, frame counts and XEVT tables read by Sims.exe's character-data path.
-/// FUN_005837c0 defines the character search path; FUN_00596834/FUN_00594536 read BCF/CMX motion and event records.
-/// Standard-animation distance and root offset are also read for the native locomotion controller.</summary>
+/// <summary>Loads animation names, frame counts, and XEVT event tables from BCF and CMX files, including
+/// distance and root offsets for locomotion.</summary>
 internal static class AvatarAnimations
 {
     internal sealed record ParsedCharacterFile(CharacterSearchPath Path, CharacterFile File, CharacterData Data);
 
-    internal sealed record SharedCharacterIndex(
-        CharacterSearchPath Skins,
-        CharacterSearchPath Textures,
-        CharacterSearchPath Animation,
-        IReadOnlyList<ParsedCharacterFile> ParsedFiles,
-        IReadOnlyDictionary<string, CharacterFile[]> CurveFiles,
-        IReadOnlyDictionary<string, List<Animation>> AnimationsByName);
+    internal sealed class SharedCharacterIndex(
+        CharacterSearchPath skins,
+        Lazy<CharacterSearchPath> textures,
+        CharacterSearchPath animation,
+        IReadOnlyList<ParsedCharacterFile> parsedFiles,
+        IReadOnlyDictionary<string, CharacterFile[]> curveFiles,
+        IReadOnlyDictionary<string, List<Animation>> animationsByName)
+    {
+        public CharacterSearchPath Skins { get; } = skins;
+        public CharacterSearchPath Textures => textures.Value;
+        public CharacterSearchPath Animation { get; } = animation;
+        public IReadOnlyList<ParsedCharacterFile> ParsedFiles { get; } = parsedFiles;
+        public IReadOnlyDictionary<string, CharacterFile[]> CurveFiles { get; } = curveFiles;
+        public IReadOnlyDictionary<string, List<Animation>> AnimationsByName { get; } = animationsByName;
+    }
+
+    private sealed record RegistryAnimationSelectors(
+        (uint Guid, int StandardIndex, string Name)[] CustomWalkNames,
+        (int Guid, ushort TableId, int Index, string Name)[] ObjectTableNames);
 
     private static readonly ConditionalWeakTable<ObjectRegistry, SharedCharacterIndex> SharedIndices = new();
     private static readonly ConditionalWeakTable<ObjectRegistry, Dictionary<string, AvatarAnimationClip>> CachedCatalogs = new();
+    private static readonly ConditionalWeakTable<ObjectRegistry, RegistryAnimationSelectors> CachedSelectors = new();
     private static readonly ConcurrentDictionary<string, SharedCharacterIndex> SharedIndicesByKey = new(StringComparer.Ordinal);
     private static readonly ConcurrentDictionary<string, Dictionary<string, AvatarAnimationClip>> CachedCatalogsByKey = new(StringComparer.Ordinal);
 
@@ -63,7 +75,7 @@ internal static class AvatarAnimations
     private static SharedCharacterIndex BuildSharedIndex(string gameRoot, ObjectRegistry? registry, bool tolerateUnreadable)
     {
         var skins = CharacterSearchPath.Skins(gameRoot, registry);
-        var textures = CharacterSearchPath.Textures(gameRoot, registry);
+        var lazyTextures = new Lazy<CharacterSearchPath>(() => CharacterSearchPath.Textures(gameRoot, registry), LazyThreadSafetyMode.ExecutionAndPublication);
         var animationPath = CharacterSearchPath.Animation(gameRoot, registry);
         var cacheKey = tolerateUnreadable ? BuildSearchPathCacheKey(gameRoot, skins, animationPath) : null;
         if (cacheKey is not null && SharedIndicesByKey.TryGetValue(cacheKey, out var cachedIndex))
@@ -139,10 +151,77 @@ internal static class AvatarAnimations
         foreach (var (key, list) in curveGroups)
             curveFiles[key] = list.ToArray();
 
-        var index = new SharedCharacterIndex(skins, textures, animationPath, parsedFiles, curveFiles, animationsByName);
+        var index = new SharedCharacterIndex(skins, lazyTextures, animationPath, parsedFiles, curveFiles, animationsByName);
         if (cacheKey is not null) SharedIndicesByKey.TryAdd(cacheKey, index);
         return index;
     }
+
+    private static RegistryAnimationSelectors GetRegistrySelectors(ObjectRegistry registry) =>
+        CachedSelectors.GetValue(registry, static reg =>
+        {
+            var entries = reg.Entries;
+            ReadOnlySpan<ushort> ids = [129, 130, 131, 132];
+            var byFile = new Dictionary<IffFile, ((int StandardIndex, string Name)[]? Walk150, (ushort TableId, int Index, string Name)[]? ObjTables)>(
+                ReferenceEqualityComparer.Instance);
+            var customWalkNames = new List<(uint Guid, int StandardIndex, string Name)>();
+            var objectTableNames = new List<(int Guid, ushort TableId, int Index, string Name)>();
+
+            for (var i = 0; i < entries.Count; i++)
+            {
+                var entry = entries[i];
+                var file = entry.File;
+                if (!byFile.TryGetValue(file, out var fileSelectors))
+                {
+                    (int StandardIndex, string Name)[]? walk150 = null;
+                    var customChunk = file.Find(ResourceType.Str, 150);
+                    if (customChunk is not null)
+                    {
+                        var names = StringTable.Read(file, customChunk).ForLanguage(1);
+                        List<(int, string)>? list = null;
+                        for (var standardIndex = 0; standardIndex < names.Count; standardIndex++)
+                        {
+                            var name = names[standardIndex].Trim();
+                            if (name.Length == 0) continue;
+                            list ??= [];
+                            list.Add((standardIndex, name));
+                        }
+                        if (list is not null) walk150 = list.ToArray();
+                    }
+
+                    List<(ushort, int, string)>? objList = null;
+                    for (var t = 0; t < ids.Length; t++)
+                    {
+                        var tableId = ids[t];
+                        var chunk = file.Find(ResourceType.Str, tableId);
+                        if (chunk is null) continue;
+                        var names = StringTable.Read(file, chunk).ForLanguage(1);
+                        for (var idx = 0; idx < names.Count; idx++)
+                        {
+                            var name = names[idx].Trim();
+                            if (name.Length == 0) continue;
+                            objList ??= [];
+                            objList.Add((tableId, idx, name));
+                        }
+                    }
+                    fileSelectors = (walk150, objList?.ToArray());
+                    byFile[file] = fileSelectors;
+                }
+
+                if (fileSelectors.Walk150 is { } w)
+                {
+                    foreach (var (standardIndex, name) in w)
+                        customWalkNames.Add((entry.Guid, standardIndex, name));
+                }
+                if (fileSelectors.ObjTables is { } o)
+                {
+                    var guidKey = unchecked((int)entry.Guid);
+                    foreach (var (tableId, idx, name) in o)
+                        objectTableNames.Add((guidKey, tableId, idx, name));
+                }
+            }
+
+            return new RegistryAnimationSelectors(customWalkNames.ToArray(), objectTableNames.ToArray());
+        });
 
     internal static void Populate(SimulationWorld world, IffFile? global, string gameRoot, string? userData = null,
         ObjectRegistry? registry = null)
@@ -152,10 +231,10 @@ internal static class AvatarAnimations
         var catalog = registry is not null
             ? CachedCatalogs.GetValue(registry, reg => ReadCatalog(gameRoot, reg))
             : ReadCatalog(gameRoot, null);
-        AddTable(1, false, 128); // Global
-        AddTable(2, false, 130); // Person stock
-        AddTable(3, false, 156); // Misc, adult
-        AddTable(3, true, 157);  // Misc, child
+        AddTable(1, false, 128);
+        AddTable(2, false, 130);
+        AddTable(3, false, 156);
+        AddTable(3, true, 157);
         AddStandardWalkFallbackTable(150);
         AddStandardWalkFallbackTable(151);
         AddStandardWalkFallbackTable(152);
@@ -163,18 +242,23 @@ internal static class AvatarAnimations
         AddStandardWalkFallbackTable(158);
         AddStandardWalkFallbackTable(159);
         AddStandardWalkFallbackTable(160);
-        if (registry is not null)
-            foreach (var entry in registry.Entries)
-                AddCustomWalkTable(entry.Guid, entry.File);
         AddReachTable(false, 154);
         AddReachTable(true, 155);
         if (registry is not null)
-            foreach (var entry in registry.Entries)
-                AddObjectTable(entry.Guid, entry.File);
+        {
+            var selectors = GetRegistrySelectors(registry);
+            foreach (var (guid, standardIndex, name) in selectors.CustomWalkNames)
+                if (catalog.TryGetValue(name, out var clip))
+                    world.CustomWalkAvatarAnimationTable[(guid, standardIndex)] = clip;
+            foreach (var (guid, tableId, index, name) in selectors.ObjectTableNames)
+                if (catalog.TryGetValue(name, out var clip))
+                    world.ObjectAvatarAnimationTable[(guid, tableId, index)] = clip;
+        }
 
         void AddReachTable(bool child, ushort tableId)
         {
-            // GetReachSkill asks the table of that age for ReachAnimIdx + 1 (one-based); an empty entry has no skill.
+            // Queries the age-specific animation string table using a 1-based reach animation index; empty
+            // entries indicate no skill animation.
             var chunk = global.Find(ResourceType.Str, tableId);
             if (chunk is null) return;
             var names = StringTable.Read(global, chunk).ForLanguage(1);
@@ -188,10 +272,9 @@ internal static class AvatarAnimations
 
         void AddStandardWalkFallbackTable(ushort tableId)
         {
-            // SkillLookup.s::InitSkillLookup loads Global STR# 150-160. GetStdSkill checks the Sim's ObjSelector
-            // STR# 150 first. On a pool tile it checks 158/159 for children by gender or 160 for adults; otherwise
-            // it checks 151 for age <= 17 or 152/153 by gender. Empty entries fall back to Global STR# 150.
-            // GetString(StdAnimIdx + 1) maps to this zero-based index.
+            // Resolves skill animation tables from global string resources based on terrain and avatar
+            // demographics: pool tiles check child gendered or adult tables, while dry tiles check age and
+            // gender before falling back to table 150.
             var chunk = global.Find(ResourceType.Str, tableId);
             if (chunk is null) return;
             var names = StringTable.Read(global, chunk).ForLanguage(1);
@@ -200,21 +283,6 @@ internal static class AvatarAnimations
                 var name = names[standardIndex].Trim();
                 if (name.Length != 0 && catalog.TryGetValue(name, out var clip))
                     world.StandardWalkFallbackAnimationTable[(tableId, standardIndex)] = clip;
-            }
-        }
-
-        void AddCustomWalkTable(uint objectGuid, IffFile file)
-        {
-            // ObjSelector::GetCustomWalkAnimTable asks its private iResFiles for STR# 150.
-            // Each registered selector therefore owns the table with its own object GUID.
-            var chunk = file.Find(ResourceType.Str, 150);
-            if (chunk is null) return;
-            var names = StringTable.Read(file, chunk).ForLanguage(1);
-            for (var standardIndex = 0; standardIndex < names.Count; standardIndex++)
-            {
-                var name = names[standardIndex].Trim();
-                if (name.Length != 0 && catalog.TryGetValue(name, out var clip))
-                    world.CustomWalkAvatarAnimationTable[(objectGuid, standardIndex)] = clip;
             }
         }
 
@@ -230,25 +298,6 @@ internal static class AvatarAnimations
                     world.AvatarAnimationTable[(source, child, index)] = clip;
             }
         }
-
-        void AddObjectTable(uint objectGuid, IffFile file)
-        {
-            // cXObject's selector caches STR# 129 (adult/adult), 130 (child/child),
-            // 131 (adult actor/child target), and 132 (child actor/adult target).
-            // FUN_00457ccc/ d14/ d38/ d5c call FUN_00456a37 on this object's IFF.
-            foreach (ushort tableId in new ushort[] { 129, 130, 131, 132 })
-            {
-                var chunk = file.Find(ResourceType.Str, tableId);
-                if (chunk is null) continue;
-                var names = StringTable.Read(file, chunk).ForLanguage(1);
-                for (var index = 0; index < names.Count; index++)
-                {
-                    var name = names[index].Trim();
-                    if (catalog.TryGetValue(name, out var clip))
-                        world.ObjectAvatarAnimationTable[(unchecked((int)objectGuid), tableId, index)] = clip;
-                }
-            }
-        }
     }
 
     internal static bool DispatchTimeProperty(XPerson person, AvatarAnimationPlayback playback, AvatarAnimationSoundEvent prop) =>
@@ -256,8 +305,8 @@ internal static class AvatarAnimations
 
     private static Dictionary<string, AvatarAnimationClip> ReadCatalog(string gameRoot, ObjectRegistry? registry)
     {
-        // Sims.exe searches character BCF/CMX data in the skin path and GameData/Animation; the latter also carries
-        // the original Animation.far archive. First matching resource wins, matching its ordered search paths.
+        // Character animation and skeleton files are searched first in the skins directory and then in the
+        // animation archive, taking the first match found.
         var shared = GetSharedIndex(gameRoot, registry);
         var cacheKey = registry is not null ? BuildSearchPathCacheKey(gameRoot, shared.Skins, shared.Animation) : null;
         if (cacheKey is not null && CachedCatalogsByKey.TryGetValue(cacheKey, out var cachedCatalog))
@@ -281,8 +330,8 @@ internal static class AvatarAnimations
             var animation = work[index];
             {
                 var frameCount = animation.PlaybackFrameCount;
-                // Practice::Apply (00597c54.c:39-40,136-137,240-241): MotionEvent.Time is already in milliseconds
-                // and is compared against trunc(phase * Skill.Duration) within [0, trunc(Skill.Duration)].
+                // Motion event timestamps are authored in milliseconds and trigger when matched against the
+                // truncated playback phase scaled by total duration.
                 var durationLimit = animation.Floats[0] > 0f ? (int)animation.Floats[0] : int.MaxValue;
                 List<AvatarAnimationEvent>? eventList = null;
                 List<AvatarAnimationSoundEvent>? soundList = null;
@@ -360,9 +409,8 @@ internal static class AvatarAnimations
                     soundList.Sort(static (a, b) => a.TimeMilliseconds.CompareTo(b.TimeMilliseconds));
                     sounds = soundList.ToArray();
                 }
-                // Skill::ReadFromFile stores the two record floats at +0x1c and +0x20;
-                // SAnimator::StdAnimDist reads +0x20, so use the second parsed float.
-                // Defer CFP curve decompression until locomotion actually queries a clip's root motion.
+                // Animation headers store clip duration in the first float and total translation distance
+                // in the second float.
                 var capturedAnimation = animation;
                 var hasRootMotion = HasRootMotionCandidate(capturedAnimation, curveFiles);
                 Lazy<(Vector3 Offset, IReadOnlyList<Vector3>? Samples)>? lazyRootMotion = hasRootMotion
@@ -396,21 +444,17 @@ internal static class AvatarAnimations
         return false;
     }
 
-    /// <summary>Matches SAnimator::FindTagTime's motion order, reverse event order, and property order. It searches for
-    /// an anchor property with the requested value, returning the event time and owning motion name.
-    /// FUN_00588351 passes "anchor"; Mac StartVitaBoy uses 0x1061A184 + 0x46b, also "anchor".</summary>
+    /// <summary>Searches an animation's motions and events in reverse order for an anchor property,
+    /// returning the event time and owning motion.</summary>
     private static AvatarAnimationMarker? FindLocomotionMarker(Animation animation, string markerValue)
     {
         if (animation.FindTagTime("anchor", markerValue) is { } tag)
-            // StartVitaBoy divides the integer marker time by Skill +0x1c (the parsed duration float).
             return new AvatarAnimationMarker(tag.Time / animation.Floats[0], tag.Bone);
-        // FindTagTime initializes no result, writes an empty CTGString on failure, and returns -1.
-        // StartVitaBoy still divides that result by Skill +0x1c before storing the normalized field.
         return new AvatarAnimationMarker(-1f / animation.Floats[0], "");
     }
 
-    // Skill translations are Y-up; samples preserve authored body axes (X lateral, Y vertical, Z forward) in lot units.
-    // Sims.exe FUN_0058dc76 converts skill translation with _DAT_00666a54 / _DAT_00671ed4 (16 / 3).
+    // Animation translations use Y-up coordinates (X lateral, Y vertical, Z forward) and scale by 16/3 to
+    // convert from animation skill units to lot units.
     private const float LotUnitsPerSkillUnit = 16f / 3f;
 
     private static IReadOnlyList<Vector3> ReadStandardRootMotionSamples(Animation animation,
@@ -418,10 +462,8 @@ internal static class AvatarAnimations
         ConcurrentDictionary<(string Source, string Name, int TranslationFrames, int RotationFrames), AnimationCurves> decodedCurves,
         out Vector3 standardOffset)
     {
-        // SAnimator::StdAnimOffset constructs "ROOT" (lbl_1061A184 + 0x3f7), calls FindMotion on the
-        // selected Skill, and returns GetTranslation(lastIndex) without unit conversion
-        // (SAnimator.s 0x10358080–0x1035813C). The route animation path separately converts sampled
-        // translations from skill units to lot units (Windows FUN_0058dc76).
+        // Extracts the final translation of the ROOT motion in raw animation units without converting to
+        // lot units.
         standardOffset = Vector3.Zero;
         var motion = animation.Motions.FirstOrDefault(item =>
             item.Name.Equals("ROOT", StringComparison.OrdinalIgnoreCase));
@@ -452,7 +494,6 @@ internal static class AvatarAnimations
             }
             catch (ResourceFormatException)
             {
-                // Keep searching the ordered source path, as the character loader does.
             }
         }
         standardOffset = Vector3.Zero;

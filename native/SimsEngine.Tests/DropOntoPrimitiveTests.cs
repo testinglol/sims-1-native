@@ -5,14 +5,10 @@ namespace SimsEngine.Tests;
 
 public sealed class DropOntoPrimitiveTests
 {
-    // Operand: the slot (selector, value) and the flag (selector, value), each a word pair.
     private static byte[] Operand(short slotSelector, short slot, short flagSelector, short flag) =>
         [(byte)slotSelector, (byte)((ushort)slotSelector >> 8), (byte)slot, (byte)((ushort)slot >> 8),
          (byte)flagSelector, (byte)((ushort)flagSelector >> 8), (byte)flag, (byte)((ushort)flag >> 8)];
 
-    // The running object 100 has reserved slot-zero empty, object 2 in real slot 0, and object 3 in real slot 1;
-    // the stack object is 5 and the frame has
-    // parameters 1, 2 and 3.
     private static (TreeContext Context, XPerson Me, PrimitiveTestHost Host) World(short stackObject = 5)
     {
         var (context, me, host) = PrimitiveTestWorld.Create([1, 2, 3], stackObject);
@@ -39,7 +35,6 @@ public sealed class DropOntoPrimitiveTests
     public void ASelectorReadsTheValueFromTheFrameParameters()
     {
         var (context, _, host) = World();
-        // Slot = parameter 0 (1), so slot 1 holds object 3; flag = parameter 2 (3).
         Assert.Equal(PrimitiveResult.True, DropOntoPrimitive.Execute(context, Operand(1, 0, 1, 2)));
         Assert.Equal(new[] { "CanDropOnto(3,-16,-16,1,5,3)", "DropOnto(3,-16,-16,1,5,3)" }, host.Calls);
     }

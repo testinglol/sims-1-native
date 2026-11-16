@@ -1,8 +1,5 @@
 namespace SimsSDL.Core;
 
-/// <summary>
-/// Detects the installed Sims 1 game language from the Windows PE version resource table in <c>Sims.exe</c>.
-/// </summary>
 public sealed record class InstalledGameLanguage(int Code, string Name, ushort? WindowsLanguageID)
 {
     public static InstalledGameLanguage EnglishUS { get; } = new(1, "English (US)", null);

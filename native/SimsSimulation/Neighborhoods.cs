@@ -2,37 +2,27 @@ using System.Globalization;
 using SimsEngine.Formats;
 using SimsEngine.Simulation;
 
-/// <summary>
-/// The Complete Collection's numbered neighborhoods. The original scans for <c>UserData</c> folders, reads the number
-/// after the name (plain <c>UserData</c> is neighborhood 1), keeps them in a sorted map, remembers the current one in
-/// <c>SIMS_CURRENT_NEIGHBORHOOD_NUM</c>, and the banner's Previous/Next buttons step through them with wrap-around
-/// (<c>0x0042a53a</c>, <c>0x0042a368</c>, <c>0x0042a3ca</c>, <c>0x0042a3f4</c>).
-/// </summary>
+/// <summary>Discovers and manages numbered neighborhood directories, treating unnumbered UserData folders
+/// as neighborhood 1.</summary>
 public static class Neighborhoods
 {
     public const int Maximum = 99;
 
-    /// <summary>The neighborhood the host was started with; neighborhood 1 unless <c>--neighborhood</c> chose another.</summary>
     public static int Current { get; set; } = 1;
 
     public static string DirectoryName(int number) =>
         number is < 1 or > Maximum ? throw new ArgumentOutOfRangeException(nameof(number), "Neighborhood numbers run from 1 through 99")
             : number == 1 ? "UserData" : "UserData" + number.ToString(CultureInfo.InvariantCulture);
 
-
-    /// <summary>The current neighborhood's folder inside a native profile.</summary>
     internal static string UserData(string profile)
     {
         var canonical = Path.Combine(profile, DirectoryName(Current));
-        // Sims.exe keeps the scanned directory path for numeric UserData1, even though UserData is the
-        // usual spelling for neighborhood 1. Imported profiles normalize that alias; direct profiles need its path.
         var numberedBase = Path.Combine(profile, "UserData1");
         return Current == 1 && !Directory.Exists(canonical) && Directory.Exists(numberedBase) ? numberedBase : canonical;
     }
 
-    /// <summary>Loads the source-backed neighborhood variable block from NGBH #1. Sims.exe FUN_00429CC7
-    /// reads that block during Generic Sims Call 0/8/9 initialization; FUN_00425540 supplies the versioned
-    /// defaults and values. Profiles that do not contain a neighborhood file retain the world's zero defaults.</summary>
+    /// <summary>Loads persistent neighborhood script variables from the NGBH chunk, falling back to zero
+    /// defaults if absent.</summary>
     internal static void LoadScriptVariables(SimulationWorld world, string? neighborhoodPath)
     {
         if (neighborhoodPath is null || !File.Exists(neighborhoodPath)) return;
@@ -42,10 +32,8 @@ public static class Neighborhoods
         world.LoadNeighborhoodData(NeighborhoodData.Read(file, chunk));
     }
 
-    /// <summary>
-    /// The file name a save slot is stored under. Neighborhood 1 keeps its existing slot names; other neighborhoods
-    /// prefix theirs so slots never collide. Slot names that already look prefixed are reserved for that reason.
-    /// </summary>
+    /// <summary>Generates storage slot filenames, prefixing slots for neighborhoods beyond neighborhood 1
+    /// to avoid collision.</summary>
     public static string StorageSlot(string slot, int number)
     {
         if (IsReservedSlot(slot)) throw new ArgumentException("Save slot names starting with \"neighborhood<number>-\" are reserved");
@@ -62,15 +50,11 @@ public static class Neighborhoods
         return digits > 0 && rest.Length > digits && rest[digits] == '-';
     }
 
-    /// <summary>Installed neighborhoods in a profile, in the original's ascending order.</summary>
     internal static int[] Installed(string profile)
     {
         if (!Directory.Exists(profile)) return [];
         return Directory.GetDirectories(profile)
             .Select(path => Number(Path.GetFileName(path)))
-            // FUN_0042a53a / Neighborhood::CheckForNewUserDataDirectories enumerate UserData directories
-            // and build the neighborhood map from their numeric suffix. They do not require Neighborhood.iff
-            // to exist before listing a directory; switching subsequently calls UnlockUserData.
             .Where(number => number.HasValue)
             .Select(number => number!.Value)
             .Distinct()
@@ -78,28 +62,21 @@ public static class Neighborhoods
             .ToArray();
     }
 
-    /// <summary>The neighborhood number of a folder name, or null when it is not a neighborhood folder.</summary>
     internal static int? Number(string? name)
     {
         if (name == null || !name.StartsWith("UserData", StringComparison.OrdinalIgnoreCase)) return null;
         var suffix = name["UserData".Length..];
         if (suffix.Length == 0) return 1;
-        // CheckForNewUserDataDirectories parses every numeric suffix and accepts 1..99. UserData is the
-        // canonical spelling for 1, but the original directory scan also recognizes UserData1.
         return suffix.All(char.IsAsciiDigit) && int.TryParse(suffix, NumberStyles.None, CultureInfo.InvariantCulture, out var number) &&
                number is >= 1 and <= Maximum ? number : null;
     }
 
-    /// <summary>Ports the state-class initialization in Sims.exe FUN_00424850. It rebuilds the ordered
-    /// state-to-class vector from LotZoning.iff: residential maps to class 1 and community to class 2.
-    /// The English table is used because the zoning tokens are data, not localized display strings.</summary>
+    /// <summary>Initializes lot zoning classes from LotZoning.iff, mapping residential tokens to class 1
+    /// and community tokens to class 2.</summary>
     internal static IReadOnlyList<StateClassEntry> StateClasses(string userData)
     {
         var path = Path.Combine(userData, "LotZoning.iff");
-        // Imported Complete Collection profiles preserve the original UserData folder inside the profile's UserData
-        // root while their active Houses/ and Characters/ directories are also staged at that root. Sims.exe reads
-        // LotZoning from the selected neighborhood root (FUN_00424850); accept that preserved nested root when the
-        // staged profile does not have the resource beside Houses/.
+        // Falls back to the nested UserData directory when locating LotZoning.iff in staged user profiles.
         if (!File.Exists(path)) path = Path.Combine(userData, "UserData", "LotZoning.iff");
         if (!File.Exists(path)) return [];
         var file = IffFile.Open(path);
@@ -130,8 +107,8 @@ public static class Neighborhoods
         [3, 4, 7, 2, 9], [4, 5, 8, 7, 1], [4, 6, 7, 4, 4], [3, 7, 3, 5, 7]
     ];
 
-    /// <summary>Ports Mac ComputeZodiacSign for native family export: compare the five stored personality
-    /// dimensions with the twelve sign profiles. The export derives the sign rather than using TS1Zodiac.</summary>
+    /// <summary>Derives an avatar's zodiac sign by matching its five personality motive values against the
+    /// twelve astrological profiles.</summary>
     internal static int? ComputeExportZodiac(IReadOnlyList<short>? data)
     {
         if (data is not { Count: > 7 }) return null;

@@ -1,6 +1,5 @@
 using System.Buffers.Binary;
 
-/// <summary>Small BMP reader/writer used by the native renderer and its asset pipeline.</summary>
 internal static class BitmapCodec
 {
     internal static byte[] Write(int width, int height, byte[] rgba)
@@ -28,7 +27,8 @@ internal static class BitmapCodec
         return data;
     }
 
-    /// <summary>Decodes uncompressed 8/24/32-bit and RLE8 BMP data to top-down RGBA.</summary>
+    /// <summary>Decodes uncompressed 8-, 24-, and 32-bit as well as RLE8 BMP image data to top-down RGBA
+    /// pixels.</summary>
     internal static (int Width, int Height, byte[] Rgba) Read(byte[] data)
     {
         if (data.Length < 54 || data[0] != 'B' || data[1] != 'M') throw new InvalidDataException("Not a BMP");

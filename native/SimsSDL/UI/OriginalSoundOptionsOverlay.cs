@@ -70,10 +70,6 @@ public sealed class OriginalSoundOptionsOverlay
     public bool PressedClose { get; private set; }
     public int? HoveredIndex { get; private set; }
 
-    /// <summary>
-    /// When set, the sliders are drawn inside the control panel's Options mode like the original game
-    /// (rows from STR# 145 entries 42/43, relative to the sub-panel origin) instead of in a centered dialog.
-    /// </summary>
     public (CGPoint Origin, CGSize Size)? EmbeddedRows { get; private set; }
 
     public bool IsDismissingEmbedded { get; private set; }
@@ -193,7 +189,6 @@ public sealed class OriginalSoundOptionsOverlay
 
     public void Show() => IsVisible = true;
 
-    /// <summary>Shows the sliders inside the control panel; <c>origin</c> is relative to the sub-panel origin.</summary>
     public void ShowEmbedded((CGPoint Origin, CGSize Size) rows, bool afterFadeOut = false)
     {
         EmbeddedRows = (
@@ -503,9 +498,8 @@ public sealed class OriginalSoundOptionsOverlay
             items.Add(new DrawItem(labelImg, LabelRect(index, panel), new Vector4(0f, 0f, 1f, 1f)));
 
             var value = _values.TryGetValue(slider.Group, out var v) ? v : 1f;
-            // FUN_00516284 uses optslideron.bmp (+0x1a4) when volume > 0 and optslideroff.bmp (+0x1a8) when volume == 0.
             var texture = value > 0.0001f ? slider.On : slider.Off;
-            // FUN_005f5e36 draws each 1/4 slice of optslider*.bmp at its native 13px width, stretching only the middle track slice.
+            // Draws slider end caps at their native 13-pixel width, stretching only the middle track slice.
             var segment = texture.Size.Width / 4.0;
             items.Add(new DrawItem(texture, new CGRect(track.MinX, track.MinY, segment, track.Height), new Vector4(0f, 0f, 0.25f, 1f)));
             items.Add(new DrawItem(texture, new CGRect(track.MinX + segment, track.MinY, track.Width - segment * 2.0, track.Height), new Vector4(0.25f, 0f, 0.25f, 1f)));
@@ -557,7 +551,6 @@ public sealed class OriginalSoundOptionsOverlay
 
     private void AppendTileButton(CGRect bounds, int frameIndex, List<DrawItem> items)
     {
-        // FUN_005f730f (cWinTileBtn::OnPaint): 3-slice horizontal button from WinBtn.bmp (7px left cap, stretched 2px center, 7px right cap).
         var framePx = _buttonSheetWidth / 4.0f;
         var basePx = frameIndex * framePx;
         var capPx = (float)_buttonCapWidth;
@@ -616,7 +609,6 @@ public sealed class OriginalSoundOptionsOverlay
     {
         if (EmbeddedRows is { } embeddedRows)
         {
-            // Embedded rows are measured from the top of the 150-pixel live control panel.
             var top = canvas.Height - 150;
             double widest = 0;
             foreach (var slider in _sliders)
@@ -652,8 +644,6 @@ public sealed class OriginalSoundOptionsOverlay
     {
         if (EmbeddedRows is { } embeddedRows)
         {
-            // FUN_00514f95 (00514f95.c:182-188): labels start at (305, 13) with step 28, and sliders start 15px past the widest label
-            // with width 130 (STR# 145 entry 53), vertically centered via C integer division (fontHeight - 14) / 2.
             var row = embeddedRows.Size.Height;
             double widest = 0;
             foreach (var slider in _sliders)

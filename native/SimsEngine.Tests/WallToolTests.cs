@@ -51,7 +51,6 @@ public sealed class WallToolTests
         var budget = new Budget(5000);
         var tool = new WallTool(world, walls, terrain, catalog, budget, LotPool.Read(lot), LotTiles.Read(lot), LotWater.Read(lot));
 
-        // Place a Sim at (11, 9), which is the (x, y - 1) neighbour of the intermediate horizontal segment at (11, 10)
         var simDef = new short[XObject.DefinitionCount];
         simDef[(int)ObjdField.Type] = XPerson.PersonType;
         var sim = world.Add(new XPerson(10, simDef) { Position = new ObjectPosition(11 * 16 + 8, 9 * 16 + 8, 1) });
@@ -76,19 +75,17 @@ public sealed class WallToolTests
         var budget = new Budget(5000);
         var tool = new WallTool(world, walls, terrain, catalog, budget, LotPool.Read(lot), LotTiles.Read(lot), LotWater.Read(lot), floors);
 
-        // Draw wall at (10, 10) bit 1 and attach a non-portal object requiring that wall on the neighbour tile (9, 10)
         Assert.Equal(1, tool.Line(10, 10, 10, 11, style: 1, pattern: 0, erase: false));
         var sconceDef = new short[XObject.DefinitionCount];
         sconceDef[(int)ObjdField.Type] = 4;
         var sconce = world.Add(new XObject(20, sconceDef) { Position = new ObjectPosition(9 * 16 + 8, 10 * 16 + 8, 1) });
         sconce[ObjectData.Direction] = 0;
-        sconce[ObjectData.WallPlacementFlags] = 2; // local bit 4 (requires wall on +x edge)
+        sconce[ObjectData.WallPlacementFlags] = 2;
 
         Assert.Equal(0, tool.Line(10, 10, 10, 11, style: 1, pattern: 0, erase: true));
         Assert.Equal(0xb, tool.Error);
         Assert.NotEqual(0, walls[10, 10][0] & 1);
 
-        // Unsellable door (in use) on (12, 10) bit 1 refuses erase with error 0x23
         var doorTool = new WallTool(world, walls, terrain, catalog, budget, LotPool.Read(lot), LotTiles.Read(lot), LotWater.Read(lot), floors);
         Assert.Equal(1, doorTool.Line(12, 10, 12, 11, style: 1, pattern: 0, erase: false));
         walls[12, 10][2] = 3;
@@ -102,7 +99,8 @@ public sealed class WallToolTests
         Assert.Equal(0x23, doorTool.Error);
         Assert.NotEqual(0, walls[12, 10][0] & 1);
 
-        // Diagonal wall with split floor (0xff) restores floor pattern from record[4] on erase
+        // Erasing a diagonal wall on a split floor (pattern 0xFF) restores the underlying floor pattern
+        // preserved in record index 4.
         Assert.Equal(1, tool.Line(15, 15, 16, 16, style: 1, pattern: 0, erase: false));
         walls[15, 15][2] = 3;
         walls[15, 15][4] = 7;

@@ -1,33 +1,21 @@
 namespace SimsEngine.Formats;
 
-/// <summary>One string of a STR#, CTSS or TTAs chunk. <see cref="Language"/> is the stored language byte: 1 is
-/// English, 0 means "the game's current language", and formats without languages store 0.</summary>
+/// <summary>Represents an entry in a string table chunk, with language code 1 denoting English and 0
+/// denoting language-neutral or default.</summary>
 public sealed record StringEntry(string Value, string Comment, byte Language);
 
-/// <summary>A string table: STR#, and the CTSS (catalog text) and TTAs (interaction names) chunks that share its
-/// layout. The first int16 selects the format, as in Sims.exe FUN_0046ffa4:
-/// <list type="bullet">
-/// <item>-1: int16 count, zero-terminated strings.</item>
-/// <item>-2: int16 count, pairs of zero-terminated value and comment.</item>
-/// <item>-3: int16 count, entries of a language byte, value and comment. Sims.exe keeps the strings of the
-/// current language and numbers them from 1 again whenever the language changes; when the current language has
-/// none it loads the English (1) ones.</item>
-/// <item>0 or more: the value itself is the count, followed by length-prefixed strings. Sims.exe replaces bytes
-/// 0xA1 with 'o' and 0xD5 with '\'' in these (Mac text).</item>
-/// <item>-4: not read by Sims.exe (it falls into the count branch with a negative count, so the table is empty).
-/// Only The Sims Online objects use it; it is decoded here (layout inferred from those files) so converted
-/// objects keep their text, and <see cref="ReadBySimsExe"/> is false.</item>
-/// </list></summary>
+/// <summary>Parses string tables including STR#, CTSS, and TTAs chunks. Supports format variants for
+/// strings only (-1), string and comment pairs (-2), multilingual entries with language codes (-3),
+/// extended multilingual sets (-4), and legacy Pascal strings with non-negative format codes.</summary>
 public sealed class StringTable
 {
     public short Format { get; }
     public IReadOnlyList<StringEntry> Entries { get; }
 
-    /// <summary>False for format -4, which Sims.exe reads as an empty table.</summary>
     public bool ReadBySimsExe => Format != -4;
 
-    /// <summary>True when a length-prefixed table declares more strings than its data holds. Sims.exe would read
-    /// past the chunk; the strings that fit are kept.</summary>
+    /// <summary>Indicates whether a length-prefixed string table declares more entries than the chunk data
+    /// actually contains.</summary>
     public bool Truncated { get; }
 
     private StringTable(short format, IReadOnlyList<StringEntry> entries, bool truncated)
@@ -63,8 +51,7 @@ public sealed class StringTable
                 }
                 break;
             case -4:
-                // Inferred from the TSO object files: a language-set count, then per set a u16 count and entries of a
-                // language byte with two UTF-8 strings (The Sims Online text) whose lengths are 7-bit variable-length integers.
+                // Format -4: language sets containing variable-length UTF-8 string pairs.
                 for (int set = 0, sets = reader.U8(); set < sets; set++)
                     for (int index = 0, count = reader.U16(); index < count; index++)
                     {
@@ -94,8 +81,8 @@ public sealed class StringTable
         return new StringTable(format, entries, truncated);
     }
 
-    /// <summary>The strings the game shows in <paramref name="language"/> (1 is English), numbered from 0, by the
-    /// rules of Sims.exe FUN_0046ffa4. Tables without languages return every string.</summary>
+    /// <summary>Returns all strings matching <paramref name="language"/>, falling back to English (1) if no
+    /// strings exist for that language.</summary>
     public IReadOnlyList<string> ForLanguage(byte language)
     {
         if (Format != -3) return Entries.Select(entry => entry.Value).ToList();
@@ -103,8 +90,6 @@ public sealed class StringTable
         return chosen.Count == 0 && language != 1 ? PickEnglishFallback() : chosen;
     }
 
-    /// <summary>Looks up a string by 0-based index for the requested language, falling back to US English (1)
-    /// and then empty string "" if missing.</summary>
     public string GetString(int index, byte language)
     {
         if (index < 0) return string.Empty;
@@ -118,10 +103,8 @@ public sealed class StringTable
         return string.Empty;
     }
 
-    /// <summary>Mac StringSetBase::SetString followed by StringSetBase::Save: the value of string
-    /// <paramref name="number"/> (counted from 1) in <paramref name="language"/>'s strings, or in the English ones when
-    /// that language has none, becomes <paramref name="value"/>, and the whole table is written back as format -3 (each
-    /// string a language byte, its value and its comment).</summary>
+    /// <summary>Updates the 1-based string entry for <paramref name="language"/> and serializes the table
+    /// in format -3.</summary>
     public byte[] WriteWithValue(int number, string value, byte language)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(number, 1);
@@ -148,9 +131,8 @@ public sealed class StringTable
         return output.ToArray();
     }
 
-    /// <summary>Replaces or extends the 0-based string sequence for <paramref name="language"/> (falling back to
-    /// language 1 when <paramref name="language"/> has no entries) while preserving comments and other languages,
-    /// encoding the table in format -3 as Sims.exe FUN_00587bed writes character STR# resources.</summary>
+    /// <summary>Replaces or extends string entries for <paramref name="language"/> while preserving
+    /// comments and other languages in format -3.</summary>
     public byte[] WriteLanguageValues(IReadOnlyList<string> values, byte language)
     {
         ArgumentNullException.ThrowIfNull(values);
@@ -237,8 +219,7 @@ public sealed class StringTable
                 previous = entryLanguage;
             }
             if (entryLanguage != language) continue;
-            // The original stores each string at its number in the current run, so a second run of the same
-            // language overwrites the first one's opening strings.
+            // Subsequent runs of the same language overwrite earlier entries by index.
             if (number < result.Count) result[number] = entry.Value;
             else result.Add(entry.Value);
             number++;

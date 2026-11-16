@@ -1,53 +1,38 @@
+using System.Collections.Concurrent;
 using SimsEngine.Formats;
 
 namespace SimsEngine.Content;
 
-/// <summary>The object folders Sims.exe scans for definitions, in the order FUN_0043c6ee scans them.</summary>
+/// <summary>Defines the fixed folder search sequence used when scanning object definitions across the
+/// installation.</summary>
 public enum ObjectScan
 {
-    /// <summary>"Scanning Sims 1 Objects": GameData\Objects\ (folder code 0x17).</summary>
     Objects,
-    /// <summary>"Scanning User Objects": GameData\UserObjects\ (0x19).</summary>
     UserObjects,
-    /// <summary>"Scanning UserData People". Inferred: the neighbourhood's Characters folder.</summary>
     People,
-    /// <summary>"Scanning Downloaded Objects": Downloads\ (0x1a).</summary>
     Downloads,
-    /// <summary>Livin' Large, game setting bit 1 (0x1b ExpansionPack\).</summary>
     LivinLarge,
-    /// <summary>House Party, bit 2 (0x1e ExpansionPack2\).</summary>
     HouseParty,
-    /// <summary>Hot Date, bit 4 (0x24 ExpansionPack3\).</summary>
     HotDate,
-    /// <summary>Vacation, bit 8 (0x2a ExpansionPack4\).</summary>
     Vacation,
-    /// <summary>Deluxe, bit 0x10 (0x30).</summary>
     Deluxe,
-    /// <summary>Unleashed, bit 0x20 (0x36 ExpansionPack5\).</summary>
     Unleashed,
-    /// <summary>Superstar, bit 0x40 (0x3c ExpansionPack6\).</summary>
     Superstar,
-    /// <summary>"Scanning Expansion Shared Objects" (0x42), when the game setting short is above 3.</summary>
     ExpansionShared,
-    /// <summary>"Scanning NPC Date Objects": TemplateNPCs\ (0x52), with Expansion Shared.</summary>
     NpcDate,
-    /// <summary>Makin' Magic ("Spellbound"), bit 0x80, scanned last.</summary>
     Spellbound,
 }
 
-/// <summary>One registered object definition: its place in the registry (Sims.exe keeps it at +0xa8 of the entry),
-/// the file and OBJD chunk it came from, and the semi-global file name its GLOB chunk 1 names.</summary>
 public sealed record ObjectEntry(int Index, ObjectScan Scan, string Source, IffFile File, IffChunk Chunk, Objd Definition,
     string? SemiGlobal)
 {
     public uint Guid => Definition.Guid;
 
-    /// <summary>A -1 TreeTableId with no master has no table fallback: Sims.exe only resolves this through
-    /// FUN_004573f9 when the master id is nonzero. Lot restore must not eagerly call that on non-interactive records.</summary>
+    /// <summary>Indicates whether an object has an unassigned interaction table ID (-1) without a master
+    /// object fallback.</summary>
     public bool HasNoMasterInteractionTable => Definition[ObjdField.TreeTableId] == ushort.MaxValue &&
                                                Definition[ObjdField.MasterId] == 0;
 
-    /// <summary>Reads one catalog string from the object's CTSS resource, using Sims.exe's language selection rules.</summary>
     public string? CatalogString(int index, byte language)
     {
         var chunk = File.Find(ResourceType.Ctss, Definition[ObjdField.CatalogStringsId]);
@@ -56,17 +41,16 @@ public sealed record ObjectEntry(int Index, ObjectScan Scan, string Source, IffF
         return index >= 0 && index < strings.Count ? strings[index] : null;
     }
 
-    /// <summary>The action function IDs reached by Sims.exe FUN_00457da4/FUN_004563fd. OBJf uses the OBJD chunk id;
-    /// when the definition does not use that table or the resource is absent, FUN_00456209 supplies the legacy fields.</summary>
+    /// <summary>Returns the action function IDs resolved from the object's matching OBJf chunk or legacy
+    /// OBJD function table fields.</summary>
     public IReadOnlyList<ushort> ActionFunctions => Objf.ActionFunctions(File, Chunk, Definition);
 
-    /// <summary>The guard/action pairs read by FUN_004561c2 from the resolved function table. Legacy OBJD entries have
-    /// action IDs and zero guards.</summary>
+    /// <summary>Returns guard and action pairs from the function table, using zero guards for legacy OBJD
+    /// entries.</summary>
     public IReadOnlyList<(ushort Guard, ushort Action)> FunctionEntries => Objf.FunctionEntries(File, Chunk, Definition);
 
-    /// <summary>FUN_00457e1c asks FUN_004573d6 for OBJD.TreeTableId, then FUN_00456b67 looks up that exact
-    /// TTAB id in the private resource file (+8) and falls back to the semi-global file (+0xc). A TreeTableId of -1
-    /// uses the master-object definition returned by FUN_004573f9; callers provide that definition when available.</summary>
+    /// <summary>Resolves an object's interaction table (TTAB) from its private resource file or semi-global
+    /// scope, falling back to the master object definition if the table ID is -1.</summary>
     public InteractionTable? FindInteractionTable(BehaviorScope? scope = null, byte language = 1, ObjectEntry? masterFallback = null)
     {
         var rawTreeTableId = Definition[ObjdField.TreeTableId];
@@ -74,8 +58,6 @@ public sealed record ObjectEntry(int Index, ObjectScan Scan, string Source, IffF
         if (rawTreeTableId == ushort.MaxValue)
         {
             if (masterFallback is null) return null;
-            // FUN_004573d6 resolves the table id through the master definition, then FUN_00457e1c
-            // looks up that id in this object's private resource file before the semi-global file.
             treeTableId = unchecked((ushort)masterFallback.Definition[ObjdField.TreeTableId]);
         }
         else treeTableId = (ushort)rawTreeTableId;
@@ -100,22 +82,8 @@ public sealed record ObjectEntry(int Index, ObjectScan Scan, string Source, IffF
     }
 }
 
-/// <summary>The object definitions of an installation, found by GUID as Sims.exe finds them.
-/// <para>Sims.exe FUN_0043c6ee scans the object folders in a fixed order (<see cref="ObjectScan"/>): the base game,
-/// user objects, people and downloads always, then each installed expansion pack. FUN_00412825 walks a folder
-/// depth first. For each file FUN_0043b981 takes the OBJD chunks in order and skips one whose chunk id the same file
-/// already registered; FUN_0043bb37 then skips a definition whose Disabled field (16) is set when the registry is
-/// told to (flag +0x1240), adds an entry at the end of the list, reads the file's GLOB chunk for its semi-global
-/// file, and stores the entry in the GUID map (FUN_0043ed84, find or insert), overwriting what was there, so the last
-/// definition scanned for a GUID wins.</para>
-/// <para>Inferred, not traced: the walk visits entries in the order Windows lists them (names compared without
-/// case), and its file callback takes .iff files and the .iff files inside .far archives. Pack folder names follow
-/// the installation (ExpansionPack or ExpansionPack1, ExpansionPackGOLD for Deluxe, ExpansionPack7 for Makin'
-/// Magic). FUN_00413d0e's Ranger/.hot markers set <see cref="GameEditionMask"/>; FUN_0043c6ee scans each pack
-/// folder only when its corresponding bit is set.</para>
-/// <para>Compatibility inference for the extracted flat Complete Collection: when the standard GameData\Objects and
-/// Downloads paths are absent, remaining named root folders are scanned at the Downloads position. Known game data
-/// directories are excluded; root package classification and lexical ordering are not Sims.exe path rules.</para></summary>
+/// <summary>Catalogs object definitions by GUID across installation folders and archive packages in fixed
+/// scan order, with later scanned definitions replacing earlier ones.</summary>
 public sealed class ObjectRegistry
 {
     private static readonly HashSet<string> FlatInstallNonPackageDirectories = new(StringComparer.OrdinalIgnoreCase)
@@ -128,33 +96,27 @@ public sealed class ObjectRegistry
 
     private readonly Dictionary<uint, ObjectEntry> _byGuid;
     private readonly List<ObjectEntry> _entries;
+    private readonly object? _archiveCachePin;
 
     public IReadOnlyList<ObjectEntry> Entries => _entries;
     public IReadOnlyDictionary<uint, ObjectEntry> ByGuid => _byGuid;
-    /// <summary>The folders scanned, in order, with the folder each one resolved to.</summary>
     public IReadOnlyList<(ObjectScan Scan, string Folder)> Folders { get; }
-    /// <summary>Root-level FAR packages used by flat Mac/Complete Collection installs.</summary>
     public IReadOnlyList<(ObjectScan Scan, string Archive)> Archives { get; }
-    /// <summary>Files that could not be read as IFF, with the reason.</summary>
     public IReadOnlyList<(string Source, string Error)> Unreadable { get; }
-    /// <summary>Nonfatal messages from the optional Windows <c>GameData/Tuning.txt</c> BCON import.</summary>
     public List<string> TuningIssues { get; } = new();
-    /// <summary>The installed-pack mask computed by Sims.exe FUN_00413d0e from its Ranger and .hot markers.</summary>
+    /// <summary>The bitmask of installed expansion packs detected from installation marker files.</summary>
     public byte GameEditionMask { get; }
-    /// <summary>UIText.iff resolved from GameData\UIText.iff or the install root (FUN_00435ff3).</summary>
     public IffFile? UiText { get; }
-    /// <summary>Root directory of the scanned game installation when created via <see cref="Scan"/>.</summary>
     public string? GameRoot { get; }
-    /// <summary>GUIDs of <see cref="ObjectScan.People"/> entries whose character IFFs were created or modified at runtime.</summary>
     public HashSet<uint> DirtyPeopleGuids { get; } = [];
 
-    public ObjectRegistry() : this([], new(), [], [], [], 0, null, null)
+    public ObjectRegistry() : this([], new(), [], [], [], 0, null, null, null)
     {
     }
 
     private ObjectRegistry(List<ObjectEntry> entries, Dictionary<uint, ObjectEntry> byGuid,
         List<(ObjectScan, string)> folders, List<(ObjectScan, string)> archives, List<(string, string)> unreadable,
-        byte gameEditionMask, IffFile? uiText, string? gameRoot)
+        byte gameEditionMask, IffFile? uiText, string? gameRoot, object? archiveCachePin = null)
     {
         _entries = entries;
         _byGuid = byGuid;
@@ -164,12 +126,13 @@ public sealed class ObjectRegistry
         GameEditionMask = gameEditionMask;
         UiText = uiText;
         GameRoot = gameRoot;
+        _archiveCachePin = archiveCachePin;
     }
 
     public ObjectEntry? Find(uint guid) => _byGuid.GetValueOrDefault(guid);
 
-    /// <summary>Returns a copy of this registry keeping all non-People entries and rescanning only the Characters
-    /// folder, avoiding a multi-thousand-object full disk scan after household creation.</summary>
+    /// <summary>Returns a copy of the registry that rescans only the characters folder while retaining all
+    /// other registered objects.</summary>
     public ObjectRegistry WithRefreshedPeople(string? peopleFolder = null)
     {
         if (string.IsNullOrEmpty(GameRoot))
@@ -206,10 +169,10 @@ public sealed class ObjectRegistry
         if (!string.IsNullOrEmpty(peopleFolder))
             updatedFolders.Add((ObjectScan.People, peopleFolder));
         return new ObjectRegistry(merged, byGuid, updatedFolders, Archives.ToList(), Unreadable.ToList(),
-            GameEditionMask, UiText, GameRoot);
+            GameEditionMask, UiText, GameRoot, _archiveCachePin);
     }
 
-    /// <summary>FUN_00435ff3: reads one zero-based entry from UIText.iff STR# <paramref name="tableId"/> using Sims.exe's language selection rules.</summary>
+    /// <summary>Reads a string entry from a UIText.iff string table for the given language.</summary>
     public string? UiTextString(ushort tableId, int index, byte language)
     {
         if (UiText?.Find(ResourceType.Str, tableId) is not { } chunk) return null;
@@ -217,8 +180,8 @@ public sealed class ObjectRegistry
         return index >= 0 && index < strings.Count && strings[index].Length > 0 ? strings[index] : null;
     }
 
-    /// <summary>Mac ObjectFolder::RemoveSelector (called by Neighborhood::DeleteCharacter): the selector for this GUID
-    /// leaves the folder, so the object can no longer be found or chosen. False when the GUID is not registered.</summary>
+    /// <summary>Removes a registered object definition by GUID so it can no longer be instantiated or
+    /// referenced.</summary>
     public bool Remove(uint guid)
     {
         if (!_byGuid.Remove(guid, out var entry)) return false;
@@ -226,7 +189,6 @@ public sealed class ObjectRegistry
         return true;
     }
 
-    /// <summary>Registers an object file directly into the registry.</summary>
     public void RegisterFile(IffFile file, string source, ObjectScan scan = ObjectScan.People)
     {
         var glob = file.OfType(ResourceType.Glob).FirstOrDefault();
@@ -243,8 +205,8 @@ public sealed class ObjectRegistry
         }
     }
 
-    /// <summary>Replaces the in-memory IFF file backing an existing entry (such as a Sim's updated BodyStrings STR#),
-    /// preserving its registry index and scan order.</summary>
+    /// <summary>Replaces the in-memory resource file for an existing registered object while preserving its
+    /// registry index and scan position.</summary>
     public bool ReplaceEntryFile(uint guid, IffFile file, bool markDirty = true)
     {
         ArgumentNullException.ThrowIfNull(file);
@@ -268,11 +230,8 @@ public sealed class ObjectRegistry
         return true;
     }
 
-
-    /// <summary>FUN_0043aeef walks the ordered type-record vector for a record whose OBJD has the same MasterId and
-    /// SubIndex -1; FUN_0043aedc rejects a zero MasterId and every other SubIndex. FUN_005c17a6 also requires the
-    /// same runtime class, modeled here with FUN_004409db's OBJD class mapping. Registry order is retained because
-    /// Sims.exe returns the first match.</summary>
+    /// <summary>Finds the alternative object definition sharing the same master ID and runtime class with
+    /// sub-index -1 in the same file.</summary>
     public ObjectEntry? FindAlternativeType(ObjectEntry entry)
     {
         ArgumentNullException.ThrowIfNull(entry);
@@ -280,8 +239,7 @@ public sealed class ObjectRegistry
         if (masterId == 0) return null;
         var objectClass = LotObjects.ClassOf(entry.Definition);
         if (objectClass is null) return null;
-        // FUN_0043aeef also compares the registry entry's first field, the IFF file (FUN_005c17a6), so a master id only
-        // pairs objects of one file.
+        // Master IDs only associate object definitions originating from the same file.
         return Entries.FirstOrDefault(candidate =>
             ReferenceEquals(candidate.File, entry.File) &&
             LotObjects.ClassOf(candidate.Definition) == objectClass &&
@@ -289,14 +247,74 @@ public sealed class ObjectRegistry
             candidate.Definition[ObjdField.SubIndex] == ushort.MaxValue);
     }
 
-    /// <summary>Scans only character and template-NPC IFFs for neighborhood family metadata without loading all 5,000+ lot objects.</summary>
     public static ObjectRegistry ScanPeopleOnly(string game, string? people = null) =>
         ScanCore(game, people, skipDisabled: false, peopleOnly: true);
 
-    /// <summary>Scans the installation at <paramref name="game"/>. <paramref name="people"/> is the Characters
-    /// folder of the neighbourhood in play (defaults to UserData\Characters).</summary>
     public static ObjectRegistry Scan(string game, string? people = null, bool skipDisabled = false) =>
         ScanCore(game, people, skipDisabled, peopleOnly: false);
+
+    private sealed record CachedArchiveIff(
+        string ItemName,
+        IffFile File,
+        string? SemiGlobal,
+        (IffChunk Chunk, Objd Definition)[] Objds);
+
+    private static readonly ConcurrentDictionary<string, (long Length, long LastWriteTicks, WeakReference<CachedArchiveIff[]> Files, (string ItemName, string Error)[] Unreadable)> ArchiveMetadataCache =
+        new(StringComparer.Ordinal);
+
+    private static (CachedArchiveIff[] Files, (string ItemName, string Error)[] Unreadable) GetOrParseArchiveIffs(
+        string path, out string? openError)
+    {
+        var fullPath = Path.GetFullPath(path);
+        var info = new FileInfo(fullPath);
+        if (info.Exists && ArchiveMetadataCache.TryGetValue(fullPath, out var cached) &&
+            cached.Length == info.Length && cached.LastWriteTicks == info.LastWriteTimeUtc.Ticks &&
+            cached.Files.TryGetTarget(out var cachedFiles))
+        {
+            openError = null;
+            return (cachedFiles, cached.Unreadable);
+        }
+
+        FarArchive archive;
+        try { archive = FarArchive.Open(path); }
+        catch (ResourceFormatException error)
+        {
+            openError = error.Message;
+            return ([], []);
+        }
+
+        var filesList = new List<CachedArchiveIff>();
+        var badList = new List<(string ItemName, string Error)>();
+        foreach (var item in archive.Entries)
+        {
+            if (!item.Name.EndsWith(".iff", StringComparison.OrdinalIgnoreCase)) continue;
+            var source = path + "::" + item.Name;
+            IffFile file;
+            try { file = archive.ReadIff(item, source); }
+            catch (ResourceFormatException error)
+            {
+                badList.Add((item.Name, error.Message));
+                continue;
+            }
+            var glob = file.OfType(ResourceType.Glob).FirstOrDefault();
+            string? semiGlobal = null;
+            if (glob is not null)
+                try { semiGlobal = Glob.Read(file, glob).Name; }
+                catch (ResourceFormatException) { }
+            var objdChunks = file.OfType(ResourceType.Objd).ToArray();
+            var objds = new (IffChunk Chunk, Objd Definition)[objdChunks.Length];
+            for (var j = 0; j < objdChunks.Length; j++)
+                objds[j] = (objdChunks[j], Objd.Read(file, objdChunks[j]));
+            filesList.Add(new CachedArchiveIff(item.Name, file, semiGlobal, objds));
+        }
+
+        var filesArray = filesList.ToArray();
+        var badArray = badList.ToArray();
+        if (info.Exists)
+            ArchiveMetadataCache[fullPath] = (info.Length, info.LastWriteTimeUtc.Ticks, new WeakReference<CachedArchiveIff[]>(filesArray), badArray);
+        openError = null;
+        return (filesArray, badArray);
+    }
 
     private static ObjectRegistry ScanCore(string game, string? people, bool skipDisabled, bool peopleOnly)
     {
@@ -306,14 +324,11 @@ public sealed class ObjectRegistry
         var archives = new List<(ObjectScan, string)>();
         var unreadable = new List<(string, string)>();
         var seen = new HashSet<(string, ushort)>(EqualityComparer<(string, ushort)>.Default);
+        var pins = new List<CachedArchiveIff[]>();
 
-        void Register(ObjectScan scan, string source, ReadOnlyMemory<byte> bytes)
+        void RegisterFile(ObjectScan scan, string source, IffFile file)
         {
-            IffFile file;
-            try { file = new IffFile(bytes, source); }
-            catch (ResourceFormatException error) { unreadable.Add((source, error.Message)); return; }
-            // FUN_0043bb37 asks the file for (GLOB, 1, 0). Inferred: the file's first GLOB chunk, since shipped files
-            // number it 128 as often as 1.
+            // Uses the first GLOB chunk in the file, which may be numbered 128 or 1.
             var glob = file.OfType(ResourceType.Glob).FirstOrDefault();
             string? semiGlobal = null;
             if (glob is not null)
@@ -330,6 +345,34 @@ public sealed class ObjectRegistry
             }
         }
 
+        void Register(ObjectScan scan, string source, ReadOnlyMemory<byte> bytes)
+        {
+            IffFile file;
+            try { file = new IffFile(bytes, source); }
+            catch (ResourceFormatException error) { unreadable.Add((source, error.Message)); return; }
+            RegisterFile(scan, source, file);
+        }
+
+        void ReplayCachedArchive(ObjectScan scan, string archivePath, CachedArchiveIff[] files, (string ItemName, string Error)[] bad)
+        {
+            pins.Add(files);
+            foreach (var err in bad)
+                unreadable.Add((archivePath + "::" + err.ItemName, err.Error));
+            foreach (var cachedFile in files)
+            {
+                var source = archivePath + "::" + cachedFile.ItemName;
+                var upperSource = source.ToUpperInvariant();
+                foreach (var (chunk, definition) in cachedFile.Objds)
+                {
+                    if (!seen.Add((upperSource, chunk.Id))) continue;
+                    if (skipDisabled && definition[ObjdField.Disabled] != 0) continue;
+                    var entry = new ObjectEntry(entries.Count, scan, source, cachedFile.File, chunk, definition, cachedFile.SemiGlobal);
+                    entries.Add(entry);
+                    byGuid[entry.Guid] = entry;
+                }
+            }
+        }
+
         void Walk(ObjectScan scan, string folder)
         {
             foreach (var path in Directory.EnumerateFileSystemEntries(folder).Order(StringComparer.OrdinalIgnoreCase))
@@ -338,25 +381,19 @@ public sealed class ObjectRegistry
                 if (path.EndsWith(".iff", StringComparison.OrdinalIgnoreCase)) Register(scan, path, File.ReadAllBytes(path));
                 else if (path.EndsWith(".far", StringComparison.OrdinalIgnoreCase))
                 {
-                    FarArchive archive;
-                    try { archive = FarArchive.Open(path); }
-                    catch (ResourceFormatException error) { unreadable.Add((path, error.Message)); continue; }
-                    foreach (var item in archive.Entries)
-                        if (item.Name.EndsWith(".iff", StringComparison.OrdinalIgnoreCase))
-                            Register(scan, path + "::" + item.Name, archive.Read(item));
+                    var (files, bad) = GetOrParseArchiveIffs(path, out var openError);
+                    if (openError is not null) { unreadable.Add((path, openError)); continue; }
+                    ReplayCachedArchive(scan, path, files, bad);
                 }
             }
         }
 
         void ScanArchive(ObjectScan scan, string path)
         {
-            FarArchive archive;
-            try { archive = FarArchive.Open(path); }
-            catch (ResourceFormatException error) { unreadable.Add((path, error.Message)); return; }
+            var (files, bad) = GetOrParseArchiveIffs(path, out var openError);
+            if (openError is not null) { unreadable.Add((path, openError)); return; }
             archives.Add((scan, path));
-            foreach (var item in archive.Entries)
-                if (item.Name.EndsWith(".iff", StringComparison.OrdinalIgnoreCase))
-                    Register(scan, path + "::" + item.Name, archive.Read(item));
+            ReplayCachedArchive(scan, path, files, bad);
         }
 
         void ScanPackage(ObjectScan scan, string[] directoryNames, string[] archiveNames)
@@ -388,9 +425,7 @@ public sealed class ObjectRegistry
                 .Any(path => string.Equals(Path.GetFileName(path), parts[^1], StringComparison.OrdinalIgnoreCase));
         }
 
-        // FUN_00413d0e tests both the expansion's shared .hot marker and its Ranger IFF before setting bits 1–4
-        // and 0x20. Deluxe, Superstar use RangerD/Ranger6 alone; 0x80 is set unconditionally by the Complete
-        // Collection executable. FUN_0043c6ee gates each expansion's object scan on these same bits.
+        // Checks expansion marker files and Ranger resources to set installed pack bits.
         byte gameEditionMask = 0x80;
         if (HasFile(@"ExpansionPack\xpack.hot") && HasFile(@"GameData\Ranger.iff")) gameEditionMask |= 0x01;
         if (HasFile(@"ExpansionShared\Sound\houseparty.hot") && HasFile(@"GameData\Ranger2.iff")) gameEditionMask |= 0x02;
@@ -424,8 +459,7 @@ public sealed class ObjectRegistry
             }
             else if (Directory.Exists(game) && Resolve(game, @"GameData\Objects") is null && Resolve(game, "Objects") is not null)
             {
-                // The extracted Complete Collection keeps each downloaded object pack in a named root directory.
-                // Preserve Sims.exe's Downloads scan position; directory classification and order are compatibility inferences.
+                // Scans downloaded pack directories at the standard Downloads scan position.
                 foreach (var folder in Directory.EnumerateDirectories(game).Order(StringComparer.OrdinalIgnoreCase))
                 {
                     var name = Path.GetFileName(folder);
@@ -443,7 +477,7 @@ public sealed class ObjectRegistry
             if ((gameEditionMask & 0x10) != 0) ScanPackage(ObjectScan.Deluxe, ["ExpansionPackGOLD", "Deluxe"], ["ExpansionPackGOLD.far", "Deluxe.far"]);
             if ((gameEditionMask & 0x20) != 0) ScanPackage(ObjectScan.Unleashed, ["ExpansionPack5"], ["ExpansionPack5.far"]);
             if ((gameEditionMask & 0x40) != 0) ScanPackage(ObjectScan.Superstar, ["ExpansionPack6"], ["ExpansionPack6.far"]);
-            // The game setting short is above 3 once any pack after House Party is installed.
+            // Shared expansion content is enabled when any pack after House Party is active.
             if (gameEditionMask > 3)
             {
                 ScanPackage(ObjectScan.ExpansionShared, ["ExpansionShared"], ["ExpansionShared.far"]);
@@ -462,7 +496,8 @@ public sealed class ObjectRegistry
             catch (ResourceFormatException error) { unreadable.Add((uiTextPath, error.Message)); }
             break;
         }
-        var registry = new ObjectRegistry(entries, byGuid, folders, archives, unreadable, gameEditionMask, uiText, game);
+        var registry = new ObjectRegistry(entries, byGuid, folders, archives, unreadable, gameEditionMask, uiText, game,
+            pins.Count > 0 ? pins.ToArray() : null);
         registry.TuningIssues.AddRange(TuningOverrideImporter.Apply(game, registry));
         return registry;
     }
@@ -472,7 +507,6 @@ public sealed class ObjectRegistry
         name.Equals("ExpansionPack", StringComparison.OrdinalIgnoreCase) ||
         name.StartsWith("ExpansionPack", StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>Finds a folder under <paramref name="root"/> by a Windows path, matching each name without case.</summary>
     internal static string? Resolve(string root, string windowsPath)
     {
         var folder = root;

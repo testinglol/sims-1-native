@@ -14,10 +14,6 @@ public sealed partial class GameContent
 
     private sealed record OverlayPath(string[] Keys, string[] Names);
 
-    /// <summary>
-    /// A stable inventory fingerprint catches ordinary installs, updates and file replacements without hashing
-    /// several gigabytes of game data on every launch.
-    /// </summary>
     public bool ReusableMount(string destination, string identity)
     {
         var cachePath = Path.Combine(destination, ".content-cache.json");
@@ -171,7 +167,6 @@ public sealed partial class GameContent
                 }
                 catch
                 {
-                    // Best-effort cleanup of failed staging mount.
                 }
             }
         }
@@ -179,8 +174,6 @@ public sealed partial class GameContent
 
     private void MaterializeLiveOverlay(string baseRoot, string staging)
     {
-        // Live gameplay reads installed game resources and saves through its private profile. Link untouched
-        // entries and materialize only directories with pack assets, avoiding a copy of the installation.
         var paths = new List<OverlayPath>(Packs.Assets.Count);
         foreach (var key in Packs.Assets.Keys)
         {
@@ -558,7 +551,6 @@ public sealed partial class GameContent
         }
         catch
         {
-            // Keep sentinel values if metadata is unavailable.
         }
 
         return $"{kind}\t{relative}\t{size}\t{modifiedNs}";

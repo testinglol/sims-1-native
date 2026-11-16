@@ -2,10 +2,6 @@ using System.Text.Json.Serialization;
 
 namespace SimsSDL;
 
-/// <summary>
-/// Runtime environment payload published by pack visual/audio plugins for shader parameters, footprints,
-/// and status indicator strips.
-/// </summary>
 public sealed record PluginEnvironment
 {
     public sealed record EffectData

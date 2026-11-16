@@ -74,9 +74,7 @@ public sealed class OriginalPieOverlay
     public int? Highlighted { get; set; }
     public OriginalPieLayout? Layout { get; private set; }
 
-    /// <summary>
-    /// Yaw and pitch, in degrees, of the head drawn in the middle, turned toward the pointer as in the original.
-    /// </summary>
+    /// <summary>Yaw and pitch, in degrees, of the central portrait head turned toward the pointer.</summary>
     public Vector2 HeadOrientation { get; private set; } = new(0f, 8f);
     public bool CursorInDeadzone { get; private set; } = true;
 
@@ -133,8 +131,6 @@ public sealed class OriginalPieOverlay
             }
         }
 
-        // cLiveModePanel::Init (005186da.c lines 48-57, 76-78) & cWinPieMenu::Draw (005eae1b.c lines 36-64):
-        // normal (+0xd8) = RGB(165, 195, 214), hover (+0xdc) = RGB(0, 255, 255), active/submenu header (+0xe0) = RGB(255, 255, 255).
         ReadOnlySpan<(byte R, byte G, byte B)> colors = [(165, 195, 214), (0, 255, 255), (255, 255, 255)];
         var states = new UITexture[colors.Length];
         for (int i = 0; i < colors.Length; i++)
@@ -207,7 +203,7 @@ public sealed class OriginalPieOverlay
 
     public bool NextPage()
     {
-        // 0048d6b6.c lines 192, 323-326: Tab advances the 12-item window (+100) by 12 and wraps to 0.
+        // Tab advances the pie menu by 12 items, wrapping back to the first page.
         if (_currentLevelCount <= PageSize)
         {
             return false;
@@ -234,15 +230,15 @@ public sealed class OriginalPieOverlay
         const double innerRadius = 35.0;
         CursorInDeadzone = Highlighted is null && radius <= innerRadius;
 
-        // 005eb598.c lines 58-63 & 004623e6.c lines 89-97: cursor angle is 0 inside the 35px deadzone and atan2(dx, -dy) outside;
-        // base cursor-follow contribution scales by sqrt(radius / 2000), with +cos(theta) tilting UP (+pitch).
+        // Calculates cursor angle outside the deadzone, scaling tracking by the square root of radius over
+        // 2000 with upward pitch following cosine.
         double theta = radius > innerRadius ? Math.Atan2(dx, -dy) : 0.0;
         double cursorScale = radius > innerRadius ? Math.Sqrt(radius / 2000.0) : 0.0;
         double yawRad = Math.Sin(theta) * cursorScale;
         double pitchRad = Math.Cos(theta) * cursorScale;
 
-        // 004623e6.c lines 56-88, 213-248: when a spoke is hovered, map (highlighted, count) to compass direction 0..7
-        // and add cardinal (0.6 rad) or diagonal (0.4 rad) spoke snap offset.
+        // Snaps head orientation to the hovered spoke using eight compass directions with cardinal (0.6
+        // rad) or diagonal (0.4 rad) offsets.
         if (Highlighted is { } index)
         {
             _hadHighlightedSpoke = true;
@@ -292,7 +288,8 @@ public sealed class OriginalPieOverlay
         }
         else if (radius <= innerRadius)
         {
-            // Keep the head facing forward on open and inside the 35px center deadzone; damp back toward 0 after leaving a spoke.
+            // Keeps the head facing forward inside the deadzone, damping smoothly back toward center after
+            // leaving a spoke.
             if (_hadHighlightedSpoke)
             {
                 _deadzoneAngle *= 0.85;
@@ -321,9 +318,8 @@ public sealed class OriginalPieOverlay
             (float)Math.Clamp(8.0 + pitchRad * degrees, -45.0, 60.0));
     }
 
-    /// <summary>
-    /// 004623e6.c lines 262-277, 343-346: damps any residual center-deadzone head angle smoothly back to center.
-    /// </summary>
+    /// <summary>Smoothly damps residual head orientation angles back to center when the cursor is in the
+    /// deadzone.</summary>
     public bool TickDeadzoneRotation()
     {
         if (!CursorInDeadzone || Math.Abs(_deadzoneAngle) <= 1e-4)
@@ -345,9 +341,6 @@ public sealed class OriginalPieOverlay
         return true;
     }
 
-    /// <summary>
-    /// The screen point at the middle of the shown entry with this label, for scripted input; <see cref="Prepare"/> must have run.
-    /// </summary>
     public CGPoint? Point(string label, double scale)
     {
         int index = -1;
@@ -372,7 +365,7 @@ public sealed class OriginalPieOverlay
     public (SimInteraction? Action, bool KeepOpen) Choose(CGPoint point, double scale)
     {
         var local = new CGPoint(point.X / scale, point.Y / scale);
-        // 005eb598.c lines 22-34: explicit label rectangle hits are checked before the inner/outer radius ring check.
+        // Checks explicit label rectangles before testing the radial menu rings.
         int? hitIndex = Layout?.Hit(local);
         if (hitIndex is null && Layout?.Center is { } center && double.Hypot(local.X - center.X, local.Y - center.Y) <= 35.0 && _path.Count > 0)
         {
@@ -396,7 +389,7 @@ public sealed class OriginalPieOverlay
             return (action, false);
         }
 
-        // 0048d6b6.c lines 302-309: entering a submenu anchors the submenu at the cursor position where the parent item was clicked.
+        // Entering a submenu anchors its center to the cursor position where the parent item was clicked.
         Anchor = local;
         _path.Add(_pageOffset + index);
         _pageOffset = 0;

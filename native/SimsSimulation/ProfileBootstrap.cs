@@ -18,8 +18,6 @@ internal static class ProfileBootstrap
     internal static bool EnsureImported(string gameDirectory, string profileDirectory)
         => EnsureImported(gameDirectory, profileDirectory, onlySource: null);
 
-    /// <summary>Imports one neighborhood for native gameplay. The other installed neighborhoods are cloned only when a
-    /// later native session opens them, keeping a new profile's first lot load proportional to the active neighborhood.</summary>
     internal static bool EnsureNeighborhoodImported(string gameDirectory, string profileDirectory, int neighborhood)
     {
         if (neighborhood is < 1 or > Neighborhoods.Maximum)
@@ -86,22 +84,16 @@ internal static class ProfileBootstrap
         return imported;
     }
 
-    /// <summary>Imports the installed neighborhoods into a private profile. On APFS, clone each source file so the
-    /// first native launch does not physically copy gigabytes of unchanged neighborhood data. Clones are copy-on-write,
-    /// so later save edits remain private to the profile. Fall back to an ordinary copy on other filesystems.</summary>
     private static void CopyProfileFile(string source, string destination)
     {
         if (OperatingSystem.IsMacOS() &&
             NativeCopyFile(source, destination, IntPtr.Zero, CopyFileData | CopyFileClone) == 0)
             return;
 
-        // copyfile can create a partial destination before reporting that cloning is unsupported.
         if (File.Exists(destination)) File.Delete(destination);
         File.Copy(source, destination, false);
     }
 
-    /// <summary>Read a neighborhood without descending into an accidentally nested UserData copy. Older imports could
-    /// put UserData inside UserDataN; following that directory on every startup multiplies the save tree.</summary>
     private static IEnumerable<string> EnumerateNeighborhoodFiles(string source)
     {
         var pending = new Stack<string>();
@@ -278,12 +270,6 @@ internal static class ProfileBootstrap
         UpgradeBaseNeighborhoodLayout(gameDirectory, userData);
     }
 
-    /// <summary>
-    /// Sims Native (inferred): the original exe never names <c>TemplateFamilyUnleashed</c>, so its families reach a player
-    /// some other way, presumably through the installer. A new profile gets them in the base neighborhood's
-    /// <c>Import</c> folder, where the Import button offers them (each names its Old Town lot). A family whose lot is
-    /// already occupied is left out, and so is <c>Strays_4000</c>: it has no lot and is not a family a player can choose.
-    /// </summary>
     private static void OfferUnleashedFamilies(string gameDirectory, string userData)
     {
         var templates = Path.Combine(gameDirectory, "TemplateFamilyUnleashed");
@@ -524,9 +510,8 @@ internal static class ProfileBootstrap
         UpgradeBaseNeighborhoodLayout(gameDirectory, userData);
     }
 
-    /// <summary>Each expansion installer overwrites StreetNames.iff with its own copy, and each later copy lists every
-    /// earlier town's lots too (Makin' Magic's adds houses 90 to 92 and its "Creepy Hollow" street), so the profile keeps
-    /// the template whose lot table (STR# 2001) is longest. The file is never edited in play.</summary>
+    /// <summary>Selects the StreetNames.iff template with the longest lot table (STR# 2001), ensuring all
+    /// expansion neighborhood lots and street names are preserved.</summary>
     private static void UseLongestStreetNames(string gameDirectory, string userData)
     {
         var destination = Path.Combine(userData, "StreetNames.iff");

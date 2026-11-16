@@ -1,26 +1,7 @@
 namespace SimsEngine.Simulation;
 
-/// <summary>The Push Interaction primitive (opcode 0x0d), after Sims.exe 0x44cd6b. It pushes one of an object's interactions
-/// onto the queue of the stack object, a person, at a priority.
-/// <para>Operand: byte 0 is the interaction id (the entry's id in the owner's interaction table), byte 1 the index of the
-/// owner in the frame, byte 2 the priority mode, byte 3 the flags and byte 4 the local index of the secondary object. Byte
-/// 3 bit 1 makes byte 1 a local index; otherwise it is a parameter index. Bit 0 takes the secondary object, bit 2 sets
-/// the record flag 0x2 and bit 3 the record flag 0x40.</para>
-/// <para>Order: the owner is the object table entry (1-based, <see cref="XObject.ObjectTableEntry"/>) of the frame's
-/// value at byte 1; an index out of range raises "Stack number out of range." (8) for a parameter or "Local out of
-/// range." (51) for a local, and a missing object raises "Could not find object reference." (23). The owner's interaction
-/// table must exist (the owner's native <see cref="TypeRecord.Interactions"/>; "Tree table not found", 31) and hold the id ("Reference to tree table entry that does not exist.",
-/// 22). The stack object must exist ("No stack object present when required.", 21) and be a person ("Object referred to
-/// must be a person.", 28). The priority mode then gives the priority: 0 inherits the running object's
-/// <see cref="XPerson.ActivePriority"/> when the running object is a person (1 otherwise, with no floor), 1 is 100, 2 is 2,
-/// 3 is 50, and any other mode raises "Unrecognized priority value." (45). The secondary object is read from the locals
-/// (error 51 when byte 4 is out of range; a missing object is null). The ordinary queued path uses priority insertion;
-/// record flag 0x2 prepends the action and retains up to seven queued entries. TTAB Run Immediately entries are
-/// guard-checked and executed synchronously through their native behavior scope, following the `FUN_0045d377` branch
-/// through `FUN_00474c68`/`FUN_00474b22`; they do not enter the ordinary action ring.</para>
-/// <para>Inferred: the record's secondary object is read only when byte 3 bit 0 is set, and the record flags are only the two
-/// bits above. Sims.exe reads the parameter index against the count with a strict bound, so an index equal to the count is
-/// the next entry in memory there; the port raises the error for it instead.</para></summary>
+/// <summary>Executes the Push Interaction primitive (opcode 0x0d) to queue an interaction on a target Sim
+/// with a specified priority mode, running immediate interactions synchronously.</summary>
 public static class PushInteractionPrimitive
 {
     private const int DefinitionTypeField = 9;
@@ -38,7 +19,7 @@ public static class PushInteractionPrimitive
 
         var owner = me.ObjectTableEntry(OwnerIndex(frame, operand[1], flags))
             ?? throw new SimulationException(SimulationError.CouldNotFindObjectReference);
-        var interactions = owner.TypeRecord?.Interactions;
+        var interactions = world.EffectiveInteractions(owner);
         if (interactions is null) throw new SimulationException(SimulationError.TreeTableNotFound);
         var interaction = interactions.Interactions.FirstOrDefault(interaction => interaction.TtaIndex == interactionId);
         if (interaction is null)
@@ -89,8 +70,8 @@ public static class PushInteractionPrimitive
         person.ActivePriority = unchecked((short)priority);
         try
         {
-            // FUN_0045d377 temporarily installs the interaction priority and calls the tree runner with
-            // this interaction's target, tree and parameter block, then restores the previous priority.
+            // Temporarily applies the interaction priority while executing the immediate action tree,
+            // restoring the previous priority on completion.
             TreeRunner.RunWithParameters(world, person, scope, unchecked((short)interaction.ActionTree),
                 owner.StackObjectKey, immediate.Parameters);
             return PrimitiveResult.True;
@@ -104,7 +85,6 @@ public static class PushInteractionPrimitive
         }
     }
 
-    /// <summary>The frame value that names the owner: a local when byte 3 bit 1 is set, otherwise a parameter.</summary>
     private static short OwnerIndex(StackFrame frame, byte index, byte flags)
     {
         if ((flags & LocalsFlag) != 0)
@@ -116,7 +96,6 @@ public static class PushInteractionPrimitive
         return frame.Parameters[index];
     }
 
-    /// <summary>The priority the mode gives (Sims.exe 0x44cd6b, the chain after the stack person check).</summary>
     private static int Priority(XObject me, byte mode) => mode switch
     {
         InheritedPriorityMode => me is XPerson executing && executing.Definition[DefinitionTypeField] == XPerson.PersonType

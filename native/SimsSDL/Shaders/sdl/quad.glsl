@@ -1,5 +1,4 @@
-// Mirrors the Metal Quad: rect in pixels, canvas size + (flip, opacity), the uv sub-rectangle, the depth interval of
-// the sprite's depth map and the lighting tint.
+// Shared quad uniform block: pixel rect, canvas size + (flip, opacity), UV sub-rectangle, depth interval, and lighting tint.
 layout(std140, set = 1, binding = 0) uniform Quad {
     vec4 rect;
     vec4 canvasPadding;

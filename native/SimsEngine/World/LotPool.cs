@@ -3,14 +3,13 @@ using SimsEngine.Formats;
 
 namespace SimsEngine.World;
 
-/// <summary>The lot's pool grid (Arry 9, one byte per tile, 0xff for none). FUN_0047870b loads it into the object at
-/// lot manager +0x60 when the lot version is above 0x25; FUN_004790e8 calls a ground-floor tile a pool tile when its
-/// byte is below 0x10 and treats every other level as having none. A lot without the array has no pools.</summary>
+/// <summary>The lot pool grid stored in Arry 9 as one byte per tile, where 0xFF indicates no pool.
+/// Ground-floor tiles with values below 0x10 represent pool water, while other levels cannot contain pools.
+/// </summary>
 public sealed class LotPool
 {
     private const byte NoPool = 0xff;
-    // CTilePt directions 0..3 are cardinal; 4..7 are diagonal. PoolTool's
-    // AddDeck loop consumes this same direction order.
+    // Neighbour offsets ordered by cardinal directions (0..3) followed by diagonals (4..7).
     private static readonly (int X, int Y)[] DeckNeighbours =
         [(-1, 0), (0, -1), (1, 0), (0, 1), (-1, -1), (1, -1), (1, 1), (-1, 1)];
     private static readonly byte[] NeighbourEdgeFlags = [2, 0, 3, 1];
@@ -34,26 +33,24 @@ public sealed class LotPool
         return array.Rows == LotWalls.Size && array.Width == LotWalls.Size && array.ElementSize == 1 ? new LotPool(array) : new LotPool(null);
     }
 
-    /// <summary>FUN_004790e8.</summary>
     public bool IsPool(int x, int y, int level) =>
         level == 1 && x is >= 0 and < LotWalls.Size && y is >= 0 and < LotWalls.Size && tiles[x * LotWalls.Size + y] < 0x10;
 
-    /// <summary>FUN_004790bc: any pool or deck mark on a ground-floor tile.</summary>
     public bool Occupies(int x, int y, int level) =>
         level == 1 && x is >= 0 and < LotWalls.Size && y is >= 0 and < LotWalls.Size && tiles[x * LotWalls.Size + y] != NoPool;
 
-    /// <summary>FUN_00479112: a ground-floor pool deck tile (Arry 9 value 0x10).</summary>
+    /// <summary>Checks whether a ground-floor tile is marked as pool decking (Arry 9 value 0x10).</summary>
     public bool IsDeck(int x, int y, int level) =>
         level == 1 && InBounds(x, y) && tiles[x * LotWalls.Size + y] == 0x10;
 
-    /// <summary>FUN_004792da: clears a pool deck tile back to 0xff when floor paint/erase replaces the automatic deck.</summary>
+    /// <summary>Clears a pool deck tile back to 0xFF when manual floor editing replaces the automatic
+    /// decking.</summary>
     public void ClearDeck(int x, int y)
     {
         if (InBounds(x, y) && tiles[x * LotWalls.Size + y] == 0x10)
             tiles[x * LotWalls.Size + y] = NoPool;
     }
 
-    /// <summary>cPoolLayer::AddPool stores pool tiles below 0x10 and separately marks supported deck tiles.</summary>
     public void AddPool(int x, int y)
     {
         var cell = x * LotWalls.Size + y;
@@ -88,7 +85,8 @@ public sealed class LotPool
         }
     }
 
-    /// <summary>cPoolTool::AddDeck first clears old deck entries, then marks supported non-pool neighbours at 0x10.</summary>
+    /// <summary>Rebuilds pool decking by clearing existing deck entries and marking valid non-pool neighbor
+    /// tiles as decking (value 0x10).</summary>
     public void RebuildDeck(LotTiles lotTiles, LotTerrain terrain, LotWalls walls,
         Func<int, int, bool>? hasBlockingObject = null)
     {
@@ -154,7 +152,7 @@ public sealed class LotPool
 
     private static bool InBounds(int x, int y) => x is >= 0 and < LotWalls.Size && y is >= 0 and < LotWalls.Size;
 
-    /// <summary>Writes the Arry 9 pool/deck plane. Missing planes use the original 64x64 no-pool default.</summary>
+    /// <summary>Writes the Arry 9 pool and deck grid, using a 64x64 unpooled grid if no data was loaded.</summary>
     public IffFile WriteTo(IffFile lot)
     {
         const int elementSize = 1;

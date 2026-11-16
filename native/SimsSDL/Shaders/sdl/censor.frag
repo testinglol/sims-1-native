@@ -17,6 +17,8 @@ void main() {
     vec4 sampled = texelFetch(lotColor, sampleCoord, 0);
     uint h = uint(cell.x * 73856093 ^ cell.y * 19349663);
     h = (h ^ (h >> 13u)) * 1274126177u;
-    float dither = (float(h & 15u) - 8.0) / 255.0;
+    float lum = max(sampled.r, max(sampled.g, sampled.b));
+    float ditherScale = mix(0.25, 1.0, smoothstep(0.02, 0.25, lum));
+    float dither = (float(h & 15u) - 8.0) / 255.0 * ditherScale;
     color = vec4(clamp(sampled.rgb + dither, 0.0, 1.0), 1.0);
 }

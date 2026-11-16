@@ -1,9 +1,7 @@
 namespace SimsSDL.Client;
 
-/// <summary>
-/// The pack commands every front end offers: loading the enabled pack collection and the report, plugin trust and object
-/// GUID commands of <c>docs/PACKS.md</c>. They read content without creating a mount or starting the simulation.
-/// </summary>
+/// <summary>Provides content pack operations including loading packs, validating manifests and GUIDs, and
+/// managing plugin trust without mounting content.</summary>
 public static class PackTool
 {
     private static readonly JsonSerializerOptions IndentedCamelOptions = new()
@@ -23,20 +21,15 @@ public static class PackTool
         public sealed record AllocateObjectGuid(string PackId, string Name) : Command;
         public sealed record ReserveObjectGuid(string PackId, string Name) : Command;
 
-        /// <summary>
-        /// Checks every pack on its own and then together with the base game, reporting every problem instead of the first.
-        /// </summary>
+        /// <summary>Validates each pack individually and collectively with the base game, reporting all
+        /// discovered issues.</summary>
         public sealed record Validate : Command;
 
-        /// <summary>
-        /// Prepares a simulation content mount (the base game with the packs applied) in a new directory.
-        /// </summary>
         public sealed record Mount(string Path) : Command;
     }
 
-    /// <summary>
-    /// The game content with every child of <paramref name="packs"/> that holds a <c>pack.json</c>. A missing folder means no custom packs.
-    /// </summary>
+    /// <summary>Loads game content alongside custom packs discovered from subdirectories containing
+    /// <c>pack.json</c>.</summary>
     public static GameContent LoadContent(string game, string? packs)
     {
         ArgumentException.ThrowIfNullOrEmpty(game);
@@ -55,11 +48,8 @@ public static class PackTool
         return new GameContent(game, directories);
     }
 
-    /// <summary>
-    /// Author-time check of a pack folder: each pack is validated alone (manifest, files, plugin, panels, save migration),
-    /// then the readable packs together (dependencies, conflicts, object GUIDs), then with the base game (overrides, skins,
-    /// object and avatar resources). Returns the JSON report and whether it found no problems.
-    /// </summary>
+    /// <summary>Validates packs individually, against each other for dependency and GUID conflicts, and
+    /// against the base game for resource overrides.</summary>
     public static (byte[] Report, bool Valid) Validate(string game, string? packs)
     {
         ArgumentException.ThrowIfNullOrEmpty(game);
@@ -126,7 +116,6 @@ public static class PackTool
             }
         }
 
-        // Dependencies and duplicate ids are checked across the readable packs first so each is named on its own.
         var seen = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var entry in readable)
         {
@@ -164,7 +153,6 @@ public static class PackTool
             }
         }
 
-        // Each readable pack against the others and the base game: first alone, so a failure names its pack.
         var stackProblem = problems.Any(problem => string.Equals(problem["stage"], "together", StringComparison.Ordinal));
         foreach (var entry in readable)
         {
@@ -174,7 +162,6 @@ public static class PackTool
             }
             catch (Exception error)
             {
-                // A pack that needs another is fine on its own only if the dependency is present; judge it with the full set below.
                 var msg = ErrorMessage(error);
                 if (msg.Contains("requires", StringComparison.Ordinal))
                 {
@@ -208,7 +195,6 @@ public static class PackTool
             catch (Exception error)
             {
                 AddProblem("(all)", "base game", ErrorMessage(error));
-                // Find which pack alone already clashes with the base game.
                 foreach (var entry in readable)
                 {
                     PackStack? alone = null;
@@ -248,9 +234,6 @@ public static class PackTool
         return (reportBytes, problems.Count == 0);
     }
 
-    /// <summary>
-    /// Runs <paramref name="command"/> and returns its JSON output.
-    /// </summary>
     public static byte[] Run(Command command, GameContent content, string dataRoot)
     {
         ArgumentNullException.ThrowIfNull(command);
@@ -330,9 +313,6 @@ public static class PackTool
         }
     }
 
-    /// <summary>
-    /// The enabled plugins the player has not trusted yet, with their pack names, for a launch-time review.
-    /// </summary>
     public static IReadOnlyList<(PackPluginReport Plugin, string Name)> UntrustedPlugins(GameContent content, string dataRoot)
     {
         ArgumentNullException.ThrowIfNull(content);
@@ -364,9 +344,6 @@ public static class PackTool
         }
     }
 
-    /// <summary>
-    /// Records trust for exactly the reviewed plugin files.
-    /// </summary>
     public static void Trust(PackPluginReport plugin, string dataRoot)
     {
         ArgumentNullException.ThrowIfNull(plugin);

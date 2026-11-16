@@ -3,10 +3,6 @@ using NLayer;
 
 namespace SimsSDL;
 
-/// <summary>
-/// The host's voices, mixed on SDL's audio thread: decoded stereo float samples at the device rate, each with its gains,
-/// loop flag and position. Everything the audio thread reads is guarded by the lock.
-/// </summary>
 internal sealed class AudioMixer
 {
     public struct Voice
@@ -119,7 +115,6 @@ internal sealed class AudioMixer
         }
     }
 
-    /// <summary>Voices that played to their end since the last call.</summary>
     public List<long> TakeEnded()
     {
         lock (_lock)
@@ -132,7 +127,6 @@ internal sealed class AudioMixer
         }
     }
 
-    /// <summary>Fills <paramref name="frames"/> stereo frames and submits them to <paramref name="stream"/>; runs on SDL's audio thread.</summary>
     public unsafe void MixAndPut(nint stream, int frames)
     {
         if (frames <= 0)
@@ -224,10 +218,6 @@ internal sealed class AudioMixer
     }
 }
 
-/// <summary>
-/// Plays the simulation host's audio events through SDL:
-/// the host picks, routes and scales each sound and the client decodes, pans and mixes it.
-/// </summary>
 public sealed class SDLAudioPlayer : IDisposable
 {
     private const int Rate = 44_100;
@@ -285,7 +275,6 @@ public sealed class SDLAudioPlayer : IDisposable
         _ = SDL_ResumeAudioStreamDevice(_stream);
     }
 
-    /// <summary>SDL's stream callback, on the audio thread: tops the stream up with freshly mixed frames.</summary>
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void MixAudio(nint userdata, nint stream, int additional, int total)
     {
@@ -300,7 +289,6 @@ public sealed class SDLAudioPlayer : IDisposable
         }
         catch
         {
-            // Prevent exceptions from escaping an unmanaged SDL callback.
         }
     }
 
@@ -319,7 +307,8 @@ public sealed class SDLAudioPlayer : IDisposable
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
             return;
 
-        // Destroy the SDL stream before freeing _mixerHandle so the audio thread has stopped invoking MixAudio.
+        // Destroys the audio stream before freeing the mixer handle to guarantee the audio callback thread
+        // has stopped.
         nint stream = Interlocked.Exchange(ref _stream, nint.Zero);
         if (stream != nint.Zero)
             SDL_DestroyAudioStream(stream);
@@ -444,7 +433,6 @@ public sealed class SDLAudioPlayer : IDisposable
         _mixer.SetMuffle(Math.Clamp(gain, 0f, 1f), coefficient);
     }
 
-    /// <summary>Re-applies positions after the view moves, and reports voices that finished.</summary>
     public void UpdateSpatial()
     {
         foreach (var kv in _events)
@@ -466,7 +454,6 @@ public sealed class SDLAudioPlayer : IDisposable
         }
     }
 
-    /// <summary>The original's loading music, <c>Music/Modes/Load/loadloop.wav</c>, looped from the install folder (FUN_004fb49a).</summary>
     public void PlayLoadLoop(string path, float volume = 1f)
     {
         try
@@ -487,7 +474,6 @@ public sealed class SDLAudioPlayer : IDisposable
         }
         catch
         {
-            // Ignore unreadable or missing loading loop audio.
         }
     }
 
@@ -502,7 +488,6 @@ public sealed class SDLAudioPlayer : IDisposable
             _ = SDL_ClearAudioStream(stream);
     }
 
-    /// <summary>Decodes a WAV or MP3 file to interleaved stereo floats at the mixer rate; recent files stay cached.</summary>
     private unsafe float[] Decode(string path)
     {
         if (_cache.TryGetValue(path, out float[]? cached))
@@ -650,7 +635,6 @@ public sealed class SDLAudioPlayer : IDisposable
             }
             catch
             {
-                // Preserve best-effort normalized path if a segment cannot be resolved.
             }
         }
 

@@ -1,7 +1,7 @@
 namespace SimsEngine.Formats;
 
-/// <summary>Object definition (OBJD) field numbers. The chunk is an array of u16 fields; the names are the game's
-/// own, from Behavior.iff STR# 204 ("definition labels"), which lists one label per field in order.</summary>
+/// <summary>Defines 16-bit field indices of an object definition (OBJD) resource, corresponding to the
+/// definition labels in string table 204.</summary>
 public enum ObjdField
 {
     Version1 = 0,
@@ -29,7 +29,6 @@ public enum ObjdField
     DepreciationLimit = 38,
     RoomSort = 39,
     FunctionSort = 40,
-    /// <summary>The catalog category bitmask in OBJD field 40, called FunctionFlags in the original resource format.</summary>
     FunctionFlags = FunctionSort,
     CatalogStringsId = 41,
     IsGlobalSimObject = 42,
@@ -39,7 +38,7 @@ public enum ObjdField
     CatalogPopupId = 54,
     LevelOffset = 56,
     Shadow = 57,
-    /// <summary>Signed per-object adjustment to the generated floor-shadow palette.</summary>
+    /// <summary>Signed per-object adjustment applied to the generated floor shadow palette.</summary>
     ShadowBrightness = 79,
     NumAttributes = 58,
     FrontDirection = 61,
@@ -54,17 +53,15 @@ public enum ObjdField
     OriginalGuid2 = 71,
     SuitGuid1 = 72,
     SuitGuid2 = 73,
-    /// <summary>The packed four-nibble footprint extent mask (type-record +0x9a, read by FUN_00433dbb).</summary>
+    /// <summary>A packed four-nibble bitmask defining the object's footprint extents.</summary>
     FootprintMask = 77,
-    /// <summary>The residential lot catalog subsort bit mask at OBJD field 94 (installed seating objects carry 1, 2, 4, 8 and 128).</summary>
+    /// <summary>Catalog subcategory bitmask used to filter objects within a primary function category.</summary>
     FunctionSubsort = 94,
-    /// <summary>The VitaBoy flags word read by Mac SAnimator::UpdateBackgroundPractice at OBJD byte offset 0xCC.</summary>
     VitaBoyFlags = 102,
-    /// <summary>Signed draw-group selector returned by Mac ObjSelector::GetThumbnailGraphicIndex (OBJD byte offset 0x96).</summary>
+    /// <summary>Specifies the signed draw group index used for catalog thumbnails.</summary>
     ThumbnailGraphic = 75,
 }
 
-/// <summary>An object definition (OBJD): the u16 fields of one object, read by number as the game does.</summary>
 public sealed class Objd
 {
     private readonly ushort[] _fields;
@@ -82,22 +79,23 @@ public sealed class Objd
         return new Objd(fields);
     }
 
-    /// <summary>A field by number; fields past the end of an older, shorter definition read as 0.</summary>
+    /// <summary>Accesses a definition field by index, returning zero for fields beyond the end of truncated
+    /// legacy definitions.</summary>
     public ushort this[ObjdField field] => (int)field < _fields.Length ? _fields[(int)field] : (ushort)0;
 
     public uint Version => (uint)(this[ObjdField.Version1] | this[ObjdField.Version2] << 16);
     public uint Guid => (uint)(this[ObjdField.Guid1] | this[ObjdField.Guid2] << 16);
-    /// <summary>Mac GetThumbnailGraphicIndex reads this OBJD word as a signed short.</summary>
+    /// <summary>Gets the catalog thumbnail draw group index interpreted as a signed 16-bit integer.</summary>
     public short ThumbnailGraphicIndex => (int)ObjdField.ThumbnailGraphic < _fields.Length
         ? unchecked((short)_fields[(int)ObjdField.ThumbnailGraphic])
         : (short)0;
-    /// <summary>Mac DrawIconic renders the thumbnail from front direction + 4, wrapped to the eight directions.</summary>
+    /// <summary>Calculates the thumbnail viewing direction by offsetting the front direction by 180
+    /// degrees, evaluated as <c>(FrontDirection + 4) &amp; 7</c>.</summary>
     public int ThumbnailDirectionIndex => (unchecked((short)this[ObjdField.FrontDirection]) + 4) & 7;
 }
 
-/// <summary>An object function table (OBJf): for each object function (the OBJD "old tree id" slots in order), a
-/// guard tree and an action tree, 0 when absent. Layout from the files: two u32 zeros, the tag "fJBO", a u32
-/// count, then count pairs of u16 guard and u16 action.</summary>
+/// <summary>Represents an object function table (OBJf) resource. The binary chunk consists of two zero
+/// integers, the magic tag "fJBO", a count, and pairs of 16-bit guard and action behavior tree IDs.</summary>
 public sealed record Objf(IReadOnlyList<(ushort Guard, ushort Action)> Functions)
 {
     private static readonly int[] DefaultActionFunctionFields =
@@ -106,8 +104,8 @@ public sealed record Objf(IReadOnlyList<(ushort Guard, ushort Action)> Functions
         17, 6, 12, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 59, 80,
     ];
 
-    /// <summary>FUN_00456209: the 30 legacy entry points copied from these OBJD word offsets when no OBJf table is
-    /// used or available. The offsets are the original in-memory OBJD layout (two bytes per definition field).</summary>
+    /// <summary>Extracts the 30 legacy action entry point tree IDs directly from definition fields when an
+    /// OBJf resource is absent.</summary>
     public static IReadOnlyList<ushort> DefaultActionFunctions(Objd definition) =>
         DefaultActionFunctionFields.Select(field => definition.Fields.Count > field ? definition.Fields[field] : (ushort)0).ToArray();
 
@@ -135,8 +133,8 @@ public sealed record Objf(IReadOnlyList<(ushort Guard, ushort Action)> Functions
     }
 }
 
-/// <summary>The semi-global file an object file uses (GLOB). Sims.exe FUN_0043bb37 reads a zero-terminated name
-/// when the chunk's last byte is 0, and a length-prefixed name otherwise.</summary>
+/// <summary>Represents a semi-global reference (GLOB) chunk, storing the filename as a null-terminated
+/// string if the trailing byte is zero or as a length-prefixed string otherwise.</summary>
 public sealed record Glob(string Name)
 {
     public static Glob Read(IffFile file, IffChunk chunk)

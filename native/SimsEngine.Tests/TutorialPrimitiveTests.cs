@@ -5,7 +5,6 @@ namespace SimsEngine.Tests;
 
 public sealed class TutorialPrimitiveTests
 {
-    // Operand: byte 0 is the mode.
     private static byte[] Operand(byte mode) => [mode, 0, 0, 0, 0, 0, 0, 0];
 
     private static SimulationError Fails(Action action) => Assert.Throws<SimulationException>(action).Error;
@@ -52,7 +51,7 @@ public sealed class TutorialPrimitiveTests
         context.World.TutorialOwner = me;
         Assert.Equal(PrimitiveResult.True, TutorialPrimitive.Execute(context, Operand(1)));
         Assert.Null(context.World.TutorialOwner);
-        // The holder's dialog records are checked first (FUN_00444c08's loop), then the notice goes out.
+        // Dialog record state is verified before dispatching the tutorial notification.
         Assert.Equal(["DialogRecordState(100)", "SendNotice(263,0)"], host.Calls);
     }
 

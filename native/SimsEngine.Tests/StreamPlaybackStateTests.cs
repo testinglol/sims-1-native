@@ -3,7 +3,6 @@ using Xunit;
 
 namespace SimsEngine.Tests;
 
-/// <summary>Unit tests for A15 stream playback states, mode music transitions, and pause/resume lifecycle.</summary>
 public class StreamPlaybackStateTests
 {
     [Theory]
@@ -24,7 +23,6 @@ public class StreamPlaybackStateTests
     [InlineData("build", 95, "")]
     public void ModeMusicTransitions_SelectsCorrectTracksForNeighborhoodAndMode(string mode, short house, string expectedTrack)
     {
-        // Tests production SimulationServer.ModeMusic selection
         var result = SimulationServer.ModeMusic(mode, house);
         Assert.Equal(expectedTrack, result);
     }
@@ -42,7 +40,6 @@ public class StreamPlaybackStateTests
     [InlineData(10, "setambience_backyard")]
     public void LotAmbienceTransitions_SelectsCorrectAmbienceEventForHouse(short house, string expectedAmbience)
     {
-        // Tests production HitAudioRuntime.LotAmbienceEvent
         var ambienceEvent = HitAudioRuntime.LotAmbienceEvent(house);
         Assert.Equal(expectedAmbience, ambienceEvent);
     }
@@ -56,11 +53,9 @@ public class StreamPlaybackStateTests
             if (msg is not null) messages.Add(msg);
         });
 
-        // Mode music stream (bkground_buy1)
         var buyTrack = SimulationServer.ModeMusic("buy", 5);
         audio.Play(buyTrack);
 
-        // Lot ambience stream (setambience_beach)
         audio.PlayLotAmbience(28);
 
         Assert.Equal(2, messages.Count);
@@ -92,18 +87,15 @@ public class StreamPlaybackStateTests
             if (cmd is not null) commands.Add(cmd);
         });
 
-        // Start background streams
         audio.Play("bkground_buy1");
         audio.PlayLotAmbience(5);
 
         Assert.Equal(2, audio.ActiveVoiceCount);
         Assert.Equal(2, commands.Count(c => c == "play"));
 
-        // Pause simulation / open modal dialog
         audio.SetPaused(true);
         Assert.Equal(2, commands.Count(c => c == "pause"));
 
-        // Resume simulation / dismiss dialog
         audio.SetPaused(false);
         Assert.Equal(2, commands.Count(c => c == "resume"));
 
@@ -122,7 +114,6 @@ public class StreamPlaybackStateTests
 
         audio.Play("bkground_live");
 
-        // Set volume on MUSIC group
         audio.SetVolume("MUSIC", 0.5f);
 
         Assert.Single(updateCommands);

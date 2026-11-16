@@ -1,11 +1,9 @@
 namespace SimsEngine.Formats;
 
-/// <summary>One palette entry.</summary>
 public readonly record struct PaletteColor(byte Red, byte Green, byte Blue);
 
-/// <summary>A sprite palette (PALT), read by Sims.exe FUN_004b9685 when FUN_004c915f loads a file's palettes: a u32
-/// version, a u32 colour count, eight bytes Sims.exe does not read, then three bytes (red, green, blue) per colour.
-/// Sims.exe trusts the count; here a count that runs past the data is an error.</summary>
+/// <summary>Represents a sprite palette (PALT) chunk, consisting of a version, color count, eight reserved
+/// bytes, and RGB color triples.</summary>
 public sealed class Palette
 {
     public uint Version { get; }

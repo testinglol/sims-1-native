@@ -3,9 +3,8 @@ using SimsEngine.Simulation;
 
 namespace SimsSimulation;
 
-/// <summary>Supplies the source-defined active-family budget to the native SimAntics world. Sims.exe
-/// FUN_0046d9e5/FUN_0046da38 read and update the global budget, including the Simless Build Mode override.
-/// The parsed Sims.exe FAMI record is written back to its original neighborhood chunk when the user saves.</summary>
+/// <summary>Maintains the active household funds for the simulation world, updating the underlying family
+/// record upon saving.</summary>
 internal sealed class FamilyBudget : IFamilyBudget
 {
     private readonly int[] expenseTotals = new int[9];
@@ -13,7 +12,7 @@ internal sealed class FamilyBudget : IFamilyBudget
     private Family? family;
     private IReadOnlyList<int>? activePersonKeysOverride;
     public ushort? FamilyChunkId { get; }
-    /// <summary>The selected FAMI record and its ordered member-key vector, which backs GenericSimsCall's active-person manager.</summary>
+    /// <summary>The active family record containing household funds and member identifier keys.</summary>
     public Family? ActiveFamily
     {
         get => family;
@@ -40,7 +39,6 @@ internal sealed class FamilyBudget : IFamilyBudget
         else
             world.ActivePersonRecordKeys.AddRange(family!.Members.Select(member => unchecked((int)member)));
     }
-
 
     public FamilyBudget(SimulationWorld world, Family? family, ushort? familyChunkId)
     {
@@ -73,8 +71,7 @@ internal sealed class FamilyBudget : IFamilyBudget
         SaveCurrentBudgetDay();
         world[SimulationGlobal.BudgetMod10000] = unchecked((short)(family.Budget % 10000));
         world[SimulationGlobal.BudgetDiv10000] = unchecked((short)(family.Budget / 10000));
-        // cSimulator::Spend/SetFunds send GlobalDispatch(0xda, funds), which cSimsApp::DoCommand
-        // uses to set its ResetTutorial save byte when the lot is interactive.
+        // Dispatches notice 0xDA with current funds to signal budget modifications.
         world.DispatchNotice(0xda, family.Budget);
     }
 

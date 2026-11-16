@@ -80,7 +80,7 @@ On **macOS**:
 ./tools/build_native_app.command
 
 # Build standalone arm64 release bundle & zip in dist/
-./tools/package_release.command 0.1.0
+./tools/package_release.command 0.2.0
 
 # Launch dev client against a local game directory (SIMS_GAME_DIR or runtime/game)
 SIMS_GAME_DIR="/path/to/The Sims 1" ./tools/play_sdl.command
@@ -90,14 +90,14 @@ On **Windows (PowerShell)**:
 
 ```powershell
 # Build standalone win-x64 release folder & zip in dist/
-pwsh -File tools/package_windows.ps1 -Version 0.1.0 -SdlDir C:\path\to\SDL3-3.x.y
+pwsh -File tools/package_windows.ps1 -Version 0.2.0 -SdlDir C:\path\to\SDL3-3.x.y
 ```
 
 On **Linux**:
 
 ```sh
 # Build standalone linux-x64 release folder & zip in dist/
-./tools/package_linux.sh 0.1.0
+./tools/package_linux.sh 0.2.0
 ```
 
 ### Running Tests

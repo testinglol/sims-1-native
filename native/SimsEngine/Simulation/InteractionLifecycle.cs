@@ -3,11 +3,8 @@ using SimsEngine.Formats;
 
 namespace SimsEngine.Simulation;
 
-/// <summary>
-/// Narrow native lifecycle operations for authored interactions. This is not a SimAntics opcode port: private BHAVs
-/// opt in through the repository-private NLCF resource, whose schema and operation mask are checked on every call.
-/// Lane ownership belongs to (rink object, actor object, active action sequence), never to the rink globally.
-/// </summary>
+/// <summary>Coordinates interaction lifecycle operations gated by resource capability masks, tracking lane
+/// ownership by actor, object, and action sequence.</summary>
 public sealed class InteractionLifecycle
 {
     public const ushort AcquireLaneOpcode = 0x00F0;
@@ -36,7 +33,6 @@ public sealed class InteractionLifecycle
     private readonly Dictionary<short, RinkState> _rinks = [];
     private readonly HashSet<(short Actor, int Sequence)> _exitRequests = [];
 
-    /// <summary>Dispatches only a private BHAV instruction guarded by this exact, versioned capability.</summary>
     public static PrimitiveResult Execute(in TreeContext context, BhavInstruction instruction)
     {
         if (context.Frame.Table is not BehaviorScope scope || !HasRinkCapability(scope.Private))
@@ -165,7 +161,7 @@ public sealed class InteractionLifecycle
             waiter = state.Waiters.Last();
         }
         if (!ReferenceEquals(state.Waiters.Peek(), waiter) || state.UsedLanes.Count == state.LaneCount)
-            return PrimitiveResult.Stop; // Keep this exact BHAV instruction and retry on a later scheduler pass.
+            return PrimitiveResult.Stop; // Keep this BHAV instruction and retry on a later scheduler pass.
 
         state.Waiters.Dequeue();
         lane = Enumerable.Range(0, state.LaneCount).First(index => !state.UsedLanes.Contains(index));
@@ -206,8 +202,8 @@ public sealed class InteractionLifecycle
     public bool InterruptRequested(XPerson actor, int actionSequence) =>
         actor.ActiveActionCancelRequested || _exitRequests.Contains((actor.Id, actionSequence));
 
-    /// <summary>Requests the authored exit-check interrupt only for an action that currently owns a lane.
-    /// Returning false leaves ordinary actions and lane waiters on the engine's hard-cancel path.</summary>
+    /// <summary>Requests an authored exit-check interrupt for the action currently owning a lane, leaving
+    /// other actions on the immediate cancellation path.</summary>
     public bool TryRequestGracefulExit(XPerson actor, int actionSequence)
     {
         if (!_rinks.Values.Any(state => state.Leases.TryGetValue(actor.Id, out var lease) &&

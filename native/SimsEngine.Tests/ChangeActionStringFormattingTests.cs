@@ -22,7 +22,7 @@ public class ChangeActionStringFormattingTests
 
         host.Strings[(100, 0)] = "Hello $Me, look at %s for %d minutes!";
 
-        var operand = new byte[] { 100, 0, 0, 0, 1 }; // Table 100, Entry 1 (1-based -> 0)
+        var operand = new byte[] { 100, 0, 0, 0, 1 };
         var result = ChangeActionStringPrimitive.Execute(context, operand);
 
         Assert.Equal(PrimitiveResult.True, result);
@@ -75,7 +75,6 @@ public class ChangeActionStringFormattingTests
     public void NestedSubroutineSuppressionLeavesRecordUntouched()
     {
         var (context, me, host) = PrimitiveTestWorld.Create();
-        // Emulate nested BHAV call where ActionStringRecordWriteEnabled is cleared
         context.World.ActionStringRecordWriteEnabled = false;
 
         host.Strings[(103, 0)] = "Nested text should not overwrite record";
@@ -101,12 +100,10 @@ public class ChangeActionStringFormattingTests
 
         Assert.Equal(PrimitiveResult.True, result);
 
-        // Record updated with flag 0x80
         Assert.NotNull(me.CurrentActionRecord);
         Assert.Equal("Dual update message", me.CurrentActionRecord.ActionText);
         Assert.Equal(0x80, me.CurrentActionRecord.Flags & 0x80);
 
-        // Host callback received
         Assert.Contains(host.Calls, c => c.StartsWith("ChangeActionString") && c.Contains("Dual update message"));
     }
 }

@@ -49,7 +49,6 @@ internal static class PackContentPaths
         {
             return norm;
         }
-        // Keep drive roots like "C:/" intact on Windows.
         if (OperatingSystem.IsWindows() && norm.Length == 3 && norm[1] == ':' && norm[2] == '/')
         {
             return norm;
@@ -90,14 +89,14 @@ internal static class PackContentPaths
             {
                 return true;
             }
-            if ((info.Attributes & FileAttributes.ReparsePoint) != 0)
+            var attrs = info.Attributes;
+            if (attrs != (FileAttributes)(-1) && (attrs & FileAttributes.ReparsePoint) != 0)
             {
                 return true;
             }
         }
         catch
         {
-            // Fall through if entry does not exist or cannot be inspected as a file.
         }
 
         try
@@ -107,14 +106,14 @@ internal static class PackContentPaths
             {
                 return true;
             }
-            if ((dirInfo.Attributes & FileAttributes.ReparsePoint) != 0)
+            var dirAttrs = dirInfo.Attributes;
+            if (dirAttrs != (FileAttributes)(-1) && (dirAttrs & FileAttributes.ReparsePoint) != 0)
             {
                 return true;
             }
         }
         catch
         {
-            // Ignore when absent.
         }
 
         return false;
@@ -140,7 +139,6 @@ internal static class PackContentPaths
             }
             catch
             {
-                // Ignore if stat fails; caller will handle entry inspection.
             }
         }
 
@@ -250,7 +248,6 @@ internal static class PackContentPaths
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            // Broken symlink or intermediate missing: resolve step-by-step for escape validation.
         }
 
         var current = path;
@@ -391,17 +388,14 @@ public sealed class PackManifest
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Dictionary<string, uint>? ObjectGUIDs { get; set; }
 
-    /// <summary>Code-bearing gameplay plugin; loaded only after an explicit local trust action.</summary>
     [JsonPropertyName("plugin")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public PluginDeclaration? Plugin { get; set; }
 
-    /// <summary>Pack-relative declarative panel descriptions under <c>panels/</c>.</summary>
     [JsonPropertyName("panels")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyList<string>? Panels { get; set; }
 
-    /// <summary>Earlier pack versions whose native saves this version accepts.</summary>
     [JsonPropertyName("saveMigration")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public SaveMigration? SaveMigration { get; set; }
@@ -426,7 +420,6 @@ public sealed partial class ContentPack
     public PackManifest Manifest { get; }
     public IReadOnlyDictionary<string, string> Assets { get; }
 
-    /// <summary>The path each asset was authored with under <c>files/</c>, for creating new folders with the author's capitalisation.</summary>
     internal IReadOnlyDictionary<string, string> AuthoredPaths { get; }
 
     public string? PluginAssembly { get; }
@@ -537,10 +530,9 @@ public sealed partial class ContentPack
         }
     }
 
-    /// <summary>
-    /// A pack-provided town: <c>UserData2</c> through <c>UserData99</c> hold a numbered neighborhood the way the
-    /// Complete Collection does. Plain <c>UserData</c> (neighborhood 1) belongs to the base game and cannot be added by a pack.
-    /// </summary>
+    /// <summary>Checks whether a directory defines a custom neighborhood. Folders <c>UserData2</c> through
+    /// <c>UserData99</c> supply numbered neighborhoods, while base <c>UserData</c> is reserved for the
+    /// primary neighborhood.</summary>
     internal static bool IsTownRoot(string root)
     {
         if (!root.StartsWith("userdata", StringComparison.Ordinal))
@@ -563,7 +555,6 @@ public sealed partial class PackStack
     public IReadOnlyList<ContentPack> Ordered { get; }
     public IReadOnlyDictionary<string, string> Assets { get; }
 
-    /// <summary>Authored capitalisation of each winning asset (see <see cref="ContentPack.AuthoredPaths"/>).</summary>
     internal IReadOnlyDictionary<string, string> AuthoredPaths { get; }
 
     public IReadOnlyList<PackObjectDefinition> Objects { get; }
@@ -651,7 +642,6 @@ public sealed partial class PackStack
         AvatarResources = avatarDefinitions;
         AvatarContainers = avatarContainers;
 
-        // A town's houses and characters are neighborhood data, not object definitions.
         var objectAssets = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var (k, v) in resources)
         {

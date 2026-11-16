@@ -153,10 +153,8 @@ public sealed class TerrainBrushGesture
         }
     }
 
-    /// <summary>
-    /// Returns grass tiles visited since the last drain and advances the flushed cursor
-    /// so live strokes are not double-charged on release.
-    /// </summary>
+    /// <summary>Returns grass tiles visited since the last drain and advances the flushed cursor so live
+    /// strokes are not double-charged on release.</summary>
     public List<GroundTile> DrainPendingGrassSamples()
     {
         if (Start is null)
@@ -321,10 +319,8 @@ public static class TerrainBrushRequest
         }
     }
 
-    /// <summary>
-    /// Builds a <c>TERRAIN_RAISE</c> command relative to the drag-start vertex height
-    /// so streaming terrain updates mid-drag do not compound.
-    /// </summary>
+    /// <summary>Builds a terrain raise command relative to the drag-start vertex height so streaming
+    /// updates mid-drag do not compound.</summary>
     public static ArchitectureCommandRequest MakeLiveRaise(
         TerrainBrushMode mode,
         GroundTile vertex,

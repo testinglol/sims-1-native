@@ -36,12 +36,11 @@ public sealed class SimAnticsRuntimeThreadResolutionTests
     public void Version73Format4NeighborsReadFull256ShortPersonDataWithoutDrift()
     {
         var builder = Persist(0x49, "NBRS").U32(2)
-            // Slot 0: Mortimer (Format 4, 256 shorts of person data)
+            // Format 4 person records store 256 16-bit words of character data.
             .U32(1).S32(4).EvenString("Mortimer").S32(0).S32(1);
         for (var i = 0; i < 0x100; i++) builder.S16((short)i);
         builder.S16(34).U32(0xC07F6184)
             .S32(-1).U32(0)
-            // Slot 1: Bella (Format 4, 256 shorts of person data)
             .U32(1).S32(4).EvenString("Bella").S32(0).S32(1);
         for (var i = 0; i < 0x100; i++) builder.S16((short)(i + 100));
         builder.S16(33).U32(0x807F6184)
@@ -90,18 +89,16 @@ public sealed class SimAnticsRuntimeThreadResolutionTests
         world.Neighbors[34] = mortimerNeighbor;
         world.Neighbors[32] = cassandraNeighbor;
 
-        // NeighborWalkOrder has slots: slot 1 is cassandra, slot 2 is mortimer
-        world.NeighborWalkOrder.Add(cassandraNeighbor); // slot 1 (1-based)
-        world.NeighborWalkOrder.Add(mortimerNeighbor);  // slot 2 (1-based)
+        world.NeighborWalkOrder.Add(cassandraNeighbor);
+        world.NeighborWalkOrder.Add(mortimerNeighbor);
 
-        // StackObject is 1 (the 1-based walk order slot from SetToNext mode 5)
+        // SetToNext mode 5 sets the stack object to 1-based neighbor walk order slots.
         var context = new TreeContext(world, mortimer, new StackFrame(2, [], [0, 0]) { StackObject = 1 });
 
-        // Set initial relationship
         mortimerNeighbor.Relationships.Resize(32, 1);
         mortimerNeighbor.Relationships.Set(32, 0, 85);
 
-        // Opcode 0x1A: mode 0, flags 2 (read neighbor relation), index 0, local 0, temporary 0
+        // Relationship opcode 0x1A flag 2 reads the neighbor relationship value into the target variable.
         byte[] operand = [0, 0, 2, 0, (byte)DataOwner.Temporary, 0, 0, 0];
         var result = RelationshipPrimitive.Execute(context, operand);
 
@@ -114,9 +111,8 @@ public sealed class SimAnticsRuntimeThreadResolutionTests
     {
         var world = new SimulationWorld();
         var person = world.Add(new XPerson(1, PrimitiveTestWorld.Definition(2)));
-        
-        // Create an action guard BHAV that throws Error 21 (NoStackObjectPresentWhenRequired)
-        // using opcode 0x1A with an invalid stack object (stack object 99 not in world)
+
+        // Opcode 0x1A raises error 21 when a required stack object is missing from the world.
         byte[] relOperand = [0, 0, 2, 0, (byte)DataOwner.Temporary, 0, 0, 0];
         var tree = Tree((0x1A, BhavInstruction.ReturnTrue, BhavInstruction.ReturnFalse, relOperand));
 
@@ -136,8 +132,8 @@ public sealed class SimAnticsRuntimeThreadResolutionTests
             InteractionId = 7
         };
 
-        // When evaluating the interaction guard, it should catch the exception, set passed = false,
-        // and record it in InteractionGuardErrors without crashing the person's thread.
+        // Exceptions during interaction guard evaluation fail the interaction check and record the error
+        // without terminating the sim thread.
         InteractionTestEvaluator.Evaluate(world, person, [action], autonomy: true);
 
         Assert.False((action.Flags & InteractionTestEvaluator.Passed) != 0);
