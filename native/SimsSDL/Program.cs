@@ -7,9 +7,9 @@ internal sealed class Options
 {
     public string? Scene { get; set; }
     public string? Png { get; set; }
-    public int Width { get; set; } = 1280;
-    public int Height { get; set; } = 960;
-    public LotZoom Zoom { get; set; } = LotZoom.Near;
+    public int Width { get; set; } = 1160;
+    public int Height { get; set; } = 820;
+    public LotZoom Zoom { get; set; } = LotZoom.Medium;
 
     public float? Scale { get; set; }
 
@@ -824,9 +824,33 @@ internal static unsafe partial class Program
                                 break;
 
                             case SDL_EVENT_KEY_DOWN:
+                            {
+                                ushort mods = SDL_GetModState();
+                                if ((mods & (SDL_KMOD_GUI | SDL_KMOD_CTRL)) != 0)
+                                {
+                                    if (ev.key_key is 0x2Du or SDLK_KP_MINUS)
+                                    {
+                                        float nextScale = MathF.Round(Math.Clamp(renderer.UIScale - 0.15f, 0.75f, 3.5f), 2);
+                                        options.Scale = nextScale;
+                                        renderer.UIScale = nextScale;
+                                        break;
+                                    }
+                                    if (ev.key_key is 0x3Du or 0x2Bu or SDLK_KP_PLUS)
+                                    {
+                                        float nextScale = MathF.Round(Math.Clamp(renderer.UIScale + 0.15f, 0.75f, 3.5f), 2);
+                                        options.Scale = nextScale;
+                                        renderer.UIScale = nextScale;
+                                        break;
+                                    }
+                                    if (ev.key_key is 0x30u or SDLK_KP_0)
+                                    {
+                                        options.Scale = null;
+                                        renderer.UIScale = LiveUI.AutomaticUIScale((int)width, (int)height, density);
+                                        break;
+                                    }
+                                }
                                 if (live is not null)
                                 {
-                                    ushort mods = SDL_GetModState();
                                     live.DeleteModifier = (mods & (SDL_KMOD_CTRL | SDL_KMOD_ALT)) != 0;
                                     if (MapLiveKey(ev.key_key) is { } key && live.HandleKeyDown(key))
                                     {
@@ -907,6 +931,7 @@ internal static unsafe partial class Program
                                     running = false;
                                 }
                                 break;
+                            }
 
                             case SDL_EVENT_TEXT_INPUT:
                                 if (live is not null && ev.text_text != nint.Zero)

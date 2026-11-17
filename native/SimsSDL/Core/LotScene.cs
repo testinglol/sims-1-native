@@ -1661,10 +1661,30 @@ public sealed record LotScene
             {
                 acc = Path.Combine(acc, segment);
                 FileSystemInfo? target = null;
-                if (File.Exists(acc))
+                if (OperatingSystem.IsWindows())
+                {
+                    try
+                    {
+                        var attrs = File.GetAttributes(acc);
+                        if (attrs != (FileAttributes)(-1) && (attrs & FileAttributes.ReparsePoint) != 0)
+                        {
+                            target = (attrs & FileAttributes.Directory) != 0
+                                ? Directory.ResolveLinkTarget(acc, returnFinalTarget: true)
+                                : File.ResolveLinkTarget(acc, returnFinalTarget: true);
+                        }
+                    }
+                    catch
+                    {
+                    }
+                }
+                else if (File.Exists(acc))
+                {
                     target = File.ResolveLinkTarget(acc, returnFinalTarget: true);
+                }
                 else if (Directory.Exists(acc))
+                {
                     target = Directory.ResolveLinkTarget(acc, returnFinalTarget: true);
+                }
 
                 if (target is not null)
                 {

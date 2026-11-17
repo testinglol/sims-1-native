@@ -184,11 +184,8 @@ public sealed class OriginalPhotoAlbumOverlay
         }
     }
 
-    private OriginalGameplayOverlay.Image Label(string value)
-    {
-        var raster = _font.Rasterize(value, (255, 255, 255));
-        return OriginalGameplayOverlay.CreateImage(_device, raster.Width, raster.Height, raster.Rgba);
-    }
+    private OriginalGameplayOverlay.Image Label(string value) =>
+        OriginalGameplayOverlay.CreateImage(_device, _font.RasterizeHiDpi(value, (255, 255, 255)));
 
     private void RebuildCaptionImages()
     {
@@ -417,8 +414,7 @@ public sealed class OriginalPhotoAlbumOverlay
             }
             else
             {
-                var raster = PlacementTooltip.Rasterize(_tooltipText, _font);
-                image = OriginalGameplayOverlay.CreateImage(_device, raster.Width, raster.Height, raster.Rgba);
+                image = OriginalGameplayOverlay.CreateImage(_device, PlacementTooltip.RasterizeHiDpi(_tooltipText, _font));
                 _tooltipImage = (_tooltipText, image);
             }
 

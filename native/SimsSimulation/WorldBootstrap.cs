@@ -314,18 +314,28 @@ public static class ExpansionBootstrap
             }
             if (existing.Length > 0) continue;
 
-            if (masterId != 0 && world.ObjectGroupFactory is not null)
+            XObject? instance = null;
+            try
             {
-                _ = world.ObjectGroupFactory(guid);
-                continue;
-            }
+                if (masterId != 0 && world.ObjectGroupFactory is not null)
+                {
+                    _ = world.ObjectGroupFactory(guid);
+                    continue;
+                }
 
-            var instance = world.ObjectFactory(guid);
-            if (instance is null) continue;
-            if (!world.WalkOrder.Contains(instance)) world.Add(instance);
-            world.InitializeCreatedObject(instance);
-            if (SimulationWorld.FunctionTreeId(instance, 2) is var loadTree && loadTree != 0 && guid != unchecked((int)0x8963D7C1))
-                world.RunFunctionToCompletion(instance, 2);
+                instance = world.ObjectFactory(guid);
+                if (instance is null) continue;
+                if (!world.WalkOrder.Contains(instance)) world.Add(instance);
+                world.InitializeCreatedObject(instance);
+                if (SimulationWorld.FunctionTreeId(instance, 2) is var loadTree && loadTree != 0 && guid != unchecked((int)0x8963D7C1))
+                    world.RunFunctionToCompletion(instance, 2);
+            }
+            catch (Exception error) when (error is ResourceFormatException or InvalidDataException or NotSupportedException or ArgumentException)
+            {
+                if (instance is not null)
+                    world.Remove(instance.Id);
+                Console.Error.WriteLine($"Native load: skipping incompatible global object {entry.Chunk.Label} (0x{entry.Guid:X8}) in {entry.File.Source}: {error.Message}");
+            }
         }
         if (world.PendingRemovals.Count > 0)
         {

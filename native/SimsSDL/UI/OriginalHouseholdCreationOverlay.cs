@@ -383,8 +383,7 @@ public sealed class OriginalHouseholdCreationOverlay
         SimsBitmapFont targetFont = BitmapFont(slot);
         try
         {
-            var raster = targetFont.Rasterize(value, resolved);
-            OriginalGameplayOverlay.Image image = Upload(_device, raster.Width, raster.Height, raster.Rgba);
+            OriginalGameplayOverlay.Image image = OriginalGameplayOverlay.CreateImage(_device, targetFont.RasterizeHiDpi(value, resolved));
             _textImages[key] = image;
             return image;
         }
@@ -854,8 +853,7 @@ public sealed class OriginalHouseholdCreationOverlay
         {
             try
             {
-                var raster = PlacementTooltip.Rasterize(_rolloverTipText, _tooltipFont);
-                image = OriginalGameplayOverlay.CreateImage(_device, raster.Width, raster.Height, raster.Rgba);
+                image = OriginalGameplayOverlay.CreateImage(_device, PlacementTooltip.RasterizeHiDpi(_rolloverTipText, _tooltipFont));
                 _rolloverTipCache[_rolloverTipText] = image;
             }
             catch

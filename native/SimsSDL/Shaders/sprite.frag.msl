@@ -309,16 +309,18 @@ fragment main0_out main0(main0_in in [[stage_in]], texture2d<float> art [[textur
                 _856 = _850;
             }
             bool fullTexture = _856;
-            float4 _860;
             if (fullTexture)
             {
-                _860 = art.sample(artSmplr, clampedUV);
+                out.color = art.sample(artSmplr, clampedUV) * in.inTint;
             }
             else
             {
-                _860 = art.sample(artSmplr, clampedUV, level(0.0));
+                float lod = fast::max(0.0, log2(fast::max(fw.x, fw.y)));
+                float2 mipHalf = float2(0.5 * exp2(lod)) / texSize;
+                float2 sMin = in.inUVRect.xy + mipHalf;
+                float2 sMax = fast::max(sMin, (in.inUVRect.xy + in.inUVRect.zw) - mipHalf);
+                out.color = art.sample(artSmplr, fast::clamp(in.inUV, sMin, sMax), level(lod)) * in.inTint;
             }
-            out.color = _860 * in.inTint;
             return out;
         }
         if (fast::min(fw.x, fw.y) > 0.920000016689300537109375)
@@ -326,25 +328,25 @@ fragment main0_out main0(main0_in in [[stage_in]], texture2d<float> art [[textur
             float2 i = floor(texel + float2(0.5));
             float2 f = texel - i;
             float2 sharp = (i + fast::clamp(f / fw, float2(-0.5), float2(0.5))) / texSize;
-            float _908;
+            float _942;
             if (fw.x <= 1.0)
             {
-                _908 = sharp.x;
+                _942 = sharp.x;
             }
             else
             {
-                _908 = in.inUV.x;
+                _942 = in.inUV.x;
             }
-            float _920;
+            float _954;
             if (fw.y <= 1.0)
             {
-                _920 = sharp.y;
+                _954 = sharp.y;
             }
             else
             {
-                _920 = in.inUV.y;
+                _954 = in.inUV.y;
             }
-            float2 uv = fast::clamp(float2(_908, _920), minUV, maxUV);
+            float2 uv = fast::clamp(float2(_942, _954), minUV, maxUV);
             out.color = art.sample(artSmplr, uv, level(0.0)) * in.inTint;
             return out;
         }
@@ -359,47 +361,47 @@ fragment main0_out main0(main0_in in [[stage_in]], texture2d<float> art [[textur
         float4 param_5;
         float4 param_6;
         float4 param_7;
-        float4 _969 = sampleBeveled(param, param_1, param_2, param_3, param_4, param_5, param_6, param_7, art, artSmplr);
+        float4 _1003 = sampleBeveled(param, param_1, param_2, param_3, param_4, param_5, param_6, param_7, art, artSmplr);
         float4 c00 = param_4;
         float4 c10 = param_5;
         float4 c01 = param_6;
         float4 c11 = param_7;
-        float4 beveled = _969;
+        float4 beveled = _1003;
         float param_8 = f_1.x;
         float4 wx = catmullRomWeights(param_8);
         float param_9 = f_1.y;
         float4 wy = catmullRomWeights(param_9);
         float4 bicubic = float4(0.0);
-        float _998;
-        float _1006;
-        float _1014;
+        float _1032;
+        float _1040;
+        float _1048;
         for (int dy = -1; dy <= 2; dy++)
         {
             if (dy == (-1))
             {
-                _998 = wy.x;
+                _1032 = wy.x;
             }
             else
             {
                 if (dy == 0)
                 {
-                    _1006 = wy.y;
+                    _1040 = wy.y;
                 }
                 else
                 {
                     if (dy == 1)
                     {
-                        _1014 = wy.z;
+                        _1048 = wy.z;
                     }
                     else
                     {
-                        _1014 = wy.w;
+                        _1048 = wy.w;
                     }
-                    _1006 = _1014;
+                    _1040 = _1048;
                 }
-                _998 = _1006;
+                _1032 = _1040;
             }
-            float ry = _998;
+            float ry = _1032;
             int2 param_10 = minTexel;
             int2 param_11 = maxTexel;
             int2 param_12 = i0 + int2(-1, dy);
@@ -455,11 +457,11 @@ fragment main0_out main0(main0_in in [[stage_in]], texture2d<float> art [[textur
     float4 param_35;
     float4 param_36;
     float4 param_37;
-    float4 _1205 = sampleBeveled(param_30, param_31, param_32, param_33, param_34, param_35, param_36, param_37, art, artSmplr);
+    float4 _1239 = sampleBeveled(param_30, param_31, param_32, param_33, param_34, param_35, param_36, param_37, art, artSmplr);
     float4 lc00 = param_34;
     float4 lc10 = param_35;
     float4 lc01 = param_36;
     float4 lc11 = param_37;
-    out.color = _1205 * in.inTint;
+    out.color = _1239 * in.inTint;
     return out;
 }

@@ -619,36 +619,7 @@ public sealed class LotRenderer : IDisposable
     private static string CacheTexturePath(string rootDir, string file) =>
         Path.GetFullPath(Path.Combine(rootDir, file.Replace('\\', Path.DirectorySeparatorChar).Replace('/', Path.DirectorySeparatorChar)));
 
-    private static string ResolveRealPath(string path)
-    {
-        string fullPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
-        try
-        {
-            string? parent = Path.GetDirectoryName(fullPath);
-            string leaf = Path.GetFileName(fullPath);
-            if (!string.IsNullOrEmpty(parent) && !string.IsNullOrEmpty(leaf))
-            {
-                fullPath = Path.Combine(ResolveRealPath(parent), leaf);
-            }
-
-            if (File.Exists(fullPath))
-            {
-                return Path.TrimEndingDirectorySeparator(
-                    File.ResolveLinkTarget(fullPath, returnFinalTarget: true)?.FullName ?? fullPath);
-            }
-
-            if (Directory.Exists(fullPath))
-            {
-                return Path.TrimEndingDirectorySeparator(
-                    Directory.ResolveLinkTarget(fullPath, returnFinalTarget: true)?.FullName ?? fullPath);
-            }
-        }
-        catch
-        {
-        }
-
-        return fullPath;
-    }
+    private static string ResolveRealPath(string path) => LotScene.ResolveRealPath(path);
 
     public void LoadScene(string path, long revision = 0)
     {
@@ -2980,14 +2951,17 @@ public sealed class LotRenderer : IDisposable
                     SDL_BindGPUVertexStorageBuffers(pass, 0, &handle, 1);
                 }
 
-                var transform = new Quad(new Vector4(viewport.Origin.X, viewport.Origin.Y, viewport.Scale, viewport.Scale), canvas);
+                var transform = new Quad(new Vector4(viewport.Origin.X, viewport.Origin.Y, viewport.Scale, viewport.Scale), canvas)
+                {
+                    DepthInterval = new Vector4(BitConverter.UInt32BitsToSingle(slice.FirstVertex), 0f, 0f, 0f),
+                };
                 if (CharacterDetail == 0)
                 {
                     transform.UvRect = new Vector4(1f, transform.UvRect.Y, transform.UvRect.Z, transform.UvRect.W);
                 }
 
                 SDL_PushGPUVertexUniformData(command, 0, (nint)(&transform), (uint)sizeof(Quad));
-                SDL_DrawGPUPrimitives(pass, slice.VertexCount, 1, slice.FirstVertex, 0);
+                SDL_DrawGPUPrimitives(pass, slice.VertexCount, 1, 0, 0);
             }
         }
         finally
@@ -3672,9 +3646,10 @@ public sealed class LotRenderer : IDisposable
                 {
                     Tint = tint,
                     UvRect = new Vector4(1f, 0f, 1f, 1f),
+                    DepthInterval = new Vector4(BitConverter.UInt32BitsToSingle(slice.FirstVertex), 0f, 0f, 0f),
                 };
                 SDL_PushGPUVertexUniformData(command, 0, (nint)(&quad), (uint)sizeof(Quad));
-                SDL_DrawGPUPrimitives(pass, slice.VertexCount, 1, slice.FirstVertex, 0);
+                SDL_DrawGPUPrimitives(pass, slice.VertexCount, 1, 0, 0);
             }
         }
 
@@ -4057,10 +4032,11 @@ public sealed class LotRenderer : IDisposable
                 var transform = new Quad(new Vector4(origin.X, origin.Y, scale, scale), canvas)
                 {
                     Tint = batch.Tint,
+                    DepthInterval = new Vector4(BitConverter.UInt32BitsToSingle(batch.FirstVertex), 0f, 0f, 0f),
                 };
                 transform.UvRect = new Vector4(batch.UVRectX, transform.UvRect.Y, transform.UvRect.Z, transform.UvRect.W);
                 Push(in transform);
-                SDL_DrawGPUPrimitives(pass, batch.VertexCount, 1, batch.FirstVertex, 0);
+                SDL_DrawGPUPrimitives(pass, batch.VertexCount, 1, 0, 0);
             }
 
             bool hasDepthSprites = false;

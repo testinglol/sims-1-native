@@ -81,11 +81,8 @@ public sealed class OriginalCreditsOverlay
             }
         }
 
-        OriginalGameplayOverlay.Image Render(string value, SimsBitmapFont targetFont, (byte R, byte G, byte B) color)
-        {
-            var raster = targetFont.Rasterize(value, color);
-            return OriginalGameplayOverlay.CreateImage(device, raster.Width, raster.Height, raster.Rgba);
-        }
+        OriginalGameplayOverlay.Image Render(string value, SimsBitmapFont targetFont, (byte R, byte G, byte B) color) =>
+            OriginalGameplayOverlay.CreateImage(device, targetFont.RasterizeHiDpi(value, color));
 
         var creditsFont = LoadFont("UIGraphics/Fonts/variablesans_14.ffn");
         var buttonFont = LoadFont("UIGraphics/Fonts/variablesans_12.ffn");

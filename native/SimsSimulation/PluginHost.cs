@@ -568,7 +568,7 @@ internal sealed class PluginHost : IDisposable
                 ?? throw new InvalidDataException("Plugin resource is missing");
         }
         path = Path.GetFullPath(path);
-        if (!path.StartsWith(mountRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal) || !File.Exists(path))
+        if (!path.StartsWith(mountRoot + Path.DirectorySeparatorChar, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal) || !File.Exists(path))
             throw new InvalidDataException("Plugin resource escapes the mount or is missing");
         var hash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant();
         if (!seal.TryGetValue(normalized, out var expected) || hash != expected)

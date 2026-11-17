@@ -489,8 +489,7 @@ public sealed class OriginalBudgetReportOverlay
             try
             {
                 var anchor = rowRects[hoveredRow];
-                var raster = PlacementTooltip.Rasterize(tip, Font9);
-                var tipImage = OriginalGameplayOverlay.CreateImage(_device, raster.Width, raster.Height, raster.Rgba);
+                var tipImage = OriginalGameplayOverlay.CreateImage(_device, PlacementTooltip.RasterizeHiDpi(tip, Font9));
                 var tipRect = PlacementTooltip.Rect(tipImage.Size, new CGPoint(anchor.MidX, anchor.MinY - 1), canvas);
                 parts.Add(new OriginalGameplayOverlay.Part(tipImage, tipRect));
             }

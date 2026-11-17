@@ -80,6 +80,7 @@ public static unsafe partial class Sdl3Native
     public const ushort SDL_KMOD_SHIFT = 0x3;
     public const ushort SDL_KMOD_CTRL = 0xC0;
     public const ushort SDL_KMOD_ALT = 0x300;
+    public const ushort SDL_KMOD_GUI = 0x0C00;
 
     public const uint SDLK_RETURN = 0xDu;
     public const uint SDLK_ESCAPE = 0x1Bu;

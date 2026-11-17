@@ -638,6 +638,151 @@ public static class PlacementTooltip
         return (width, height, pixels);
     }
 
+    public static SimsBitmapFont.HiDpiRaster RasterizeHiDpi(string text, SimsBitmapFont font)
+    {
+        ArgumentNullException.ThrowIfNull(font);
+        if (text.Length > 8192)
+            throw new ContentError("Tooltip text exceeds size limits");
+
+        string normalized = text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace("\r", "\n", StringComparison.Ordinal);
+        string[] lines = normalized.Split('\n');
+        if (lines.Length > 512)
+            throw new ContentError("Tooltip text has too many lines");
+
+        var labels = new SimsBitmapFont.HiDpiRaster[lines.Length];
+        int maxLineWidth = 0;
+        for (int i = 0; i < lines.Length; i++)
+        {
+            labels[i] = font.RasterizeHiDpi(lines[i], (0, 0, 0), logicalMargin: 0);
+            maxLineWidth = Math.Max(maxLineWidth, font.TextWidth(lines[i]));
+        }
+
+        return CompositeTrimmedBoxHiDpi(labels, font, maxLineWidth, padXLogical: 3, padYLogical: 2);
+    }
+
+    public static SimsBitmapFont.HiDpiRaster RasterizeBoxHiDpi(
+        string label,
+        SimsBitmapFont font,
+        (byte R, byte G, byte B) textColor)
+    {
+        ArgumentNullException.ThrowIfNull(font);
+        var glyphs = font.RasterizeHiDpi(label, textColor, logicalMargin: 0);
+        return CompositeTrimmedBoxHiDpi([glyphs], font, font.TextWidth(label), padXLogical: 3, padYLogical: 2);
+    }
+
+    private static SimsBitmapFont.HiDpiRaster CompositeTrimmedBoxHiDpi(
+        SimsBitmapFont.HiDpiRaster[] lines,
+        SimsBitmapFont font,
+        int maxLineWidth,
+        int padXLogical,
+        int padYLogical)
+    {
+        int s = lines.Length > 0 && lines[0].LogicalHeight > 0
+            ? Math.Max(1, lines[0].PixelHeight / lines[0].LogicalHeight)
+            : (SimsBitmapFont.SharpTextEnabled ? SimsBitmapFont.HiDpiScale : 1);
+
+        int nominalTopPx = Math.Max(0, (int)MathF.Floor(font.CapTopPx * s));
+        int nominalBotPx = Math.Min(
+            font.LineHeight * s,
+            (int)MathF.Ceiling((font.CapBottomPx + Math.Max(1.8f, font.CapInkSpanPx * 0.28f)) * s));
+        if (nominalBotPx <= nominalTopPx)
+        {
+            nominalTopPx = 0;
+            nominalBotPx = Math.Max(1, font.LineHeight * s);
+        }
+
+        int lineStridePx = Math.Max(s, nominalBotPx - nominalTopPx + 2 * s);
+        int minInkY = nominalTopPx;
+        int maxInkY = nominalBotPx - 1;
+        for (int index = 0; index < lines.Length; index++)
+        {
+            var line = lines[index];
+            for (int sy = 0; sy < line.PixelHeight; sy++)
+            {
+                bool rowHasInk = false;
+                int rowBase = sy * line.PixelWidth * 4 + 3;
+                for (int sx = 0; sx < line.PixelWidth; sx++)
+                {
+                    if (line.Rgba[rowBase + sx * 4] > 12)
+                    {
+                        rowHasInk = true;
+                        break;
+                    }
+                }
+                if (!rowHasInk)
+                    continue;
+                if (index == 0 && sy < minInkY)
+                    minInkY = sy;
+                if (index == lines.Length - 1 && sy > maxInkY)
+                    maxInkY = sy;
+            }
+        }
+
+        int contentPxH = Math.Max(s, (lines.Length - 1) * lineStridePx + (maxInkY - minInkY + 1));
+        int contentLogicalH = Math.Max(2, (contentPxH + s - 1) / s);
+        int logicalW = Math.Max(6, maxLineWidth + (padXLogical + 1) * 2);
+        int logicalH = Math.Max(4, contentLogicalH + (padYLogical + 1) * 2);
+        int pixelW = logicalW * s;
+        int pixelH = logicalH * s;
+        byte[] pixels = new byte[pixelW * pixelH * 4];
+        for (int i = 0; i < pixelW * pixelH; i++)
+        {
+            int off = i * 4;
+            pixels[off] = 255;
+            pixels[off + 1] = 255;
+            pixels[off + 2] = 224;
+            pixels[off + 3] = 255;
+        }
+
+        for (int y = 0; y < pixelH; y++)
+        {
+            for (int x = 0; x < pixelW; x++)
+            {
+                if (x < s || y < s || x >= pixelW - s || y >= pixelH - s)
+                {
+                    int off = (y * pixelW + x) * 4;
+                    pixels[off] = 0;
+                    pixels[off + 1] = 0;
+                    pixels[off + 2] = 0;
+                }
+            }
+        }
+
+        int dstX0 = (1 + padXLogical) * s;
+        int innerH = pixelH - 2 * s;
+        int startY = s + Math.Max(0, (innerH - contentPxH) / 2);
+        for (int index = 0; index < lines.Length; index++)
+        {
+            var line = lines[index];
+            int dstY0 = startY + index * lineStridePx - minInkY;
+            for (int sy = 0; sy < line.PixelHeight; sy++)
+            {
+                int dy = dstY0 + sy;
+                if (dy < s || dy >= pixelH - s)
+                    continue;
+                for (int sx = 0; sx < line.PixelWidth; sx++)
+                {
+                    int dx = dstX0 + sx;
+                    if (dx < s || dx >= pixelW - s)
+                        continue;
+
+                    int src = (sy * line.PixelWidth + sx) * 4;
+                    int alpha = line.Rgba[src + 3];
+                    if (alpha <= 0)
+                        continue;
+
+                    int dst = (dy * pixelW + dx) * 4;
+                    int inv = 255 - alpha;
+                    pixels[dst] = (byte)((line.Rgba[src] * alpha + pixels[dst] * inv + 127) / 255);
+                    pixels[dst + 1] = (byte)((line.Rgba[src + 1] * alpha + pixels[dst + 1] * inv + 127) / 255);
+                    pixels[dst + 2] = (byte)((line.Rgba[src + 2] * alpha + pixels[dst + 2] * inv + 127) / 255);
+                }
+            }
+        }
+
+        return new SimsBitmapFont.HiDpiRaster(logicalW, logicalH, pixelW, pixelH, pixels);
+    }
+
     public static CGRect Rect(CGSize size, CGPoint point, CGSize canvas) =>
         new(
             Math.Max(0.0, Math.Min(point.X, canvas.Width - size.Width)),

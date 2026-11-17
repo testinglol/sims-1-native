@@ -66,6 +66,26 @@ public sealed class Bhav
             locals = reader.U8();
             version = reader.U32();
             var stored = reader.U32();
+            if (stored > short.MaxValue || (long)stored * 12 > reader.Remaining)
+            {
+                // TSO / Simitone 0x8003 BHAV chunks store the 32-bit instruction count in big-endian
+                // (e.g. 0x00000002 -> 0x02000000 = 33554432 when read little-endian), while some 16-byte
+                // 0x8003 variants place a little-endian 32-bit count at offset 12.
+                uint bigEndianCount = System.Buffers.Binary.BinaryPrimitives.ReverseEndianness(stored);
+                if (bigEndianCount <= short.MaxValue && (long)bigEndianCount * 12 <= reader.Remaining)
+                {
+                    stored = bigEndianCount;
+                }
+                else if (chunk.Data.Length >= 16)
+                {
+                    uint countAt12 = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(chunk.Data.Span.Slice(12, 4));
+                    if (countAt12 <= short.MaxValue && 16L + (long)countAt12 * 12 <= chunk.Data.Length)
+                    {
+                        _ = reader.Bytes(3);
+                        stored = countAt12;
+                    }
+                }
+            }
             if (stored > short.MaxValue) throw reader.Error($"instruction count {stored} is above the 32767 the game indexes");
             count = (int)stored;
         }

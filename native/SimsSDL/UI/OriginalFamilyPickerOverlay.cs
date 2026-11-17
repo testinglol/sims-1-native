@@ -255,11 +255,8 @@ public sealed class OriginalFamilyPickerOverlay
             }
         }
 
-        OriginalGameplayOverlay.Image Render(string value, SimsBitmapFont targetFont, (byte R, byte G, byte B) color)
-        {
-            var raster = targetFont.Rasterize(value, color);
-            return OriginalGameplayOverlay.CreateImage(device, raster.Width, raster.Height, raster.Rgba);
-        }
+        OriginalGameplayOverlay.Image Render(string value, SimsBitmapFont targetFont, (byte R, byte G, byte B) color) =>
+            OriginalGameplayOverlay.CreateImage(device, targetFont.RasterizeHiDpi(value, color));
 
         StateImages RenderStates(string value, SimsBitmapFont targetFont) => new(
             Render(value, targetFont, NormalTextColor),
@@ -269,7 +266,15 @@ public sealed class OriginalFamilyPickerOverlay
         var font16 = LoadFont("UIGraphics/Fonts/variablesans_16.ffn");
         var font12 = LoadFont("UIGraphics/Fonts/variablesans_12.ffn");
         var font10 = LoadFont("UIGraphics/Fonts/variablesans_10.ffn");
-        _tooltipFont = font10;
+        SimsBitmapFont tipFont = font10;
+        try
+        {
+            tipFont = new SimsBitmapFont(content.Read("UIGraphics/Fonts/variablesans_08.ffn"));
+        }
+        catch
+        {
+        }
+        _tooltipFont = tipFont;
 
         // Fills the letterboxed margin outside the centered 800x600 dialog with dark green (RGB 0, 50, 0).
         _outerFill = OriginalGameplayOverlay.CreateImage(device, 1, 1, [0, 50, 0, 255]);
@@ -938,8 +943,7 @@ public sealed class OriginalFamilyPickerOverlay
             {
                 try
                 {
-                    var raster = PlacementTooltip.Rasterize(activeTip.Text, _tooltipFont);
-                    var uploaded = OriginalGameplayOverlay.CreateImage(_device, raster.Width, raster.Height, raster.Rgba);
+                    var uploaded = OriginalGameplayOverlay.CreateImage(_device, PlacementTooltip.RasterizeHiDpi(activeTip.Text, _tooltipFont));
                     _tooltipCache[activeTip.Text] = uploaded;
                     tipImage = uploaded;
                 }

@@ -111,7 +111,16 @@ public sealed class OriginalCameraOverlay
         ArgumentNullException.ThrowIfNull(strings);
 
         _device = device;
-        _tooltipFont = new SimsBitmapFont(content.Read("UIGraphics/Fonts/variablesans_10.ffn"));
+        SimsBitmapFont tipFont;
+        try
+        {
+            tipFont = new SimsBitmapFont(content.Read("UIGraphics/Fonts/variablesans_07.ffn"));
+        }
+        catch
+        {
+            tipFont = new SimsBitmapFont(content.Read("UIGraphics/Fonts/variablesans_08.ffn"));
+        }
+        _tooltipFont = tipFont;
         var titleFont = new SimsBitmapFont(content.Read("UIGraphics/Fonts/variablesans_12.ffn"));
         var bodyFont = new SimsBitmapFont(content.Read("UIGraphics/Fonts/variablesans_09.ffn"));
         _popupTitleFont = titleFont;
@@ -163,11 +172,8 @@ public sealed class OriginalCameraOverlay
             _buttons[i] = new ButtonSpec(specs[i].Action, UploadButton(specs[i].Asset), specs[i].Origin, specs[i].Label);
         }
 
-        OriginalGameplayOverlay.Image MakeText(string text, SimsBitmapFont font, (byte R, byte G, byte B) color)
-        {
-            var raster = font.Rasterize(text, color);
-            return OriginalGameplayOverlay.CreateImage(device, raster.Width, raster.Height, raster.Rgba);
-        }
+        OriginalGameplayOverlay.Image MakeText(string text, SimsBitmapFont font, (byte R, byte G, byte B) color) =>
+            OriginalGameplayOverlay.CreateImage(device, font.RasterizeHiDpi(text, color));
 
         OriginalGameplayOverlay.Image[] MakeLines(string raw)
         {
@@ -397,8 +403,7 @@ public sealed class OriginalCameraOverlay
             }
             else
             {
-                var raster = PlacementTooltip.Rasterize(text, _tooltipFont);
-                image = OriginalGameplayOverlay.CreateImage(_device, raster.Width, raster.Height, raster.Rgba);
+                image = OriginalGameplayOverlay.CreateImage(_device, PlacementTooltip.RasterizeHiDpi(text, _tooltipFont));
                 _tooltipImage = (text, image);
             }
 
@@ -480,10 +485,8 @@ public sealed class OriginalCameraOverlay
                 {
                     try
                     {
-                        var mainRaster = _customSizeFont.Rasterize(labelText, (195, 205, 205));
-                        var shadowRaster = _customSizeFont.Rasterize(labelText, (0, 0, 0));
-                        var mainImg = OriginalGameplayOverlay.CreateImage(_device, mainRaster.Width, mainRaster.Height, mainRaster.Rgba);
-                        var shadowImg = OriginalGameplayOverlay.CreateImage(_device, shadowRaster.Width, shadowRaster.Height, shadowRaster.Rgba);
+                        var mainImg = OriginalGameplayOverlay.CreateImage(_device, _customSizeFont.RasterizeHiDpi(labelText, (195, 205, 205)));
+                        var shadowImg = OriginalGameplayOverlay.CreateImage(_device, _customSizeFont.RasterizeHiDpi(labelText, (0, 0, 0)));
                         _customLabelCache = (labelText, mainImg, shadowImg);
                     }
                     catch

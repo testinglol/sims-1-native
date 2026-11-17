@@ -57,7 +57,7 @@ internal static class ProfileBootstrap
                 {
                     var relative = Path.GetRelativePath(source.Path, file);
                     var target = Path.GetFullPath(Path.Combine(staging, relative));
-                    if (!target.StartsWith(staging + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+                    if (!target.StartsWith(staging + Path.DirectorySeparatorChar, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
                         throw new InvalidDataException("An imported path escapes the native profile.");
                     Directory.CreateDirectory(Path.GetDirectoryName(target)!);
                     CopyProfileFile(file, target);
@@ -252,21 +252,31 @@ internal static class ProfileBootstrap
         catch (Exception error) { throw new InvalidDataException($"The selected original save contains an invalid IFF file: {Path.GetFileName(path)}.", error); }
     }
 
+    private static string? FindSubdirectoryIgnoreCase(string parent, string name)
+    {
+        var direct = Path.Combine(parent, name);
+        if (Directory.Exists(direct)) return direct;
+        if (!Directory.Exists(parent)) return null;
+        return Directory.EnumerateDirectories(parent)
+            .FirstOrDefault(d => string.Equals(Path.GetFileName(d), name, StringComparison.OrdinalIgnoreCase));
+    }
+
     private static void MergeNeighborhoodTemplates(string gameDirectory, string userData)
     {
+        Directory.CreateDirectory(Path.Combine(userData, "Houses"));
         foreach (var template in TemplateDirectories)
         {
-            var templateDirectory = Path.Combine(gameDirectory, template);
-            if (!Directory.Exists(templateDirectory)) continue;
-            foreach (var file in Directory.EnumerateFiles(templateDirectory, "*.iff"))
+            if (FindSubdirectoryIgnoreCase(gameDirectory, template) is not { } templateDirectory) continue;
+            foreach (var file in Directory.EnumerateFiles(templateDirectory, "*.iff", new EnumerationOptions { MatchCasing = MatchCasing.CaseInsensitive }))
             {
                 var filename = Path.GetFileName(file);
                 var target = Path.Combine(userData, NeighborhoodFiles.Contains(filename) ? "" : "Houses", filename);
                 if (!File.Exists(target)) File.Copy(file, target, false);
-                else if (filename == "LotLocations.iff") MergeMissingStringChunks(target, file);
+                else if (filename.Equals("LotLocations.iff", StringComparison.OrdinalIgnoreCase)) MergeMissingStringChunks(target, file);
             }
         }
         UseLongestStreetNames(gameDirectory, userData);
+        UseLongestLotZoning(gameDirectory, userData);
         UpgradeBaseNeighborhoodLayout(gameDirectory, userData);
     }
 
@@ -499,19 +509,25 @@ internal static class ProfileBootstrap
     private static void EnsureNeighborhoodRoutes(string gameDirectory, string userData)
     {
         var destination = Path.Combine(userData, "LotLocations.iff");
+        Directory.CreateDirectory(Path.Combine(userData, "Houses"));
         foreach (var template in TemplateDirectories)
         {
-            var source = Path.Combine(gameDirectory, template, "LotLocations.iff");
+            if (FindSubdirectoryIgnoreCase(gameDirectory, template) is not { } templateDir) continue;
+            foreach (var file in Directory.EnumerateFiles(templateDir, "House*.iff", new EnumerationOptions { MatchCasing = MatchCasing.CaseInsensitive }))
+            {
+                var houseDest = Path.Combine(userData, "Houses", Path.GetFileName(file));
+                if (!File.Exists(houseDest)) File.Copy(file, houseDest, false);
+            }
+            var source = Path.Combine(templateDir, "LotLocations.iff");
             if (!File.Exists(source)) continue;
             if (!File.Exists(destination)) File.Copy(source, destination, false);
             else MergeMissingStringChunks(destination, source);
         }
         UseLongestStreetNames(gameDirectory, userData);
+        UseLongestLotZoning(gameDirectory, userData);
         UpgradeBaseNeighborhoodLayout(gameDirectory, userData);
     }
 
-    /// <summary>Selects the StreetNames.iff template with the longest lot table (STR# 2001), ensuring all
-    /// expansion neighborhood lots and street names are preserved.</summary>
     private static void UseLongestStreetNames(string gameDirectory, string userData)
     {
         var destination = Path.Combine(userData, "StreetNames.iff");
@@ -524,11 +540,32 @@ internal static class ProfileBootstrap
         string? best = null;
         foreach (var template in TemplateDirectories)
         {
-            var source = Path.Combine(gameDirectory, template, "StreetNames.iff");
+            if (FindSubdirectoryIgnoreCase(gameDirectory, template) is not { } templateDir) continue;
+            var source = Path.Combine(templateDir, "StreetNames.iff");
             var length = LotTableLength(source);
             if (length > currentLength) { best = source; currentLength = length; }
         }
         if (best != null) File.Copy(best, destination, true);
+    }
+
+    private static void UseLongestLotZoning(string gameDirectory, string userData)
+    {
+        var destination = Path.Combine(userData, "LotZoning.iff");
+        static int ZoningTableLength(string path)
+        {
+            try { return ReadStringChunk(path, 1)?.Bytes.Length ?? 0; }
+            catch (InvalidDataException) { return 0; }
+        }
+        var currentLength = ZoningTableLength(destination);
+        string? best = null;
+        foreach (var template in TemplateDirectories)
+        {
+            if (FindSubdirectoryIgnoreCase(gameDirectory, template) is not { } templateDir) continue;
+            var source = Path.Combine(templateDir, "LotZoning.iff");
+            var length = ZoningTableLength(source);
+            if (length > currentLength) { best = source; currentLength = length; }
+        }
+        if (best != null && currentLength == 0) File.Copy(best, destination, true);
     }
 
     private static void UpgradeBaseNeighborhoodLayout(string gameDirectory, string userData)

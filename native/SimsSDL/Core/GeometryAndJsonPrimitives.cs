@@ -93,6 +93,24 @@ public static class SimsAssetPaths
         }
         return null;
     }
+
+    public static string? FindHdUiDirectory()
+    {
+        var baseDir = AppContext.BaseDirectory;
+        ReadOnlySpan<string> candidates =
+        [
+            Path.Combine(baseDir, "HdUi"),
+            Path.GetFullPath(Path.Combine(baseDir, "..", "Resources", "HdUi")),
+            Path.GetFullPath(Path.Combine(baseDir, "..", "..", "..", "runtime", "ui-hd-pack")),
+            Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), "runtime", "ui-hd-pack")),
+        ];
+        foreach (var candidate in candidates)
+        {
+            if (Directory.Exists(candidate))
+                return candidate;
+        }
+        return null;
+    }
 }
 
 public static class JsonMapExtensions

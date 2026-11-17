@@ -41,13 +41,20 @@ public sealed class OriginalSoundOptionsOverlay
     private readonly OriginalGameplayOverlay.Image _button;
     private readonly float _buttonSheetWidth;
     private readonly double _buttonCapWidth;
-    private readonly List<Slider> _sliders;
-    private readonly OriginalGameplayOverlay.Image _buttonLabel;
-    private readonly OriginalGameplayOverlay.Image _buttonPressedLabel;
-    private readonly OriginalGameplayOverlay.Image _buttonHoverLabel;
-    private readonly CGSize _closeButtonSize;
-    private readonly OriginalGameplayOverlay.Image _title;
-    private readonly List<OriginalGameplayOverlay.Image> _valueLabels;
+    private readonly UIDevice _device;
+    private readonly OriginalUIStrings _strings;
+    private readonly SimsBitmapFont _font;
+    private readonly SimsBitmapFont _embeddedFont;
+    private readonly SimsBitmapFont _titleFont;
+    private readonly OriginalGameplayOverlay.Image _sliderOff;
+    private readonly OriginalGameplayOverlay.Image _sliderOn;
+    private List<Slider> _sliders = [];
+    private OriginalGameplayOverlay.Image _buttonLabel;
+    private OriginalGameplayOverlay.Image _buttonPressedLabel;
+    private OriginalGameplayOverlay.Image _buttonHoverLabel;
+    private CGSize _closeButtonSize;
+    private OriginalGameplayOverlay.Image _title;
+    private List<OriginalGameplayOverlay.Image> _valueLabels = [];
     private readonly string _closeLabel;
     private readonly double _embeddedSliderWidth;
     private readonly int _embeddedFontLineHeight;
@@ -108,22 +115,17 @@ public sealed class OriginalSoundOptionsOverlay
 
     public OriginalSoundOptionsOverlay(GameContent content, SimsBitmapFont font, UIDevice device, OriginalUIStrings strings)
     {
-        var embeddedFont = TryLoadFont(content, "UIGraphics/Fonts/variablesans_09.ffn") ?? font;
-        var titleFont = TryLoadFont(content, "UIGraphics/Fonts/variablesans_12.ffn") ?? font;
-        _embeddedFontLineHeight = embeddedFont.LineHeight;
+        _device = device;
+        _strings = strings;
+        _font = font;
+        _embeddedFont = TryLoadFont(content, "UIGraphics/Fonts/variablesans_09.ffn") ?? font;
+        _titleFont = TryLoadFont(content, "UIGraphics/Fonts/variablesans_12.ffn") ?? font;
+        _embeddedFontLineHeight = _embeddedFont.LineHeight;
 
         OriginalGameplayOverlay.Image Upload(string path, bool transparent = false)
         {
             var bitmap = new SimsBitmap(content.Read(path));
             return OriginalGameplayOverlay.CreateImage(device, bitmap.Width, bitmap.Height, bitmap.Rgba, magenta: transparent);
-        }
-
-        OriginalGameplayOverlay.Image TextImg(string value, SimsBitmapFont? useFont = null, (byte R, byte G, byte B)? color = null)
-        {
-            var f = useFont ?? font;
-            var c = color ?? ((byte)195, (byte)205, (byte)205);
-            var raster = f.Rasterize(value, c);
-            return OriginalGameplayOverlay.CreateImage(device, raster.Width, raster.Height, raster.Rgba);
         }
 
         _frame = Upload("UIGraphics/Shared/Dlg/GenDlg.bmp");
@@ -132,15 +134,29 @@ public sealed class OriginalSoundOptionsOverlay
         _buttonSheetWidth = Math.Max(1f, (float)_button.Size.Width);
         _buttonCapWidth = Math.Max(1, ((int)_button.Size.Width / 4 - 1) / 2);
 
+        _sliderOff = Upload("UIGraphics/cpanel/Buttons/optslideroff.bmp", transparent: true);
+        _sliderOn = Upload("UIGraphics/cpanel/Buttons/optslideron.bmp", transparent: true);
+
+        _embeddedSliderWidth = OriginalUIStrings.Point(strings.OptionString(53, "(130;0)"))?.X ?? 130;
+        _closeLabel = strings.OkButton();
+        RefreshText();
+    }
+
+    public void RefreshText()
+    {
+        OriginalGameplayOverlay.Image TextImg(string value, SimsBitmapFont? useFont = null, (byte R, byte G, byte B)? color = null)
+        {
+            var f = useFont ?? _font;
+            var c = color ?? ((byte)195, (byte)205, (byte)205);
+            return OriginalGameplayOverlay.CreateImage(_device, f.RasterizeHiDpi(value, c));
+        }
+
         (string Group, string Label)[] rows =
         [
-            ("FX", strings.SoundEffectVolume()),
-            ("MUSIC", strings.SoundMusicVolume()),
-            ("VOX", strings.SoundVoiceVolume())
+            ("FX", _strings.SoundEffectVolume()),
+            ("MUSIC", _strings.SoundMusicVolume()),
+            ("VOX", _strings.SoundVoiceVolume())
         ];
-
-        var sliderOff = Upload("UIGraphics/cpanel/Buttons/optslideroff.bmp", transparent: true);
-        var sliderOn = Upload("UIGraphics/cpanel/Buttons/optslideron.bmp", transparent: true);
 
         _sliders = new List<Slider>(rows.Length);
         foreach (var row in rows)
@@ -150,19 +166,17 @@ public sealed class OriginalSoundOptionsOverlay
                 Group = row.Group,
                 Label = row.Label,
                 LabelImage = TextImg(row.Label),
-                EmbeddedLabelImage = TextImg(row.Label, embeddedFont, (195, 205, 205)),
-                EmbeddedHoverLabelImage = TextImg(row.Label, embeddedFont, (255, 255, 255)),
-                Off = sliderOff,
-                On = sliderOn
+                EmbeddedLabelImage = TextImg(row.Label, _embeddedFont, (195, 205, 205)),
+                EmbeddedHoverLabelImage = TextImg(row.Label, _embeddedFont, (255, 255, 255)),
+                Off = _sliderOff,
+                On = _sliderOn
             });
         }
 
-        _embeddedSliderWidth = OriginalUIStrings.Point(strings.OptionString(53, "(130;0)"))?.X ?? 130;
-        _title = TextImg(strings.SoundOptionsTitle(), titleFont, (195, 205, 205));
-        _closeLabel = strings.OkButton();
-        _buttonLabel = TextImg(_closeLabel, titleFont, (195, 205, 205));
-        _buttonPressedLabel = TextImg(_closeLabel, titleFont, (0, 255, 255));
-        _buttonHoverLabel = TextImg(_closeLabel, titleFont, (255, 255, 255));
+        _title = TextImg(_strings.SoundOptionsTitle(), _titleFont, (195, 205, 205));
+        _buttonLabel = TextImg(_closeLabel, _titleFont, (195, 205, 205));
+        _buttonPressedLabel = TextImg(_closeLabel, _titleFont, (0, 255, 255));
+        _buttonHoverLabel = TextImg(_closeLabel, _titleFont, (255, 255, 255));
         _closeButtonSize = new CGSize(Math.Max(100, Math.Ceiling(_buttonLabel.Size.Width) + 20), _button.Size.Height);
 
         _valueLabels = new List<OriginalGameplayOverlay.Image>(11);

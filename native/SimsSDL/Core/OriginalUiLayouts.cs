@@ -32,13 +32,15 @@ public static class OriginalUIScalingLayout
         return MathF.Max(0.25f, MathF.Min(nativeDensity, fit800x600));
     }
 
-    /// <summary>Computes the aspect-fit scale for non-lot full screens so 800x600 screens fill the
-    /// viewport across both smaller and high-resolution windows.</summary>
+    /// <summary>Computes the aspect-fit scale for non-lot full screens, bounded by uiScale * 1.15 so 2K/4K
+    /// viewports stay comfortably proportioned instead of over-zooming 800x600 edge-to-edge.</summary>
     public static double FullscreenOverlayScale(CGSize canvas, float uiScale = 1.0f)
     {
         if (canvas.Width <= 0 || canvas.Height <= 0)
             return Math.Max(0.25, uiScale);
-        return Math.Max(0.25, Math.Min(canvas.Width / 800.0, canvas.Height / 600.0));
+        double fit = Math.Min(canvas.Width / 800.0, canvas.Height / 600.0);
+        double capped = uiScale > 0f ? Math.Min(fit, Math.Max(0.25, uiScale * 1.15)) : fit;
+        return Math.Max(0.25, capped);
     }
 
     public static double LivePopupOriginX(

@@ -124,6 +124,7 @@ internal sealed class SimulationServer
     private PluginHost? plugins;
     private PluginWorld? pluginWorld;
     private readonly string packFingerprint;
+    private readonly string? explicitInstallRoot;
     private HitAudioRuntime? audio;
     private SimOutfits? engineOutfits;
     private (int FurnishingsObjects, int ArchitectureObjects) initialObjectValuation;
@@ -137,12 +138,14 @@ internal sealed class SimulationServer
 
     private SimulationServer(TextWriter output, string session, string profile, string game, short house, SimulationWorld? world, IffFile? lot,
         ObjectRegistry? registry, IffFile? global, string? loadError, byte language = 1,
-        string? neighborhoodPath = null, IffFile? neighborhood = null, ushort? activeFamilyChunkId = null)
+        string? neighborhoodPath = null, IffFile? neighborhood = null, ushort? activeFamilyChunkId = null,
+        string? installRoot = null)
     {
         this.output = output;
         this.session = session;
         this.profile = profile;
         this.game = game;
+        this.explicitInstallRoot = installRoot;
         this.house = house;
         this.world = world;
         this.lot = lot;
@@ -186,8 +189,7 @@ internal sealed class SimulationServer
             AttachTutorialFlash(world);
         }
         if (traceActions && world is not null) world.CaptureExecutionTrace = true;
-        selectedSim = PanelPeople().FirstOrDefault(person => IsHouseholdPerson(person) && PersonAgeCategory.IsAdult(person[PersonData.PersonAge]))?.Id
-            ?? PanelPeople().FirstOrDefault(IsHouseholdPerson)?.Id ?? PanelPeople().FirstOrDefault()?.Id ?? 0;
+        selectedSim = DefaultSelectedSimId();
         if (world is not null) SyncSelectedSimFlags(world, selectedSim);
         InitializeViewLevelFromSelectedSim();
         Directory.CreateDirectory(session);
@@ -230,6 +232,8 @@ internal sealed class SimulationServer
 
     private string ResolveInstallRoot()
     {
+        if (!string.IsNullOrEmpty(explicitInstallRoot) && Directory.Exists(Path.Combine(explicitInstallRoot, "UserData")))
+            return Path.GetFullPath(explicitInstallRoot);
         if (Directory.Exists(Path.Combine(game, "UserData"))) return game;
         var gameDataPath = Path.Combine(game, "GameData");
         if (Directory.Exists(gameDataPath) &&
@@ -237,6 +241,8 @@ internal sealed class SimulationServer
             Path.GetDirectoryName(resolvedGameData) is { } parent &&
             Directory.Exists(Path.Combine(parent, "UserData")))
             return parent;
+        if (TryReadSavedInstallRoot(dataRoot) is { } savedInstall && Directory.Exists(Path.Combine(savedInstall, "UserData")))
+            return Path.GetFullPath(savedInstall);
         if (Environment.GetEnvironmentVariable("SIMS_GAME_DIR") is { Length: > 0 } envGame &&
             Directory.Exists(Path.Combine(envGame, "UserData")))
             return Path.GetFullPath(envGame);
@@ -244,6 +250,24 @@ internal sealed class SimulationServer
             if (Directory.Exists(Path.Combine(candidate, "UserData")))
                 return Path.GetFullPath(candidate);
         return game;
+    }
+
+    internal static string? TryReadSavedInstallRoot(string root)
+    {
+        try
+        {
+            var settingsFile = Path.Combine(root, "Settings", "install.json");
+            if (!File.Exists(settingsFile)) return null;
+            using var doc = JsonDocument.Parse(File.ReadAllBytes(settingsFile));
+            if (doc.RootElement.TryGetProperty("gamePath", out var prop) &&
+                prop.ValueKind == JsonValueKind.String &&
+                prop.GetString() is { Length: > 0 } path)
+                return path;
+        }
+        catch
+        {
+        }
+        return null;
     }
 
     private void OnNeighborInventoryChanged(short neighborId, AvatarInventory inventory) =>
@@ -549,19 +573,19 @@ internal sealed class SimulationServer
         }
     }
 
-    public static SimulationServer Load(string game, string session, string profile, short house, TextWriter output, byte language = 1)
+    public static SimulationServer Load(string game, string session, string profile, short house, TextWriter output, byte language = 1, string? installRoot = null)
     {
         try
         {
             if (house == 0)
             {
-                return new SimulationServer(output, session, profile, game, 0, null, null, null, null, loadError: null, language);
+                return new SimulationServer(output, session, profile, game, 0, null, null, null, null, loadError: null, language, installRoot: installRoot);
             }
             var userData = Neighborhoods.UserData(profile);
             var (effectiveHouse, redirectedFamilyChunkId) = ResolveVacationRedirect(userData, house);
             house = effectiveHouse;
             var path = Path.Combine(userData, "Houses", $"House{house:D2}.iff");
-            if (!File.Exists(path)) return new SimulationServer(output, session, profile, game, house, null, null, null, null, $"Lot {house} not found.", language);
+            if (!File.Exists(path)) return new SimulationServer(output, session, profile, game, house, null, null, null, null, $"Lot {house} not found.", language, installRoot: installRoot);
             var runtime = ReadSavedRuntimeMetadata(CanonicalRuntimePath(path), File.ReadAllBytes(path));
             var setup = WorldBootstrap.Load(game, path, language, () => false, house,
                 userDataPath: userData, activeFamilyChunkId: redirectedFamilyChunkId);
@@ -577,14 +601,13 @@ internal sealed class SimulationServer
             RestorePersonAnimationRuntime(setup.World, runtime.PersonAnimations);
             RestoreDialogRecords(setup.World, runtime.Dialogs);
             var server = new SimulationServer(output, session, profile, game, house, setup.World, setup.Lot,
-                setup.Registry, setup.Global, null, language, setup.NeighborhoodPath, setup.Neighborhood, setup.ActiveFamilyChunkId);
+                setup.Registry, setup.Global, null, language, setup.NeighborhoodPath, setup.Neighborhood, setup.ActiveFamilyChunkId,
+                installRoot: installRoot);
             if (setup.ActiveFamily is { Members.Count: > 0 } activeFamily &&
                 !setup.World.WalkOrder.OfType<XPerson>().Any(p => activeFamily.Members.Contains(unchecked((uint)(p.TypeRecord?.Key ?? 0)))))
             {
                 server.EnsureSelectedHouseholdMember(activeFamily, server.LotWidth / 2, server.LotHeight / 2);
-                server.selectedSim = server.PanelPeople().FirstOrDefault(person => server.IsHouseholdPerson(person) && PersonAgeCategory.IsAdult(person[PersonData.PersonAge]))?.Id
-                    ?? server.PanelPeople().FirstOrDefault(server.IsHouseholdPerson)?.Id
-                    ?? server.selectedSim;
+                server.selectedSim = server.DefaultSelectedSimId();
                 SyncSelectedSimFlags(setup.World, server.selectedSim);
             }
             server.SetSimulationSpeed(0);
@@ -598,7 +621,7 @@ internal sealed class SimulationServer
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException or ResourceFormatException)
         {
-            return new SimulationServer(output, session, profile, game, house, null, null, null, null, error.Message, language);
+            return new SimulationServer(output, session, profile, game, house, null, null, null, null, error.Message, language, installRoot: installRoot);
         }
     }
 
@@ -1726,8 +1749,9 @@ internal sealed class SimulationServer
                     : session;
                 Directory.CreateDirectory(outputDirectory);
                 var webScenes = request.TryGetProperty("webScenes", out var webScenesValue) && webScenesValue.ValueKind == JsonValueKind.True;
+                var exportInstallRoot = ResolveInstallRoot();
                 NeighborhoodExport.GameRoot = game;
-                result = NeighborhoodExport.Export(outputDirectory, neighborhoodMode, profile, language, dataRoot, game,
+                result = NeighborhoodExport.Export(outputDirectory, neighborhoodMode, profile, language, dataRoot, exportInstallRoot,
                     includeRenderScenes: webScenes, existingRegistry: registry);
                 break;
             }
@@ -1982,8 +2006,7 @@ internal sealed class SimulationServer
                 ClampAwayLotEditingState();
                 if (world.ObjectById(selectedSim) is not XPerson)
                 {
-                    selectedSim = PanelPeople().FirstOrDefault(person => IsHouseholdPerson(person) && PersonAgeCategory.IsAdult(person[PersonData.PersonAge]))?.Id
-                        ?? PanelPeople().FirstOrDefault(IsHouseholdPerson)?.Id ?? PanelPeople().FirstOrDefault()?.Id ?? 0;
+                    selectedSim = DefaultSelectedSimId();
                 }
                 SyncSelectedSimFlags(world, selectedSim);
                 simulationError = null;
@@ -2222,8 +2245,7 @@ internal sealed class SimulationServer
         {
             memberInstantiation = EnsureSelectedHouseholdMember(activeFamily, spawnCenter?.X ?? LotWidth / 2, spawnCenter?.Y ?? LotHeight / 2);
         }
-        selectedSim = PanelPeople().FirstOrDefault(person => IsHouseholdPerson(person) && PersonAgeCategory.IsAdult(person[PersonData.PersonAge]))?.Id
-            ?? PanelPeople().FirstOrDefault(IsHouseholdPerson)?.Id ?? PanelPeople().FirstOrDefault()?.Id ?? 0;
+        selectedSim = DefaultSelectedSimId();
         SyncSelectedSimFlags(world, selectedSim);
         SetSimulationSpeed(0);
         lastRunningSpeed = runtime.Speed;
@@ -2359,7 +2381,9 @@ internal sealed class SimulationServer
                 world.PendingLotSwitch = null;
                 if (TryApplyPendingLotSwitch(world, pendingLotSwitch)) return true;
             }
-            if (selectedSim == 0 && PanelPeople().FirstOrDefault(IsHouseholdPerson) is { } arrivedPerson)
+            if (selectedSim == 0 &&
+                (PanelPeople().FirstOrDefault(p => IsHouseholdPerson(p) && IsControllableHuman(p))
+                 ?? PanelPeople().FirstOrDefault(IsHouseholdPerson)) is { } arrivedPerson)
             {
                 selectedSim = arrivedPerson.Id;
                 SyncSelectedSimFlags(world, selectedSim);
@@ -4038,8 +4062,7 @@ internal sealed class SimulationServer
         };
         AttachTutorialFlash(world);
         if (traceActions) world.CaptureExecutionTrace = true;
-        selectedSim = PanelPeople().FirstOrDefault(person => IsHouseholdPerson(person) && PersonAgeCategory.IsAdult(person[PersonData.PersonAge]))?.Id
-            ?? PanelPeople().FirstOrDefault(IsHouseholdPerson)?.Id ?? PanelPeople().FirstOrDefault()?.Id ?? 0;
+        selectedSim = DefaultSelectedSimId();
         SyncSelectedSimFlags(world, selectedSim);
         var familyResource = setup.Neighborhood?.Find(ResourceType.Parse("FAMI"), familyChunkId);
         var memberInstantiation = EnsureSelectedHouseholdMember(familyResource is null || setup.Neighborhood is null
@@ -4449,14 +4472,34 @@ internal sealed class SimulationServer
         Directory.CreateDirectory(charDir);
         registry = EnsureRegistry().WithRefreshedPeople(charDir);
 
+        var installRoot = ResolveInstallRoot();
         var templatePath = Path.Combine(userDataPath, "Characters", "User00000.iff");
         if (!File.Exists(templatePath))
-            templatePath = Path.Combine(game, "UserData", "Characters", "User00000.iff");
+            templatePath = Path.Combine(installRoot, "UserData", "Characters", "User00000.iff");
         if (!File.Exists(templatePath))
-            templatePath = Path.Combine(game, "TemplateUserData", "UserData", "Characters", "User00000.iff");
+            templatePath = Path.Combine(installRoot, "TemplateUserData", "Characters", "User00000.iff");
+        if (!File.Exists(templatePath))
+            templatePath = Path.Combine(installRoot, "TemplateUserData", "UserData", "Characters", "User00000.iff");
         if (!File.Exists(templatePath))
         {
-            var fallback = Directory.GetFiles(charDir, "User*.iff").FirstOrDefault();
+            var candidates = Directory.GetFiles(charDir, "User*.iff");
+            var fallback = candidates.FirstOrDefault(file =>
+            {
+                try
+                {
+                    var iff = IffFile.Open(file);
+                    if (iff.OfType(ResourceType.Objd).FirstOrDefault() is not { } objdChunk) return false;
+                    var bodyId = Objd.Read(iff, objdChunk)[ObjdField.BodyStringsId];
+                    if (bodyId == 0 || iff.Find(ResourceType.Str, bodyId) is not { } strChunk) return true;
+                    var strings = StringTable.Read(iff, strChunk).ForLanguage(1);
+                    var mode = strings.Count > 12 ? strings[12].Trim().ToLowerInvariant() : "";
+                    return !mode.StartsWith("dog", StringComparison.Ordinal) && !mode.StartsWith("cat", StringComparison.Ordinal);
+                }
+                catch
+                {
+                    return false;
+                }
+            }) ?? candidates.FirstOrDefault();
             if (fallback != null) templatePath = fallback;
         }
         if (!File.Exists(templatePath))
@@ -5323,12 +5366,9 @@ internal sealed class SimulationServer
         InitializeFameCallbackTarget(world);
         AttachNoticeListener(world);
         world.AutonomyHost = new AutonomyHost(world, setup.Global ?? global!, house, () => speed == 0, ScoreAutonomyChoice);
-        selectedSim = PanelPeople().FirstOrDefault(p =>
-            request.PersonGuid != 0
-                ? p.TypeRecord?.Key == request.PersonGuid
-                : IsHouseholdPerson(p) && PersonAgeCategory.IsAdult(p[PersonData.PersonAge]))?.Id
-            ?? PanelPeople().FirstOrDefault(IsHouseholdPerson)?.Id
-            ?? 0;
+        selectedSim = request.PersonGuid != 0
+            ? (PanelPeople().FirstOrDefault(p => p.TypeRecord?.Key == request.PersonGuid)?.Id ?? DefaultSelectedSimId())
+            : DefaultSelectedSimId();
         SyncSelectedSimFlags(world, selectedSim);
         autoSpeedSaved = -1;
 
@@ -5810,6 +5850,20 @@ internal sealed class SimulationServer
         (world?.Neighbors.TryGetValue(person[PersonData.NeighborId], out var neighbor) == true ? neighbor.TypeRecordKey : 0)));
 
     private bool IsHouseholdPerson(XPerson person) => ActiveFamily()?.Members.Contains(PersonGuid(person)) == true;
+
+    private static bool IsControllableHuman(XPerson person) =>
+        person[PersonData.Gender] < 2 && (person.AnimatorBodyStringMode & 6) == 0;
+
+    private short DefaultSelectedSimId()
+    {
+        var people = PanelPeople();
+        return people.FirstOrDefault(p => IsHouseholdPerson(p) && IsControllableHuman(p) && PersonAgeCategory.IsAdult(p[PersonData.PersonAge]))?.Id
+            ?? people.FirstOrDefault(p => IsHouseholdPerson(p) && IsControllableHuman(p))?.Id
+            ?? people.FirstOrDefault(IsHouseholdPerson)?.Id
+            ?? people.FirstOrDefault(IsControllableHuman)?.Id
+            ?? people.FirstOrDefault()?.Id
+            ?? (short)0;
+    }
 
     /// <summary>Orders Sim portraits by FAMI chunk member sequence, appending non-resident visitors
     /// afterward.</summary>

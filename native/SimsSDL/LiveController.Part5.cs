@@ -1617,36 +1617,7 @@ internal sealed partial class LiveController
         _pendingOutfitPreview = Send("outfitPreview", new Dictionary<string, object?> { ["index"] = picker.Index });
     }
 
-    private static string ResolveRealPath(string path)
-    {
-        string fullPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
-        try
-        {
-            string? parent = Path.GetDirectoryName(fullPath);
-            string leaf = Path.GetFileName(fullPath);
-            if (!string.IsNullOrEmpty(parent) && !string.IsNullOrEmpty(leaf))
-            {
-                fullPath = Path.Combine(ResolveRealPath(parent), leaf);
-            }
-
-            if (File.Exists(fullPath))
-            {
-                return Path.TrimEndingDirectorySeparator(
-                    File.ResolveLinkTarget(fullPath, returnFinalTarget: true)?.FullName ?? fullPath);
-            }
-
-            if (Directory.Exists(fullPath))
-            {
-                return Path.TrimEndingDirectorySeparator(
-                    Directory.ResolveLinkTarget(fullPath, returnFinalTarget: true)?.FullName ?? fullPath);
-            }
-        }
-        catch
-        {
-        }
-
-        return fullPath;
-    }
+    private static string ResolveRealPath(string path) => LotScene.ResolveRealPath(path);
 
     private void LoadAppearancePreview(IReadOnlyDictionary<string, JsonElement> evt, int key = 0)
     {

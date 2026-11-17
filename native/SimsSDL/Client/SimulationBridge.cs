@@ -304,7 +304,8 @@ public sealed class SimulationBridge : IDisposable
                     profilePath,
                     (short)house,
                     writer,
-                    (byte)content.Language.Code);
+                    (byte)content.Language.Code,
+                    installRoot: content.Root);
                 server.DirectAnimationSink = directFrame =>
                 {
                     if (_stopped || generation != Volatile.Read(ref _generation) || Animation is not { } handler)
@@ -1334,35 +1335,6 @@ public sealed class SimulationBridge : IDisposable
             }
         }
 
-        private static string ResolveRealPath(string path)
-        {
-            var fullPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
-            try
-            {
-                var parent = Path.GetDirectoryName(fullPath);
-                var leaf = Path.GetFileName(fullPath);
-                if (!string.IsNullOrEmpty(parent) && !string.IsNullOrEmpty(leaf))
-                {
-                    fullPath = Path.Combine(ResolveRealPath(parent), leaf);
-                }
-
-                if (File.Exists(fullPath))
-                {
-                    return Path.TrimEndingDirectorySeparator(
-                        File.ResolveLinkTarget(fullPath, returnFinalTarget: true)?.FullName ?? fullPath);
-                }
-
-                if (Directory.Exists(fullPath))
-                {
-                    return Path.TrimEndingDirectorySeparator(
-                        Directory.ResolveLinkTarget(fullPath, returnFinalTarget: true)?.FullName ?? fullPath);
-                }
-            }
-            catch
-            {
-            }
-
-            return fullPath;
-        }
+        private static string ResolveRealPath(string path) => LotScene.ResolveRealPath(path);
     }
 }

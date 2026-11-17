@@ -29,7 +29,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Content Include="Shaders\*.msl;Shaders\*.spv">
+    <Content Include="Shaders\*.msl;Shaders\*.spv;Shaders\*.dxil">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
       <Link>Shaders\%(Filename)%(Extension)</Link>

@@ -37,9 +37,21 @@ internal static class ObjectCatalog
             return false;
         }
 
+        string? catName;
+        string? catDesc;
+        try
+        {
+            catName = source.CatalogString(0, language);
+            catDesc = source.CatalogString(1, language);
+        }
+        catch (ResourceFormatException)
+        {
+            catName = null;
+            catDesc = null;
+        }
         item = new ObjectCatalogEntry(source, source.Guid, buildTool ? 1 << (buildMode + 7) : (int)(flags & 0xff),
-            definition[ObjdField.Price], source.CatalogString(0, language) ?? source.Chunk.Label,
-            source.CatalogString(1, language) ?? "", buildTool ? 0 : definition[ObjdField.RoomSort], definition[ObjdField.FunctionSubsort]);
+            definition[ObjdField.Price], catName ?? source.Chunk.Label,
+            catDesc ?? "", buildTool ? 0 : definition[ObjdField.RoomSort], definition[ObjdField.FunctionSubsort]);
         return true;
     }
 
@@ -138,12 +150,18 @@ internal static class ObjectCatalog
                 description = item.Description,
                 price = item.Price,
                 category = category == -1 ? BitOperations.TrailingZeroCount((uint)item.Categories) : category,
-                icon = CatalogIcon(item.Source, session),
-                preview = CatalogPreview(item.Source, session),
+                icon = SafeCatalogImage(() => CatalogIcon(item.Source, session)),
+                preview = SafeCatalogImage(() => CatalogPreview(item.Source, session)),
                 ratings = CatalogRatings(item.Source, ratingStrings, language, globals?.ScopeOf(item.Source),
                     registry.FindAlternativeType(item.Source)),
             }).ToArray(),
         };
+    }
+
+    private static object? SafeCatalogImage(Func<object?> loader)
+    {
+        try { return loader(); }
+        catch (Exception error) when (error is ResourceFormatException or InvalidDataException or ArgumentException or OverflowException) { return null; }
     }
 
     private static IReadOnlyList<string>? LoadCatalogRatingStrings(string? game, byte language)

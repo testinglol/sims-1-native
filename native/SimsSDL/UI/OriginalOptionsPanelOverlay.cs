@@ -66,6 +66,9 @@ public sealed class OriginalOptionsPanelOverlay
         [JsonPropertyName("exportHTML")]
         public bool ExportHTML { get; set; } = true;
 
+        [JsonPropertyName("sharpText")]
+        public bool SharpText { get; set; } = true;
+
         [JsonPropertyName("terrainDetail")]
         public int TerrainDetail { get; set; } = 2;
 
@@ -97,7 +100,8 @@ public sealed class OriginalOptionsPanelOverlay
         AntiAlias,
         Shadows,
         Lighting,
-        InterfaceEffects
+        InterfaceEffects,
+        SharpText
     }
 
     private abstract record PopupTopic
@@ -136,6 +140,8 @@ public sealed class OriginalOptionsPanelOverlay
     private RowLayout _radioRows = new() { Origin = new CGPoint(485, 30), Size = new CGSize(200, 26) };
 
     private readonly OriginalGameplayOverlay.Image _radio;
+    private readonly GameContent _content;
+    private readonly OriginalUIStrings _strings;
     private readonly UIDevice _device;
     private readonly SimsBitmapFont _tooltipFont;
     private readonly SimsBitmapFont _labelFont;
@@ -224,10 +230,12 @@ public sealed class OriginalOptionsPanelOverlay
 
     public OriginalOptionsPanelOverlay(GameContent content, UIDevice device, OriginalUIStrings strings, SimsBitmapFont font)
     {
+        _content = content;
+        _strings = strings;
         _device = device;
-        _tooltipFont = font;
         var optFont = TryLoadFont(content, "UIGraphics/Fonts/variablesans_09.ffn") ?? font;
         var smallFont = TryLoadFont(content, "UIGraphics/Fonts/variablesans_08.ffn") ?? optFont;
+        _tooltipFont = TryLoadFont(content, "UIGraphics/Fonts/variablesans_07.ffn") ?? smallFont;
         var titleFont = TryLoadFont(content, "UIGraphics/Fonts/variablesans_12.ffn") ?? font;
         _labelFont = optFont;
         _levelFont = smallFont;
@@ -238,56 +246,6 @@ public sealed class OriginalOptionsPanelOverlay
         {
             var image = new SimsBitmap(content.Read(path));
             return OriginalGameplayOverlay.CreateImage(device, image.Width, image.Height, image.Rgba, magenta: true);
-        }
-
-        OriginalGameplayOverlay.Image MakeText(string text, SimsBitmapFont f, (byte R, byte G, byte B) color)
-        {
-            var raster = f.Rasterize(text, color);
-            return OriginalGameplayOverlay.CreateImage(device, raster.Width, raster.Height, raster.Rgba);
-        }
-
-        List<OriginalGameplayOverlay.Image> MakeLines(string raw)
-        {
-            var normalized = raw.Replace("\r\n", "\n", StringComparison.Ordinal).Replace("\r", "\n", StringComparison.Ordinal);
-            var wrapped = new List<string>();
-            foreach (var paragraph in normalized.Split('\n'))
-            {
-                var lines = optFont.WrappedLines(paragraph, 357);
-                if (lines.Count == 0)
-                {
-                    wrapped.Add(string.Empty);
-                }
-                else
-                {
-                    wrapped.AddRange(lines);
-                }
-            }
-
-            var result = new List<OriginalGameplayOverlay.Image>(wrapped.Count);
-            foreach (var line in wrapped)
-            {
-                if (string.IsNullOrEmpty(line))
-                {
-                    result.Add(new OriginalGameplayOverlay.Image(new UITexture(1, 1, [0, 0, 0, 0]), CGSize.Zero));
-                }
-                else
-                {
-                    result.Add(MakeText(line, optFont, (195, 205, 205)));
-                }
-            }
-            return result;
-        }
-
-        SlidePopupEntry MakePopup(int titleIndex, int bodyIndex, string fallbackTitle, string asset)
-        {
-            var rawTitle = strings.OptionString(titleIndex, fallbackTitle).Trim();
-            var rawBody = strings.OptionString(bodyIndex, string.Empty);
-            return new SlidePopupEntry
-            {
-                Title = MakeText(rawTitle, titleFont, (255, 255, 255)),
-                Body = MakeLines(rawBody),
-                Detail = Bitmap(asset)
-            };
         }
 
         var baseTga = new SimsTarga(content.Read("UIGraphics/cpanel/Backgrounds/UniversalBack.tga"));
@@ -330,13 +288,92 @@ public sealed class OriginalOptionsPanelOverlay
         if (Point(37) is { } rrOrigin) _radioRows.Origin = rrOrigin;
         if (Size(38) is { } rrSize) _radioRows.Size = rrSize;
 
+        _resetTutorialAbout = strings.OptionString(71, string.Empty);
+        RefreshText();
+    }
+
+    public void RefreshText()
+    {
+        const string sharpTextTitle = "Sharp Text";
+        const string sharpTextBody = "Renders UI text, tooltips, dialogs, and pie menus at high resolution instead of stretching classic 800x600 bitmap fonts.";
+
+        _tooltipImage = null;
+        _detailTitles.Clear();
+        _detailHoverTitles.Clear();
+        _detailAbout.Clear();
+        _levelLabels.Clear();
+        _playLabels.Clear();
+        _playHoverLabels.Clear();
+        _playAbout.Clear();
+
+        OriginalGameplayOverlay.Image DetailBitmap(PopupTopic topic, string path)
+        {
+            if (_slidePopups.TryGetValue(topic, out var existing))
+            {
+                return existing.Detail;
+            }
+            var image = new SimsBitmap(_content.Read(path));
+            return OriginalGameplayOverlay.CreateImage(_device, image.Width, image.Height, image.Rgba, magenta: true);
+        }
+
+        OriginalGameplayOverlay.Image MakeText(string text, SimsBitmapFont f, (byte R, byte G, byte B) color) =>
+            OriginalGameplayOverlay.CreateImage(_device, f.RasterizeHiDpi(text, color));
+
+        List<OriginalGameplayOverlay.Image> MakeLines(string raw)
+        {
+            var normalized = raw.Replace("\r\n", "\n", StringComparison.Ordinal).Replace("\r", "\n", StringComparison.Ordinal);
+            var wrapped = new List<string>();
+            foreach (var paragraph in normalized.Split('\n'))
+            {
+                var lines = _popupBodyFont.WrappedLines(paragraph, 357);
+                if (lines.Count == 0)
+                {
+                    wrapped.Add(string.Empty);
+                }
+                else
+                {
+                    wrapped.AddRange(lines);
+                }
+            }
+
+            var result = new List<OriginalGameplayOverlay.Image>(wrapped.Count);
+            foreach (var line in wrapped)
+            {
+                if (string.IsNullOrEmpty(line))
+                {
+                    result.Add(new OriginalGameplayOverlay.Image(new UITexture(1, 1, [0, 0, 0, 0]), CGSize.Zero));
+                }
+                else
+                {
+                    result.Add(MakeText(line, _popupBodyFont, (195, 205, 205)));
+                }
+            }
+            return result;
+        }
+
+        SlidePopupEntry MakePopupText(PopupTopic topic, string rawTitle, string rawBody, string asset) => new()
+        {
+            Title = MakeText(rawTitle.Trim(), _popupTitleFont, (255, 255, 255)),
+            Body = MakeLines(rawBody),
+            Detail = DetailBitmap(topic, asset)
+        };
+
+        SlidePopupEntry MakePopup(PopupTopic topic, int titleIndex, int bodyIndex, string fallbackTitle, string asset)
+        {
+            var rawTitle = _strings.OptionString(titleIndex, fallbackTitle);
+            var rawBody = _strings.OptionString(bodyIndex, string.Empty);
+            return MakePopupText(topic, rawTitle, rawBody, asset);
+        }
+
         foreach (var setting in AllDetailSettings)
         {
-            var labelStr = strings.OptionString(setting.StringIndex(), setting.FallbackLabel());
-            _detailTitles[setting] = MakeText(labelStr, optFont, (195, 205, 205));
-            _detailHoverTitles[setting] = MakeText(labelStr, optFont, (255, 255, 255));
-            _detailAbout[setting] = strings.OptionString(setting.StringIndex() + 2, string.Empty);
-            _slidePopups[new PopupTopic.DetailTopic(setting)] = MakePopup(
+            var labelStr = _strings.OptionString(setting.StringIndex(), setting.FallbackLabel());
+            _detailTitles[setting] = MakeText(labelStr, _labelFont, (195, 205, 205));
+            _detailHoverTitles[setting] = MakeText(labelStr, _labelFont, (255, 255, 255));
+            _detailAbout[setting] = _strings.OptionString(setting.StringIndex() + 2, string.Empty);
+            var topic = new PopupTopic.DetailTopic(setting);
+            _slidePopups[topic] = MakePopup(
+                topic,
                 setting.StringIndex() + 1,
                 setting.StringIndex() + 2,
                 setting.FallbackLabel(),
@@ -346,20 +383,34 @@ public sealed class OriginalOptionsPanelOverlay
         string[] levelFallbacks = ["Low", "Med", "High"];
         for (var i = 0; i < levelFallbacks.Length; i++)
         {
-            _levelLabels.Add(MakeText(strings.OptionString(39 + i, levelFallbacks[i]), smallFont, (195, 205, 205)));
+            _levelLabels.Add(MakeText(_strings.OptionString(39 + i, levelFallbacks[i]), _levelFont, (195, 205, 205)));
         }
 
         foreach (var option in AllPlayOptions)
         {
-            var labelStr = strings.OptionString(option.StringIndex(), option.FallbackLabel());
-            _playLabels[option] = MakeText(labelStr, optFont, (195, 205, 205));
-            _playHoverLabels[option] = MakeText(labelStr, optFont, (255, 255, 255));
-            _playAbout[option] = strings.OptionString(option.StringIndex() + 2, string.Empty);
-            _slidePopups[new PopupTopic.OptionTopic(option)] = MakePopup(
-                option.StringIndex() + 1,
-                option.StringIndex() + 2,
-                option.FallbackLabel(),
-                option.PopupAsset());
+            var stringIndex = option.StringIndex();
+            var labelStr = stringIndex >= 0
+                ? _strings.OptionString(stringIndex, option.FallbackLabel())
+                : option.FallbackLabel();
+            _playLabels[option] = MakeText(labelStr, _labelFont, (195, 205, 205));
+            _playHoverLabels[option] = MakeText(labelStr, _labelFont, (255, 255, 255));
+
+            var topic = new PopupTopic.OptionTopic(option);
+            if (option == PlayOption.SharpText)
+            {
+                _playAbout[option] = sharpTextBody;
+                _slidePopups[topic] = MakePopupText(topic, sharpTextTitle, sharpTextBody, option.PopupAsset());
+            }
+            else
+            {
+                _playAbout[option] = _strings.OptionString(stringIndex + 2, string.Empty);
+                _slidePopups[topic] = MakePopup(
+                    topic,
+                    stringIndex + 1,
+                    stringIndex + 2,
+                    option.FallbackLabel(),
+                    option.PopupAsset());
+            }
         }
 
         (int Index, int TitleIdx, string FallbackTitle, string Asset)[] soundSpecs =
@@ -370,11 +421,13 @@ public sealed class OriginalOptionsPanelOverlay
         ];
         foreach (var (idx, titleIdx, fallbackTitle, asset) in soundSpecs)
         {
-            _slidePopups[new PopupTopic.SoundTopic(idx)] = MakePopup(titleIdx, titleIdx + 1, fallbackTitle, asset);
+            var topic = new PopupTopic.SoundTopic(idx);
+            _slidePopups[topic] = MakePopup(topic, titleIdx, titleIdx + 1, fallbackTitle, asset);
         }
 
-        _resetTutorialAbout = strings.OptionString(71, string.Empty);
-        _slidePopups[new PopupTopic.ResetTutorialTopic()] = MakePopup(
+        var resetTopic = new PopupTopic.ResetTutorialTopic();
+        _slidePopups[resetTopic] = MakePopup(
+            resetTopic,
             70,
             71,
             "About Reset Tutorial",
@@ -548,8 +601,7 @@ public sealed class OriginalOptionsPanelOverlay
             }
             else
             {
-                var raster = PlacementTooltip.Rasterize(_tooltipText, _tooltipFont);
-                image = OriginalGameplayOverlay.CreateImage(_device, raster.Width, raster.Height, raster.Rgba);
+                image = OriginalGameplayOverlay.CreateImage(_device, PlacementTooltip.RasterizeHiDpi(_tooltipText, _tooltipFont));
                 _tooltipImage = (_tooltipText, image);
             }
 
@@ -570,20 +622,43 @@ public sealed class OriginalOptionsPanelOverlay
         }
     }
 
+    private (double BoxX, double LabelX, double BoxY, double LabelY) GraphicsOptionPlacement(PlayOption option)
+    {
+        if (option == PlayOption.SharpText)
+        {
+            double labelX = _radioRows.Origin.X;
+            double boxX = labelX - (_graphicsLabels.Origin.X - _graphicsBoxes.Origin.X);
+            double boxY = Math.Min(
+                100 - _checkbox.Size.Height - 2,
+                _radioRows.Origin.Y + _radioRows.Size.Height + _radioSize.Height + 1);
+            double labelY = boxY + (_graphicsLabels.Origin.Y - _graphicsBoxes.Origin.Y);
+            return (boxX, labelX, boxY, labelY);
+        }
+
+        var row = option.Row();
+        return (
+            _graphicsBoxes.Origin.X,
+            _graphicsLabels.Origin.X,
+            _graphicsBoxes.Origin.Y + row * _graphicsBoxes.Size.Height,
+            _graphicsLabels.Origin.Y + row * _graphicsLabels.Size.Height);
+    }
+
     private CGRect OptionRect(PlayOption option, double top)
     {
         if (option.Page() == Page.Graphics)
         {
-            var box = _graphicsBoxes.Origin;
-            var label = _graphicsLabels.Origin;
+            var (boxX, labelX, boxY, _) = GraphicsOptionPlacement(option);
             var labelWidth = _playLabels.TryGetValue(option, out var img)
                 ? img.Size.Width
-                : _graphicsLabels.Size.Width - (label.X - box.X);
+                : _graphicsLabels.Size.Width - (labelX - boxX);
+            var height = option == PlayOption.SharpText
+                ? Math.Min(_graphicsBoxes.Size.Height, 100 - boxY)
+                : _graphicsBoxes.Size.Height;
             return new CGRect(
-                SubpanelOrigin.X + box.X,
-                top + SubpanelOrigin.Y + box.Y + option.Row() * _graphicsBoxes.Size.Height,
-                label.X - box.X + labelWidth,
-                _graphicsBoxes.Size.Height);
+                SubpanelOrigin.X + boxX,
+                top + SubpanelOrigin.Y + boxY,
+                labelX - boxX + labelWidth,
+                height);
         }
 
         var column = PlayColumn(option);
@@ -907,11 +982,12 @@ public sealed class OriginalOptionsPanelOverlay
                 var label = HoveredOption == option
                     ? (_playHoverLabels.TryGetValue(option, out var hImg) ? hImg : _playLabels.GetValueOrDefault(option))
                     : _playLabels.GetValueOrDefault(option);
+                var graphicsPlacement = option.Page() == Page.Graphics ? GraphicsOptionPlacement(option) : default;
                 var labelY = option.Page() == Page.Graphics
-                    ? top + SubpanelOrigin.Y + _graphicsLabels.Origin.Y + option.Row() * _graphicsLabels.Size.Height
+                    ? top + SubpanelOrigin.Y + graphicsPlacement.LabelY
                     : top + SubpanelOrigin.Y + PlayColumn(option).Y + option.Row() * _playRows.Size.Height;
                 var boxY = option.Page() == Page.Graphics
-                    ? area.MinY
+                    ? top + SubpanelOrigin.Y + graphicsPlacement.BoxY
                     : labelY + (_labelFont.LineHeight - (int)_checkbox.Size.Height) / 2;
 
                 pageContent.Add(new OriginalGameplayOverlay.Part(
@@ -922,7 +998,7 @@ public sealed class OriginalOptionsPanelOverlay
                 if (label.Size.Width > 0 && label.Size.Height > 0)
                 {
                     var labelX = option.Page() == Page.Graphics
-                        ? SubpanelOrigin.X + _graphicsLabels.Origin.X
+                        ? SubpanelOrigin.X + graphicsPlacement.LabelX
                         : SubpanelOrigin.X + PlayColumn(option).Label;
                     pageContent.Add(new OriginalGameplayOverlay.Part(
                         label,
@@ -1075,7 +1151,8 @@ public static class OriginalOptionsPanelOverlayExtensions
     public static OriginalOptionsPanelOverlay.Page Page(this OriginalOptionsPanelOverlay.PlayOption option) =>
         (int)option < 8 ? OriginalOptionsPanelOverlay.Page.Play : OriginalOptionsPanelOverlay.Page.Graphics;
 
-    public static int Row(this OriginalOptionsPanelOverlay.PlayOption option) => (int)option % 4;
+    public static int Row(this OriginalOptionsPanelOverlay.PlayOption option) =>
+        option == OriginalOptionsPanelOverlay.PlayOption.SharpText ? 4 : (int)option % 4;
 
     public static bool IsColumnA(this OriginalOptionsPanelOverlay.PlayOption option) =>
         (int)option is >= 4 and < 8;
@@ -1096,6 +1173,7 @@ public static class OriginalOptionsPanelOverlayExtensions
         9 => 17,
         10 => 20,
         11 => 23,
+        12 => -1,
         _ => throw new ArgumentOutOfRangeException(nameof(option), option, null)
     };
 
@@ -1113,6 +1191,7 @@ public static class OriginalOptionsPanelOverlayExtensions
         9 => "Shadows",
         10 => "Lighting",
         11 => "Interface Effects",
+        12 => "Sharp Text",
         _ => throw new ArgumentOutOfRangeException(nameof(option), option, null)
     };
 
@@ -1130,6 +1209,7 @@ public static class OriginalOptionsPanelOverlayExtensions
         OriginalOptionsPanelOverlay.PlayOption.Shadows => "UIGraphics/CPanel/PopupOptShadows.bmp",
         OriginalOptionsPanelOverlay.PlayOption.Lighting => "UIGraphics/CPanel/PopupOptLighting.bmp",
         OriginalOptionsPanelOverlay.PlayOption.InterfaceEffects => "UIGraphics/CPanel/PopupOptTransUI.bmp",
+        OriginalOptionsPanelOverlay.PlayOption.SharpText => "UIGraphics/CPanel/PopupOptAntiAlias.bmp",
         _ => throw new ArgumentOutOfRangeException(nameof(option), option, null)
     };
 
@@ -1151,6 +1231,7 @@ public static class OriginalOptionsPanelOverlayExtensions
         OriginalOptionsPanelOverlay.PlayOption.ExportHTML => options.ExportHTML,
         OriginalOptionsPanelOverlay.PlayOption.AutoSnapshot => options.AutoSnapshot,
         OriginalOptionsPanelOverlay.PlayOption.LivePIP => options.LivePIP,
+        OriginalOptionsPanelOverlay.PlayOption.SharpText => options.SharpText,
         _ => throw new ArgumentOutOfRangeException(nameof(option), option, null)
     };
 
@@ -1196,6 +1277,9 @@ public static class OriginalOptionsPanelOverlayExtensions
                 break;
             case OriginalOptionsPanelOverlay.PlayOption.LivePIP:
                 copy.LivePIP = !copy.LivePIP;
+                break;
+            case OriginalOptionsPanelOverlay.PlayOption.SharpText:
+                copy.SharpText = !copy.SharpText;
                 break;
         }
         return copy;

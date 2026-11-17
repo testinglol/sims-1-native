@@ -368,6 +368,9 @@ internal static class ServingEntry
             Path.GetDirectoryName(resolvedGameData) is { } parent &&
             Directory.Exists(Path.Combine(parent, "UserData")))
             return parent;
+        if (SimsSimulation.SimulationServer.TryReadSavedInstallRoot(workspace) is { } savedInstall &&
+            Directory.Exists(Path.Combine(savedInstall, "UserData")))
+            return Path.GetFullPath(savedInstall);
         if (Environment.GetEnvironmentVariable("SIMS_GAME_DIR") is { Length: > 0 } envGame &&
             Directory.Exists(Path.Combine(envGame, "UserData")))
             return Path.GetFullPath(envGame);

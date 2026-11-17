@@ -51,14 +51,16 @@ float4 canvasPosition(thread const float2& pixel, thread const float& z, constan
     return float4(((pixel.x / canvas.x) * 2.0) - 1.0, 1.0 - ((pixel.y / canvas.y) * 2.0), z, 1.0);
 }
 
-vertex main0_out main0(constant Quad& quad [[buffer(0)]], const device Vertices& _56 [[buffer(1)]], uint gl_VertexIndex [[vertex_id]])
+vertex main0_out main0(constant Quad& quad [[buffer(0)]], const device Vertices& _63 [[buffer(1)]], uint gl_VertexIndex [[vertex_id]])
 {
     main0_out out = {};
+    uint baseVertex = as_type<uint>(quad.depthInterval.x);
+    uint _70 = baseVertex + uint(int(gl_VertexIndex));
     AvatarVertex vertex0;
-    vertex0.position = _56.vertices[int(gl_VertexIndex)].position;
-    vertex0.uv = _56.vertices[int(gl_VertexIndex)].uv;
-    vertex0.padding = _56.vertices[int(gl_VertexIndex)].padding;
-    vertex0.normal = _56.vertices[int(gl_VertexIndex)].normal;
+    vertex0.position = _63.vertices[_70].position;
+    vertex0.uv = _63.vertices[_70].uv;
+    vertex0.padding = _63.vertices[_70].padding;
+    vertex0.normal = _63.vertices[_70].normal;
     float2 param = quad.rect.xy + (vertex0.position.xy * quad.rect.zw);
     float param_1 = vertex0.position.z;
     out.gl_Position = canvasPosition(param, param_1, quad);

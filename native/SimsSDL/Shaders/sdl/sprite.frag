@@ -145,7 +145,15 @@ void main() {
     if (inDepthInterval.z > 0.5) {
         if (max(fw.x, fw.y) > 1.05) {
             bool fullTexture = inUVRect.x <= 1e-4 && inUVRect.y <= 1e-4 && inUVRect.z >= 0.9999 && inUVRect.w >= 0.9999;
-            color = (fullTexture ? texture(art, clampedUV) : textureLod(art, clampedUV, 0.0)) * inTint;
+            if (fullTexture) {
+                color = texture(art, clampedUV) * inTint;
+            } else {
+                float lod = max(0.0, log2(max(fw.x, fw.y)));
+                vec2 mipHalf = (0.5 * exp2(lod)) / texSize;
+                vec2 sMin = inUVRect.xy + mipHalf;
+                vec2 sMax = max(sMin, inUVRect.xy + inUVRect.zw - mipHalf);
+                color = textureLod(art, clamp(inUV, sMin, sMax), lod) * inTint;
+            }
             return;
         }
         if (min(fw.x, fw.y) > 0.92) {

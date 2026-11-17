@@ -60,6 +60,10 @@ task_build_app() {
   if [[ -f "$task_root/dist/sims1-icon.icns" ]]; then
     cp "$task_root/dist/sims1-icon.icns" "$app_path/Contents/Resources/AppIcon.icns"
   fi
+  if [[ -d "$task_root/runtime/ui-hd-pack" ]]; then
+    rm -rf "$app_path/Contents/Resources/HdUi"
+    cp -R "$task_root/runtime/ui-hd-pack" "$app_path/Contents/Resources/HdUi"
+  fi
   cp "$info_plist" "$app_path/Contents/Info.plist"
   codesign --force --deep --sign - "$app_path"
   print "Built $app_path"

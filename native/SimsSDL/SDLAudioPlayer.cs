@@ -607,37 +607,5 @@ public sealed class SDLAudioPlayer : IDisposable
         }
     }
 
-    private static string ResolveRealPath(string path)
-    {
-        string full = Path.GetFullPath(path);
-        string? root = Path.GetPathRoot(full);
-        if (string.IsNullOrEmpty(root))
-            return full;
-
-        string relative = Path.GetRelativePath(root, full);
-        if (relative == ".")
-            return root;
-
-        string current = root;
-        string[] segments = relative.Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries);
-        for (int i = 0; i < segments.Length; i++)
-        {
-            current = Path.GetFullPath(Path.Combine(current, segments[i]));
-            try
-            {
-                FileSystemInfo? target = File.Exists(current)
-                    ? File.ResolveLinkTarget(current, returnFinalTarget: true)
-                    : Directory.Exists(current)
-                        ? Directory.ResolveLinkTarget(current, returnFinalTarget: true)
-                        : null;
-                if (target is not null)
-                    current = Path.GetFullPath(target.FullName);
-            }
-            catch
-            {
-            }
-        }
-
-        return current;
-    }
+    private static string ResolveRealPath(string path) => LotScene.ResolveRealPath(path);
 }

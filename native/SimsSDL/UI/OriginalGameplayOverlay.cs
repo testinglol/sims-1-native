@@ -96,10 +96,10 @@ public sealed class OriginalGameplayOverlay
     private readonly Image _greenBars;
     private readonly Image _redBars;
     private readonly Image[] _buttons;
-    private readonly Image[] _labels;
-    private readonly Image[] _petLabels;
-    private readonly Image[] _traitLabels;
-    private readonly Image[] _petTraitLabels;
+    private Image[] _labels = [];
+    private Image[] _petLabels = [];
+    private Image[] _traitLabels = [];
+    private Image[] _petTraitLabels = [];
     private readonly Image _personalityBackground;
     private readonly Image _personalityBars;
     private readonly Image _houseBarsOff;
@@ -119,9 +119,9 @@ public sealed class OriginalGameplayOverlay
     private readonly SimsBitmapFont _careerFont;
     private readonly SimsBitmapFont _clockFont;
     private readonly SimsBitmapFont _zodiacFont;
-    private readonly Image[] _skillLabels;
-    private readonly Image[] _dogSkillLabels;
-    private readonly Image[] _catSkillLabels;
+    private Image[] _skillLabels = [];
+    private Image[] _dogSkillLabels = [];
+    private Image[] _catSkillLabels = [];
     private readonly Image _skillBars;
     private readonly Image _skillBarsOff;
     private readonly Image _skillHighlight;
@@ -405,25 +405,7 @@ public sealed class OriginalGameplayOverlay
         _clockFont = new SimsBitmapFont(content.Read("UIGraphics/Fonts/variablesans_08.ffn"));
         _zodiacFont = new SimsBitmapFont(content.Read("UIGraphics/Fonts/variablesans_12.ffn"));
 
-        _labels = new Image[motiveCount];
-        _petLabels = new Image[motiveCount];
-        for (int i = 0; i < motiveCount; i++)
-        {
-            string name = OriginalGameplayLayout.Motives[i];
-            _labels[i] = Text(strings.MotiveLabel(i, false, name), _clockFont, device);
-            _petLabels[i] = Text(strings.MotiveLabel(i, true, name), _clockFont, device);
-        }
-
-        int traitCount = OriginalGameplayLayout.Traits.Count;
-        _traitLabels = new Image[traitCount];
-        _petTraitLabels = new Image[traitCount];
-        for (int i = 0; i < traitCount; i++)
-        {
-            string name = OriginalGameplayLayout.Traits[i];
-            _traitLabels[i] = Text(strings.PersonalityTraitLabel(i, false, name), _clockFont, device);
-            string petFallback = i == 4 ? "Friendly" : name;
-            _petTraitLabels[i] = Text(strings.PersonalityTraitLabel(i, true, petFallback), _clockFont, device);
-        }
+        RebuildStaticLabels();
 
         _personalityBackground = Bitmap("Backgrounds/PersBkg.bmp");
         _personalityBars = Bitmap("HouseSubBars.bmp");
@@ -431,22 +413,6 @@ public sealed class OriginalGameplayOverlay
         _livePopupBackground = Bitmap("Backgrounds/PopupInfoTiles.bmp");
         _bevelDivider = TryBitmap(Bitmap, "Backgrounds/OptionsToothpkVert.bmp")
             ?? CreateImage(device, 2, 1, [0, 0, 42, 255, 74, 90, 148, 255]);
-
-        _skillLabels = new Image[OriginalGameplayLayout.Skills.Count];
-        for (int i = 0; i < OriginalGameplayLayout.Skills.Count; i++)
-        {
-            _skillLabels[i] = Text(strings.CareerSkill(OriginalGameplayLayout.Skills[i]), _careerFont, device);
-        }
-
-        string[] dogFallbacks = ["House Breaking", "Obedience", "Tricks"];
-        string[] catFallbacks = ["Hunting", "Obedience", "Tricks"];
-        _dogSkillLabels = new Image[OriginalGameplayLayout.PetSkills.Count];
-        _catSkillLabels = new Image[OriginalGameplayLayout.PetSkills.Count];
-        for (int i = 0; i < OriginalGameplayLayout.PetSkills.Count; i++)
-        {
-            _dogSkillLabels[i] = Text(strings.PetSkillTitle(i, false, dogFallbacks[i]), _careerFont, device);
-            _catSkillLabels[i] = Text(strings.PetSkillTitle(i, true, catFallbacks[i]), _careerFont, device);
-        }
 
         _skillBars = Bitmap("JobSubBars.bmp");
         _skillBarsOff = Bitmap("Backgrounds/JobSubBarsOff.bmp");
@@ -487,7 +453,93 @@ public sealed class OriginalGameplayOverlay
         _missingInventoryIcon = Bitmap("Catalog/BackButtons/BackCTwo.bmp");
     }
 
-    public static Image CreateImage(UIDevice device, int width, int height, byte[] pixels, bool magenta = false, bool blue = false)
+    private void RebuildStaticLabels()
+    {
+        int motiveCount = OriginalGameplayLayout.Motives.Count;
+        _labels = new Image[motiveCount];
+        _petLabels = new Image[motiveCount];
+        for (int i = 0; i < motiveCount; i++)
+        {
+            string name = OriginalGameplayLayout.Motives[i];
+            _labels[i] = Text(_strings.MotiveLabel(i, false, name), _clockFont, Device);
+            _petLabels[i] = Text(_strings.MotiveLabel(i, true, name), _clockFont, Device);
+        }
+
+        int traitCount = OriginalGameplayLayout.Traits.Count;
+        _traitLabels = new Image[traitCount];
+        _petTraitLabels = new Image[traitCount];
+        for (int i = 0; i < traitCount; i++)
+        {
+            string name = OriginalGameplayLayout.Traits[i];
+            _traitLabels[i] = Text(_strings.PersonalityTraitLabel(i, false, name), _clockFont, Device);
+            string petFallback = i == 4 ? "Friendly" : name;
+            _petTraitLabels[i] = Text(_strings.PersonalityTraitLabel(i, true, petFallback), _clockFont, Device);
+        }
+
+        _skillLabels = new Image[OriginalGameplayLayout.Skills.Count];
+        for (int i = 0; i < OriginalGameplayLayout.Skills.Count; i++)
+        {
+            _skillLabels[i] = Text(_strings.CareerSkill(OriginalGameplayLayout.Skills[i]), _careerFont, Device);
+        }
+
+        string[] dogFallbacks = ["House Breaking", "Obedience", "Tricks"];
+        string[] catFallbacks = ["Hunting", "Obedience", "Tricks"];
+        _dogSkillLabels = new Image[OriginalGameplayLayout.PetSkills.Count];
+        _catSkillLabels = new Image[OriginalGameplayLayout.PetSkills.Count];
+        for (int i = 0; i < OriginalGameplayLayout.PetSkills.Count; i++)
+        {
+            _dogSkillLabels[i] = Text(_strings.PetSkillTitle(i, false, dogFallbacks[i]), _careerFont, Device);
+            _catSkillLabels[i] = Text(_strings.PetSkillTitle(i, true, catFallbacks[i]), _careerFont, Device);
+        }
+    }
+
+    public void RefreshText()
+    {
+        RebuildStaticLabels();
+        _seasonTooltips.Clear();
+        _panelTips.Clear();
+        _peopleTips.Clear();
+        _personTips.Clear();
+        _inventoryTooltipCache = null;
+        _needsTitleImage = null;
+        _cachedClockText = null;
+        _cachedFriendsText = null;
+        _cachedBudgetText = null;
+        _personalityPopupTitle = null;
+        _personalityPopupLines = [];
+
+        if (_motivePopupIndex is not null)
+        {
+            UpdateMotivePopup();
+        }
+        else if (RelationshipPopupId is not null &&
+                 State?.Selected?.Relationships is { } rels &&
+                 rels.FirstOrDefault(r => r.NeighborId == RelationshipPopupId) is { } target)
+        {
+            _relationshipPopupText = null;
+            UpdateRelationshipPopup(target);
+        }
+
+        if (State is not null && !string.IsNullOrEmpty(_resourceRoot))
+        {
+            Update(State, _resourceRoot);
+        }
+    }
+
+    public static Image CreateImage(UIDevice device, SimsBitmapFont.HiDpiRaster raster) =>
+        CreateImage(device, raster.PixelWidth, raster.PixelHeight, raster.Rgba, new CGSize(raster.LogicalWidth, raster.LogicalHeight));
+
+    public static Image CreateImage(UIDevice device, int width, int height, byte[] pixels, bool magenta = false, bool blue = false) =>
+        CreateImage(device, width, height, pixels, new CGSize(width, height), magenta, blue);
+
+    public static Image CreateImage(
+        UIDevice device,
+        int width,
+        int height,
+        byte[] pixels,
+        CGSize logicalSize,
+        bool magenta = false,
+        bool blue = false)
     {
         _ = device;
         ArgumentNullException.ThrowIfNull(pixels);
@@ -497,7 +549,7 @@ public sealed class OriginalGameplayOverlay
         }
 
         var rgba = SpritePixels.PremultipliedSRGB(pixels, removeMagenta: magenta, removeBlue: blue);
-        return new Image(new UITexture(width, height, rgba), new CGSize(width, height));
+        return new Image(new UITexture(width, height, rgba), logicalSize);
     }
 
     /// <summary>Masks square icon corners by blitting the icon frame using blue transparency over a
@@ -598,34 +650,7 @@ public sealed class OriginalGameplayOverlay
     public static Image Text(string value, SimsBitmapFont font, UIDevice device, (byte R, byte G, byte B) color)
     {
         ArgumentNullException.ThrowIfNull(font);
-        var raster = font.Rasterize(value, color);
-        const int pad = 3;
-        int width = Math.Max(1, raster.Width - 2 * pad);
-        int height = Math.Max(1, raster.Height - 2 * pad);
-        var pixels = new byte[width * height * 4];
-
-        if (raster.Height > 2 * pad && raster.Width > pad)
-        {
-            int copyCols = Math.Min(width, raster.Width - pad);
-            int rowBytes = copyCols * 4;
-            for (int row = 0; row < height; row++)
-            {
-                int srcY = pad + row;
-                if (srcY >= raster.Height)
-                {
-                    break;
-                }
-
-                int srcOffset = (srcY * raster.Width + pad) * 4;
-                int dstOffset = row * width * 4;
-                if (srcOffset >= 0 && srcOffset + rowBytes <= raster.Rgba.Length && dstOffset + rowBytes <= pixels.Length)
-                {
-                    Buffer.BlockCopy(raster.Rgba, srcOffset, pixels, dstOffset, rowBytes);
-                }
-            }
-        }
-
-        return CreateImage(device, width, height, pixels);
+        return CreateImage(device, font.RasterizeHiDpi(value, color, logicalMargin: 0));
     }
 
     public CGRect FamilyFriendsRect(int count)
@@ -1309,8 +1334,7 @@ public sealed class OriginalGameplayOverlay
             {
                 if (!_seasonTooltips.TryGetValue(hoverKind, out var cachedTip) || !string.Equals(cachedTip.Text, tipText, StringComparison.Ordinal))
                 {
-                    var raster = PlacementTooltip.Rasterize(tipText, _careerFont);
-                    _seasonTooltips[hoverKind] = (tipText, CreateImage(Device, raster.Width, raster.Height, raster.Rgba));
+                    _seasonTooltips[hoverKind] = (tipText, CreateImage(Device, PlacementTooltip.RasterizeHiDpi(tipText, _careerFont)));
                 }
             }
 
@@ -2667,8 +2691,7 @@ public sealed class OriginalGameplayOverlay
             {
                 try
                 {
-                    var raster = PlacementTooltip.Rasterize(text, _careerFont);
-                    tooltip = CreateImage(Device, raster.Width, raster.Height, raster.Rgba);
+                    tooltip = CreateImage(Device, PlacementTooltip.RasterizeHiDpi(text, _careerFont));
                     _inventoryTooltipCache = (text, tooltip);
                 }
                 catch
@@ -2737,8 +2760,7 @@ public sealed class OriginalGameplayOverlay
             {
                 try
                 {
-                    var raster = PlacementTooltip.Rasterize(text, _careerFont);
-                    tooltip = CreateImage(Device, raster.Width, raster.Height, raster.Rgba);
+                    tooltip = CreateImage(Device, PlacementTooltip.RasterizeHiDpi(text, _careerFont));
                     _panelTips[panelTip.Index] = tooltip;
                 }
                 catch
@@ -3782,8 +3804,7 @@ public sealed class OriginalGameplayOverlay
 
         try
         {
-            var raster = PlacementTooltip.Rasterize(text, _careerFont);
-            var created = CreateImage(Device, raster.Width, raster.Height, raster.Rgba);
+            var created = CreateImage(Device, PlacementTooltip.RasterizeHiDpi(text, _careerFont));
             cache[text] = created;
             return created;
         }
@@ -3884,36 +3905,7 @@ public sealed class OriginalGameplayOverlay
             rhs,
             OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
 
-    private static string ResolveRealPath(string path)
-    {
-        var fullPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
-        try
-        {
-            var parent = Path.GetDirectoryName(fullPath);
-            var leaf = Path.GetFileName(fullPath);
-            if (!string.IsNullOrEmpty(parent) && !string.IsNullOrEmpty(leaf))
-            {
-                fullPath = Path.Combine(ResolveRealPath(parent), leaf);
-            }
-
-            if (File.Exists(fullPath))
-            {
-                return Path.TrimEndingDirectorySeparator(
-                    File.ResolveLinkTarget(fullPath, returnFinalTarget: true)?.FullName ?? fullPath);
-            }
-
-            if (Directory.Exists(fullPath))
-            {
-                return Path.TrimEndingDirectorySeparator(
-                    Directory.ResolveLinkTarget(fullPath, returnFinalTarget: true)?.FullName ?? fullPath);
-            }
-        }
-        catch
-        {
-        }
-
-        return fullPath;
-    }
+    private static string ResolveRealPath(string path) => LotScene.ResolveRealPath(path);
 
     private static double MonotonicNowSeconds() =>
         Stopwatch.GetTimestamp() / (double)Stopwatch.Frequency;

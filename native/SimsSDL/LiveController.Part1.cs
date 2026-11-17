@@ -2161,6 +2161,7 @@ internal sealed partial class LiveController
             }
 
             Ui.OptionsPanel.PlayOptions = loadedOptions;
+            Ui.ApplySharpText(loadedOptions.SharpText);
             Ui.SoundOptions.InterfaceEffectsEnabled = loadedOptions.InterfaceEffects;
             _centresOnSelectedSim = loadedOptions.AutoCenter;
             Renderer.LightingEnabled = loadedOptions.Lighting && Options.Lighting;
@@ -2205,6 +2206,8 @@ internal sealed partial class LiveController
     private void SavePlayOptions(OriginalOptionsPanelOverlay.PlayOptionsState updated)
     {
         Ui.OptionsPanel.PlayOptions = updated;
+        Ui.ApplySharpText(updated.SharpText);
+        _neighborhoodBeforeHouseholdCreation?.ClearTextCaches();
         Ui.SoundOptions.InterfaceEffectsEnabled = updated.InterfaceEffects;
         try
         {

@@ -82,6 +82,19 @@ internal static class PackContentPaths
 
     internal static bool IsSymbolicLink(string path)
     {
+        if (OperatingSystem.IsWindows())
+        {
+            try
+            {
+                var winAttrs = File.GetAttributes(path);
+                return winAttrs != (FileAttributes)(-1) && (winAttrs & FileAttributes.ReparsePoint) != 0;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         try
         {
             var info = new FileInfo(path);
@@ -237,9 +250,31 @@ internal static class PackContentPaths
 
     private static bool TryResolveFinalLinkTarget(string path, out string resolved)
     {
+        bool isWindowsDir = false;
+        if (OperatingSystem.IsWindows())
+        {
+            try
+            {
+                var attrs = File.GetAttributes(path);
+                if (attrs == (FileAttributes)(-1) || (attrs & FileAttributes.ReparsePoint) == 0)
+                {
+                    resolved = string.Empty;
+                    return false;
+                }
+                isWindowsDir = (attrs & FileAttributes.Directory) != 0;
+            }
+            catch
+            {
+                resolved = string.Empty;
+                return false;
+            }
+        }
+
         try
         {
-            var target = File.ResolveLinkTarget(path, returnFinalTarget: true);
+            var target = isWindowsDir
+                ? Directory.ResolveLinkTarget(path, returnFinalTarget: true)
+                : File.ResolveLinkTarget(path, returnFinalTarget: true);
             if (target is not null)
             {
                 resolved = Path.GetFullPath(target.FullName);

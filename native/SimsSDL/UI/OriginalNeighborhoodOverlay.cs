@@ -82,10 +82,10 @@ public static class BannerActionExtensions
         BannerAction.SelectFamily => new CGPoint(200, 0),
         BannerAction.Bulldoze => new CGPoint(mapMode == 1 ? 300 : 373, 0),
         BannerAction.Quit => new CGPoint(600, 0),
-        BannerAction.Internet => new CGPoint(762, 0),
+        BannerAction.Internet => new CGPoint(762, 1.15),
         BannerAction.Credits => new CGPoint(195, 540),
-        BannerAction.Previous => new CGPoint(106, 0),
-        BannerAction.Next => new CGPoint(141, 0),
+        BannerAction.Previous => new CGPoint(106, 1.85),
+        BannerAction.Next => new CGPoint(141, 1.85),
         BannerAction.ImportFamily => new CGPoint(mapMode == 1 ? 250 : 422, 0),
         BannerAction.Downtown => new CGPoint(400, 0),
         BannerAction.SimsLogo => new CGPoint(5, 0),
@@ -466,9 +466,15 @@ public sealed class OriginalNeighborhoodOverlay
         OriginalGameplayOverlay.Image Closed,
         OriginalGameplayOverlay.Image Open,
         CGRect HitRect,
-        /// <summary>Allocates one slot per family member, preserving slot index alignment by drawing
-        /// nothing when a member lacks a thumbnail.</summary>
-        IReadOnlyList<SimsBitmap?> Members);
+        /// <summary>Allocates one opaque portrait image per family member, preserving slot alignment.</summary>
+        IReadOnlyList<OriginalGameplayOverlay.Image?> MemberPortraits);
+
+    private sealed record RolloverCard(
+        int House,
+        CGSize BoxSize,
+        IReadOnlyList<OriginalGameplayOverlay.Image?> Lines,
+        int LineHeight,
+        IReadOnlyList<(NeighborhoodRolloverLayout.Rect Rect, OriginalGameplayOverlay.Image Image)> Portraits);
 
     private sealed record Animation(
         CGPoint Position,
@@ -532,8 +538,8 @@ public sealed class OriginalNeighborhoodOverlay
     private readonly double _startedAt = MonotonicNowSeconds();
     private readonly OriginalUIStrings _strings;
     private readonly SimsBitmapFont? _font;
+    private readonly SimsBitmapFont? _tooltipFont;
     private readonly OriginalGameplayOverlay.Image? _neighborhoodNumberImage;
-    private readonly SimsTarga? _rolloverTiler;
     private readonly OriginalGameplayOverlay.Image? _rolloverBackground;
     private readonly OriginalGameplayOverlay.Image? _banner;
     private NeighborhoodLotFilter? _travelFilter;
@@ -545,7 +551,7 @@ public sealed class OriginalNeighborhoodOverlay
     private readonly Dictionary<BannerAction, string> _bannerTooltips;
     private readonly HashSet<BannerAction> _installedBannerActions;
     public BannerAction? HoveredBanner { get; private set; }
-    private (int House, OriginalGameplayOverlay.Image Image, CGSize Size)? _rolloverCache;
+    private RolloverCard? _rolloverCache;
 
     private (BannerAction Action, string Text, OriginalGameplayOverlay.Image Image)? _bannerTip;
     private BannerAction? _hoveredTipAction;
@@ -569,17 +575,28 @@ public sealed class OriginalNeighborhoodOverlay
 
         _strings = new OriginalUIStrings(content);
         _font = font;
+        SimsBitmapFont? tipFont = font;
+        foreach (string tipFontPath in new[] { "UIGraphics/Fonts/variablesans_09.ffn", "UIGraphics/Fonts/variablesans_08.ffn" })
+        {
+            try
+            {
+                tipFont = new SimsBitmapFont(content.Read(tipFontPath));
+                break;
+            }
+            catch
+            {
+            }
+        }
+        _tooltipFont = tipFont;
         _device = device;
 
         if (font is null)
         {
-            _rolloverTiler = null;
             _rolloverBackground = null;
         }
         else
         {
             var tiler = new SimsTarga(content.Read("UIGraphics/Nbhd/HotSpotPopupTiler.tga"));
-            _rolloverTiler = tiler;
             _rolloverBackground = OriginalGameplayOverlay.CreateImage(device, tiler.Width, tiler.Height, tiler.Rgba);
         }
 
@@ -596,9 +613,38 @@ public sealed class OriginalNeighborhoodOverlay
         var manifest = JsonSerializer.Deserialize<Manifest>(manifestData)
             ?? throw new ContentError("Neighborhood manifest decoded to null");
 
+        string? hdUiRoot = SimsBitmapFont.SharpTextEnabled ? SimsAssetPaths.FindHdUiDirectory() : null;
+
         OriginalGameplayOverlay.Image BannerImage(string path)
         {
             var bitmap = new SimsBitmap(content.Read(path));
+            if (hdUiRoot is not null)
+            {
+                string fileStem = Path.GetFileNameWithoutExtension(path).ToLowerInvariant();
+                string hdPath = Path.Combine(hdUiRoot, "NghUI", fileStem + ".png");
+                if (File.Exists(hdPath))
+                {
+                    try
+                    {
+                        byte[] hdBytes = File.ReadAllBytes(hdPath);
+                        var decoded = StbImageSharp.ImageResult.FromMemory(
+                            hdBytes,
+                            StbImageSharp.ColorComponents.RedGreenBlueAlpha);
+                        if (decoded.Width > 0 && decoded.Height > 0 && decoded.Data is not null)
+                        {
+                            return OriginalGameplayOverlay.CreateImage(
+                                device,
+                                decoded.Width,
+                                decoded.Height,
+                                decoded.Data,
+                                new CGSize(bitmap.Width, bitmap.Height));
+                        }
+                    }
+                    catch
+                    {
+                    }
+                }
+            }
             return OriginalGameplayOverlay.CreateImage(device, bitmap.Width, bitmap.Height, bitmap.Rgba, magenta: true);
         }
 
@@ -779,7 +825,31 @@ public sealed class OriginalNeighborhoodOverlay
             try
             {
                 var bmp = new SimsBitmap(content.Read(path));
-                loadedLargeBack = OriginalGameplayOverlay.CreateImage(device, bmp.Width, bmp.Height, bmp.Rgba);
+                if (bmp.Width >= 64 && bmp.Height >= 64)
+                {
+                    // Extract a clean 64x64 9-slice frame from the outer 32px border of largeback.bmp so its
+                    // baked-in 1024x768 center cutout shadow does not appear as a second floating box on widescreen/4K.
+                    byte[] cleanFrame = new byte[64 * 64 * 4];
+                    for (int y = 0; y < 64; y++)
+                    {
+                        int sy = y < 32 ? y : bmp.Height - (64 - y);
+                        for (int x = 0; x < 64; x++)
+                        {
+                            int sx = x < 32 ? x : bmp.Width - (64 - x);
+                            int src = (sy * bmp.Width + sx) * 4;
+                            int dst = (y * 64 + x) * 4;
+                            cleanFrame[dst] = bmp.Rgba[src];
+                            cleanFrame[dst + 1] = bmp.Rgba[src + 1];
+                            cleanFrame[dst + 2] = bmp.Rgba[src + 2];
+                            cleanFrame[dst + 3] = 255;
+                        }
+                    }
+                    loadedLargeBack = OriginalGameplayOverlay.CreateImage(device, 64, 64, cleanFrame);
+                }
+                else
+                {
+                    loadedLargeBack = OriginalGameplayOverlay.CreateImage(device, bmp.Width, bmp.Height, bmp.Rgba);
+                }
                 break;
             }
             catch
@@ -798,7 +868,7 @@ public sealed class OriginalNeighborhoodOverlay
         if (manifest.Mode == 1)
         {
             OriginalGameplayOverlay.Image? numImg = null;
-            foreach (string fontPath in new[] { "UIGraphics/Fonts/variablesans_11.ffn", "UIGraphics/Fonts/variablesans_10.ffn" })
+            foreach (string fontPath in new[] { "UIGraphics/Fonts/variablesans_12.ffn", "UIGraphics/Fonts/variablesans_11.ffn", "UIGraphics/Fonts/variablesans_10.ffn" })
             {
                 try
                 {
@@ -874,22 +944,23 @@ public sealed class OriginalNeighborhoodOverlay
 
             var memberImages = entry.MemberImages ?? [];
             int memberCount = Math.Min(8, memberImages.Count);
-            var members = new SimsBitmap?[memberCount];
+            var memberPortraits = new OriginalGameplayOverlay.Image?[memberCount];
             for (int m = 0; m < memberCount; m++)
             {
                 if (memberImages[m] is not { } memberPath)
                     continue;
                 try
                 {
-                    members[m] = ReadHouseBitmap(memberPath, width: null, height: null);
+                    var bmp = ReadHouseBitmap(memberPath, width: null, height: null);
+                    memberPortraits[m] = OriginalGameplayOverlay.CreateImage(device, bmp.Width, bmp.Height, bmp.Rgba, magenta: true);
                 }
                 catch
                 {
-                    members[m] = null;
+                    memberPortraits[m] = null;
                 }
             }
 
-            houses[entryIdx] = new House(entry, closed, open, hitRect, members);
+            houses[entryIdx] = new House(entry, closed, open, hitRect, memberPortraits);
         }
         _houses = houses;
     }
@@ -953,10 +1024,10 @@ public sealed class OriginalNeighborhoodOverlay
 
     private (double Left, double Top, double Factor) Transform(CGSize canvas, float uiScale = 1f)
     {
-        _ = uiScale;
         double w = _canvasWidth;
         double h = _canvasHeight;
-        double factor = Math.Max(0.001, Math.Min(canvas.Width / w, canvas.Height / h));
+        double fit = Math.Max(0.001, Math.Min(canvas.Width / w, canvas.Height / h));
+        double factor = uiScale > 0f ? Math.Min(fit, Math.Max(0.25, uiScale * 1.15)) : fit;
         double left = (canvas.Width - w * factor) / 2.0;
         double top = (canvas.Height - h * factor) / 2.0;
         return (left, top, factor);
@@ -1080,6 +1151,12 @@ public sealed class OriginalNeighborhoodOverlay
     {
         RezoneMode = value;
         _rolloverCache = null;
+    }
+
+    public void ClearTextCaches()
+    {
+        _rolloverCache = null;
+        _bannerTip = null;
     }
 
     /// <summary>Indicates whether a lot is completely bulldozed, which is required before the lot can be
@@ -1221,15 +1298,14 @@ public sealed class OriginalNeighborhoodOverlay
         return entry.StreetTemplate ?? _strings.NeighborhoodRollover(7, "%s Sim Lane");
     }
 
-    /// <summary>Composites the nine-sliced popup background, wrapped text, and 25x25 thumbnail portraits
-    /// into an offscreen surface, then alpha-blends the composite using a constant fade offset yielding a
-    /// center alpha of 176.</summary>
-    private (OriginalGameplayOverlay.Image Image, CGSize Size)? RolloverComposite(int houseNumber)
+    /// <summary>Builds a cached lot hover card pairing the opaque 9-sliced popup frame with Hi-DPI
+    /// text lines and opaque 25x25 household portrait tiles.</summary>
+    private RolloverCard? RolloverCardForHouse(int houseNumber)
     {
         if (_rolloverCache is { } cached && cached.House == houseNumber)
-            return (cached.Image, cached.Size);
+            return cached;
 
-        if (_font is not { } font || _rolloverTiler is not { } tiler)
+        if (_font is not { } font || _rolloverBackground is null)
             return null;
 
         House? house = null;
@@ -1244,7 +1320,7 @@ public sealed class OriginalNeighborhoodOverlay
         if (house is null || RolloverText(houseNumber) is not { } text)
             return null;
 
-        int memberCount = house.Entry.Occupied ? Math.Min(8, house.Members.Count) : 0;
+        int memberCount = house.Entry.Occupied ? Math.Min(8, house.MemberPortraits.Count) : 0;
         var layout = new NeighborhoodRolloverLayout(
             text,
             font.LineHeight,
@@ -1267,122 +1343,32 @@ public sealed class OriginalNeighborhoodOverlay
         if (layout.Lines.Count == 0 || boxW <= 0 || boxH <= 0)
             return null;
 
-        byte[] rgba = new byte[boxW * boxH * 4];
-        int srcEdgeX = Math.Max(1, tiler.Width / 3);
-        int srcEdgeY = Math.Max(1, tiler.Height / 3);
-        int dstEdgeX = Math.Min(srcEdgeX, boxW / 2);
-        int dstEdgeY = Math.Min(srcEdgeY, boxH / 2);
-        int midDstW = Math.Max(1, boxW - dstEdgeX * 2);
-        int midSrcW = Math.Max(1, tiler.Width - srcEdgeX * 2);
-        int midDstH = Math.Max(1, boxH - dstEdgeY * 2);
-        int midSrcH = Math.Max(1, tiler.Height - srcEdgeY * 2);
-
-        for (int dy = 0; dy < boxH; dy++)
-        {
-            int sy = dy < dstEdgeY
-                ? dy
-                : dy >= boxH - dstEdgeY
-                    ? tiler.Height - (boxH - dy)
-                    : srcEdgeY + (dy - dstEdgeY) * midSrcH / midDstH;
-
-            for (int dx = 0; dx < boxW; dx++)
-            {
-                int sx = dx < dstEdgeX
-                    ? dx
-                    : dx >= boxW - dstEdgeX
-                        ? tiler.Width - (boxW - dx)
-                        : srcEdgeX + (dx - dstEdgeX) * midSrcW / midDstW;
-
-                int src = (sy * tiler.Width + sx) * 4;
-                int dst = (dy * boxW + dx) * 4;
-                int rawA = tiler.Rgba[src + 3] - 79;
-                rgba[dst] = tiler.Rgba[src];
-                rgba[dst + 1] = tiler.Rgba[src + 1];
-                rgba[dst + 2] = tiler.Rgba[src + 2];
-                rgba[dst + 3] = rawA < 8 ? (byte)0 : (byte)Math.Min(255, rawA);
-            }
-        }
-
-        const int inset = NeighborhoodRolloverLayout.Inset;
+        var lineImages = new OriginalGameplayOverlay.Image?[layout.Lines.Count];
         for (int lineIndex = 0; lineIndex < layout.Lines.Count; lineIndex++)
         {
-            (int Width, int Height, byte[] Rgba) raster;
+            string lineText = layout.Lines[lineIndex];
+            if (string.IsNullOrEmpty(lineText))
+                continue;
             try
             {
-                raster = font.Rasterize(layout.Lines[lineIndex], 255, 255, 255);
+                lineImages[lineIndex] = OriginalGameplayOverlay.Text(lineText, font, _device, (255, 255, 255));
             }
             catch
             {
-                continue;
-            }
-
-            int baseX = inset - 3;
-            int baseY = inset - 3 + lineIndex * font.LineHeight;
-            for (int sy = 0; sy < raster.Height; sy++)
-            {
-                int dy = baseY + sy;
-                if (dy < 0 || dy >= boxH)
-                    continue;
-                for (int sx = 0; sx < raster.Width; sx++)
-                {
-                    int dx = baseX + sx;
-                    if (dx < 0 || dx >= boxW)
-                        continue;
-                    int src = (sy * raster.Width + sx) * 4;
-                    int cov = raster.Rgba[src + 3];
-                    if (cov <= 0)
-                        continue;
-                    int dst = (dy * boxW + dx) * 4;
-                    rgba[dst] = (byte)((rgba[dst] * (255 - cov) + raster.Rgba[src] * cov + 127) / 255);
-                    rgba[dst + 1] = (byte)((rgba[dst + 1] * (255 - cov) + raster.Rgba[src + 1] * cov + 127) / 255);
-                    rgba[dst + 2] = (byte)((rgba[dst + 2] * (255 - cov) + raster.Rgba[src + 2] * cov + 127) / 255);
-                }
             }
         }
 
-        int headPairs = Math.Min(layout.Heads.Count, house.Members.Count);
+        int headPairs = Math.Min(layout.Heads.Count, house.MemberPortraits.Count);
+        var portraits = new List<(NeighborhoodRolloverLayout.Rect Rect, OriginalGameplayOverlay.Image Image)>(headPairs);
         for (int i = 0; i < headPairs; i++)
         {
-            if (house.Members[i] is not { } bitmap)
-                continue;
-            var head = layout.Heads[i];
-            int copyW = Math.Min(head.Width, bitmap.Width);
-            int copyH = Math.Min(head.Height, bitmap.Height);
-            for (int sy = 0; sy < copyH; sy++)
-            {
-                int dy = head.Y + sy;
-                if (dy < 0 || dy >= boxH)
-                    continue;
-                for (int sx = 0; sx < copyW; sx++)
-                {
-                    int dx = head.X + sx;
-                    if (dx < 0 || dx >= boxW)
-                        continue;
-                    int src = (sy * bitmap.Width + sx) * 4;
-                    byte r = bitmap.Rgba[src], g = bitmap.Rgba[src + 1], b = bitmap.Rgba[src + 2];
-                    if (r >= 180 && g <= 70 && b >= 180)
-                        continue;
-                    int dst = (dy * boxW + dx) * 4;
-                    rgba[dst] = r;
-                    rgba[dst + 1] = g;
-                    rgba[dst + 2] = b;
-                }
-            }
+            if (house.MemberPortraits[i] is { } portrait)
+                portraits.Add((layout.Heads[i], portrait));
         }
 
-        OriginalGameplayOverlay.Image image;
-        try
-        {
-            image = OriginalGameplayOverlay.CreateImage(_device, boxW, boxH, rgba);
-        }
-        catch
-        {
-            return null;
-        }
-
-        var size = new CGSize(boxW, boxH);
-        _rolloverCache = (houseNumber, image, size);
-        return (image, size);
+        var card = new RolloverCard(houseNumber, new CGSize(boxW, boxH), lineImages, font.LineHeight, portraits);
+        _rolloverCache = card;
+        return card;
     }
 
     public IReadOnlyList<NeighborhoodWebExport.Family> WebFamilies(
@@ -1564,15 +1550,14 @@ public sealed class OriginalNeighborhoodOverlay
 
         if (_hoveredTipAction is { } action
             && BannerTooltip(point, canvas, uiScale) is { } text
-            && _font is { } font)
+            && (_tooltipFont ?? _font) is { } font)
         {
             if (_bannerTip is not { } existing || existing.Action != action || !string.Equals(existing.Text, text, StringComparison.Ordinal))
             {
                 _bannerTipStartedAt = null;
                 try
                 {
-                    var raster = font.Rasterize(text, 255, 255, 255);
-                    var image = OriginalGameplayOverlay.CreateImage(_device, raster.Width, raster.Height, raster.Rgba);
+                    var image = OriginalGameplayOverlay.CreateImage(_device, PlacementTooltip.RasterizeHiDpi(text, font));
                     _bannerTip = (action, text, image);
                 }
                 catch
@@ -1789,8 +1774,8 @@ public sealed class OriginalNeighborhoodOverlay
         {
             double w = numberImage.Size.Width * factor;
             double h = numberImage.Size.Height * factor;
-            double x = left + 130.5 * factor - w / 2.0;
-            double y = top + 26.0 * factor - h / 2.0;
+            double x = left + 136.5 * factor - w / 2.0;
+            double y = top + 20.70 * factor - h / 2.0;
             items.Add(new DrawItem(numberImage, new CGRect(x, y, w, h)));
         }
 
@@ -1871,62 +1856,44 @@ public sealed class OriginalNeighborhoodOverlay
     {
         if (_bannerTip is not { } tip
             || _hoveredTipAction != tip.Action
-            || _rolloverBackground is not { } background
             || PlacementTooltip.Progress(ref _bannerTipStartedAt, _bannerTipQuickTips) is not { } progress)
         {
             return;
         }
 
         var (left, top, factor) = Transform(canvas, uiScale);
+        double tipScale = uiScale > 0f ? Math.Min(factor, Math.Max(0.25, uiScale)) : factor;
         double panelRight = left + _canvasWidth * factor;
         double panelBottom = top + _canvasHeight * factor;
         var button = BannerRect(tip.Action, canvas, uiScale);
-        double width = tip.Image.Size.Width * factor + 16 * factor;
-        double height = tip.Image.Size.Height * factor + 8 * factor;
+        double width = tip.Image.Size.Width * tipScale;
+        double height = tip.Image.Size.Height * tipScale;
         double minX = left + 4 * factor;
         double maxX = Math.Max(minX, panelRight - width - 4 * factor);
         double x = Math.Min(Math.Max(minX, button.MidX - width / 2.0), maxX);
-        double y = button.MaxY + 6 * factor;
+        double y = button.MaxY + 4 * factor;
         if (y + height > panelBottom - 4 * factor)
-            y = Math.Max(top + 4 * factor, button.MinY - height - 6 * factor);
+            y = Math.Max(top + 4 * factor, button.MinY - height - 4 * factor);
 
-        var tipItems = new List<DrawItem>();
-        NineSlice(
-            background,
-            new CGRect(x, y, width, height),
-            edge: 14 * factor,
-            sourceEdge: 20,
-            opacity: 176f / 255f,
-            outList: tipItems);
-        tipItems.Add(new DrawItem(
-            tip.Image,
-            new CGRect(x + 8 * factor, y + 4 * factor, tip.Image.Size.Width * factor, tip.Image.Size.Height * factor)));
-
+        var rect = new CGRect(x, y, width, height);
         if (progress >= 1.0)
         {
-            outItems.AddRange(tipItems);
+            outItems.Add(new DrawItem(tip.Image, rect, opacity: 1f));
             return;
         }
 
-        foreach (var item in tipItems)
-        {
-            double clippedHeight = Math.Max(1.0, Math.Round(item.Rect.Height * progress, MidpointRounding.AwayFromZero));
-            double fraction = clippedHeight / item.Rect.Height;
-            outItems.Add(new DrawItem(
-                item.Image,
-                new CGRect(item.Rect.MinX, item.Rect.MaxY - clippedHeight, item.Rect.Width, clippedHeight),
-                opacity: item.Opacity,
-                uv: new Vector4(
-                    item.UV.X,
-                    item.UV.Y + item.UV.W * (float)(1.0 - fraction),
-                    item.UV.Z,
-                    item.UV.W * (float)fraction)));
-        }
+        double clippedHeight = Math.Max(1.0, Math.Round(rect.Height * progress, MidpointRounding.AwayFromZero));
+        double fraction = Math.Clamp(clippedHeight / rect.Height, 0.0, 1.0);
+        outItems.Add(new DrawItem(
+            tip.Image,
+            new CGRect(rect.MinX, rect.MaxY - clippedHeight, rect.Width, clippedHeight),
+            opacity: 1f,
+            uv: new Vector4(0f, (float)(1.0 - fraction), 1f, (float)fraction)));
     }
 
     private void AppendRolloverItems(double left, double top, double factor, List<DrawItem> outItems)
     {
-        if (HoveredHouse is not int hoveredHouse)
+        if (HoveredHouse is not int hoveredHouse || _rolloverBackground is not { } background)
             return;
 
         House? house = null;
@@ -1938,12 +1905,12 @@ public sealed class OriginalNeighborhoodOverlay
                 break;
             }
         }
-        if (house is null || RolloverComposite(hoveredHouse) is not { } composite)
+        if (house is null || RolloverCardForHouse(hoveredHouse) is not { } card)
             return;
 
         // Positions the tooltip with its left edge centered on the lot, placed one pixel above or two
         // pixels below when within three pixels of the screen top.
-        var box = composite.Size;
+        var box = card.BoxSize;
         var hit = house.HitRect;
         double originX = Math.Truncate((hit.MinX + hit.MaxX) / 2.0);
         double originY = hit.MinY - box.Height - 1;
@@ -1961,9 +1928,41 @@ public sealed class OriginalNeighborhoodOverlay
 
         double x = left + originX * factor;
         double y = top + originY * factor;
-        outItems.Add(new DrawItem(
-            composite.Image,
-            new CGRect(x, y, box.Width * factor, box.Height * factor)));
+        outItems.AddRange(NineSlice(
+            background,
+            new CGRect(x, y, box.Width * factor, box.Height * factor),
+            requestedEdge: 22 * factor,
+            sourceEdge: 22,
+            opacity: 1f));
+
+        const int inset = NeighborhoodRolloverLayout.Inset;
+        for (int lineIndex = 0; lineIndex < card.Lines.Count; lineIndex++)
+        {
+            if (card.Lines[lineIndex] is not { } lineImg)
+                continue;
+            outItems.Add(new DrawItem(
+                lineImg,
+                new CGRect(
+                    left + (originX + inset) * factor,
+                    top + (originY + inset + lineIndex * card.LineHeight) * factor,
+                    lineImg.Size.Width * factor,
+                    lineImg.Size.Height * factor),
+                opacity: 1f));
+        }
+
+        foreach (var (headRect, portraitImg) in card.Portraits)
+        {
+            double drawW = Math.Min(headRect.Width, portraitImg.Size.Width) * factor;
+            double drawH = Math.Min(headRect.Height, portraitImg.Size.Height) * factor;
+            outItems.Add(new DrawItem(
+                portraitImg,
+                new CGRect(
+                    left + (originX + headRect.X) * factor,
+                    top + (originY + headRect.Y) * factor,
+                    drawW,
+                    drawH),
+                opacity: 1f));
+        }
     }
 
     private static double MonotonicNowSeconds() =>

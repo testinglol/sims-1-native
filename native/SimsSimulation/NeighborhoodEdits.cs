@@ -58,7 +58,7 @@ internal static class NeighborhoodEdits
         var housesRoot = Path.GetFullPath(Path.Combine(userPath, "Houses"));
         Directory.CreateDirectory(housesRoot);
         var profileDescPath = Path.GetFullPath(Path.Combine(housesRoot, Path.GetFileName(descPath)));
-        if (!profileDescPath.StartsWith(housesRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+        if (!profileDescPath.StartsWith(housesRoot + Path.DirectorySeparatorChar, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
             throw new InvalidOperationException("The lot description resource is not a writable profile file");
         var file = IffFile.Open(File.Exists(profileDescPath) ? profileDescPath : descPath);
         var chunkId = checked((ushort)(house + 2000));
@@ -1144,14 +1144,38 @@ internal static class NeighborhoodEdits
         [
             Path.Combine(userPath, "Characters", "User00000.iff"),
             Path.Combine(game, "UserData", "Characters", "User00000.iff"),
+            Path.Combine(game, "TemplateUserData", "Characters", "User00000.iff"),
             Path.Combine(game, "TemplateUserData", "UserData", "Characters", "User00000.iff")
         ];
         foreach (var candidate in candidates)
             if (File.Exists(candidate)) return IffFile.Open(candidate);
         if (registry.Find(templateGuid) is { } tplEntry)
             return tplEntry.File;
-        if (Directory.Exists(charDir) && Directory.GetFiles(charDir, "User*.iff").FirstOrDefault() is { } fallback)
-            return IffFile.Open(fallback);
+        if (Directory.Exists(charDir))
+        {
+            var files = Directory.GetFiles(charDir, "User*.iff");
+            var chosen = !isPet
+                ? files.FirstOrDefault(file =>
+                {
+                    try
+                    {
+                        var iff = IffFile.Open(file);
+                        if (iff.OfType(ResourceType.Objd).FirstOrDefault() is not { } objdChunk) return false;
+                        var bodyId = Objd.Read(iff, objdChunk)[ObjdField.BodyStringsId];
+                        if (bodyId == 0 || iff.Find(ResourceType.Str, bodyId) is not { } strChunk) return true;
+                        var strings = StringTable.Read(iff, strChunk).ForLanguage(1);
+                        var mode = strings.Count > 12 ? strings[12].Trim().ToLowerInvariant() : "";
+                        return !mode.StartsWith("dog", StringComparison.Ordinal) && !mode.StartsWith("cat", StringComparison.Ordinal);
+                    }
+                    catch
+                    {
+                        return false;
+                    }
+                }) ?? files.FirstOrDefault()
+                : files.FirstOrDefault();
+            if (chosen is not null)
+                return IffFile.Open(chosen);
+        }
         throw new FileNotFoundException($"Cannot find character template to clone in {userPath} or {game}.");
     }
 

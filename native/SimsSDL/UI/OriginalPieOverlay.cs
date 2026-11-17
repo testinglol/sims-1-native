@@ -116,18 +116,35 @@ public sealed class OriginalPieOverlay
             throw new ContentError("Pie menu texture memory limit exceeded");
         }
 
-        var background = new byte[width * height * 4];
-        for (int y = 0; y < height; y++)
+        int scale = SimsBitmapFont.SharpTextEnabled ? SimsBitmapFont.HiDpiScale : 1;
+        int pxW = width * scale;
+        int pxH = height * scale;
+        var background = new byte[pxW * pxH * 4];
+        float cornerRadius = 5f * scale;
+        for (int y = 0; y < pxH; y++)
         {
-            int edge = Math.Min(y, height - 1 - y);
-            int margin = edge == 0 ? 5 : edge == 1 ? 3 : edge == 2 ? 2 : edge < 5 ? 1 : 0;
-            for (int x = margin; x < width - margin; x++)
+            float py = y + 0.5f;
+            float dyCorner = py < cornerRadius ? cornerRadius - py : (py > pxH - cornerRadius ? py - (pxH - cornerRadius) : 0f);
+            for (int x = 0; x < pxW; x++)
             {
-                int offset = (y * width + x) * 4;
+                float px = x + 0.5f;
+                float dxCorner = px < cornerRadius ? cornerRadius - px : (px > pxW - cornerRadius ? px - (pxW - cornerRadius) : 0f);
+                float alphaF = 1f;
+                if (dxCorner > 0f && dyCorner > 0f)
+                {
+                    float dist = MathF.Sqrt(dxCorner * dxCorner + dyCorner * dyCorner) - cornerRadius;
+                    alphaF = Math.Clamp(0.5f - dist, 0f, 1f);
+                }
+
+                byte a = (byte)(alphaF * 255f + 0.5f);
+                if (a == 0)
+                    continue;
+
+                int offset = (y * pxW + x) * 4;
                 background[offset] = 0;
                 background[offset + 1] = 40;
                 background[offset + 2] = 140;
-                background[offset + 3] = 255;
+                background[offset + 3] = a;
             }
         }
 
@@ -135,11 +152,11 @@ public sealed class OriginalPieOverlay
         var states = new UITexture[colors.Length];
         for (int i = 0; i < colors.Length; i++)
         {
-            var image = Font.Rasterize(text, colors[i]);
-            states[i] = CreateTexture(image.Width, image.Height, image.Rgba);
+            var image = Font.RasterizeHiDpi(text, colors[i], logicalMargin: 3);
+            states[i] = CreateTexture(image.PixelWidth, image.PixelHeight, image.Rgba);
         }
 
-        return new Label(CreateTexture(width, height, background), states, new CGSize(width, height));
+        return new Label(CreateTexture(pxW, pxH, background), states, new CGSize(width, height));
     }
 
     private void Rebuild()

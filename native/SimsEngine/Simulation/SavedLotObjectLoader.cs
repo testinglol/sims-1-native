@@ -172,15 +172,17 @@ public static class SavedLotObjectLoader
         RestoreSlotDefinitions(instance, entry);
         PadSlotVector(instance);
         var scope = library.ScopeOf(entry);
+        var actionFunctions = SafeActionFunctions(entry);
         if (registerSavedType)
             world.RegisterSavedObjectType(new ObjectTypeEntry(guid,
-                SavedTreeFingerprint(scope, entry.ActionFunctions.ElementAtOrDefault(0)),
-                SavedTreeFingerprint(scope, entry.ActionFunctions.ElementAtOrDefault(1)), 0,
+                SavedTreeFingerprint(scope, actionFunctions.ElementAtOrDefault(0)),
+                SavedTreeFingerprint(scope, actionFunctions.ElementAtOrDefault(1)), 0,
                 unchecked((short)entry.Definition[ObjdField.Type]),
                 entry.Definition[ObjdField.MasterId] == 0 || entry.Definition[ObjdField.SubIndex] == ushort.MaxValue ? entry.Chunk.Label : string.Empty,
                 unchecked((int)((uint)entry.Definition.Fields.ElementAtOrDefault(70) | ((uint)entry.Definition.Fields.ElementAtOrDefault(71) << 16)))),
                 objectClass.Value, scope);
         var alternativeType = registry.FindAlternativeType(entry);
+        var functionEntries = SafeFunctionEntries(entry);
         instance.TypeRecord = new TypeRecord(unchecked((int)guid))
         {
             ObjectType = unchecked((short)entry.Definition[ObjdField.Type]),
@@ -189,13 +191,13 @@ public static class SavedLotObjectLoader
             AnimatorBodyStringMode = AnimatorBodyStringMode(entry, language),
             FootprintMask = entry.Definition[ObjdField.FootprintMask],
             Name = entry.Chunk.Label,
-            CatalogName = entry.CatalogString(0, language),
-            CatalogDescription = entry.CatalogString(1, language),
-            FunctionTable = entry.FunctionEntries.Select(function => function.Action).ToArray(),
-            FunctionCheckTable = entry.FunctionEntries.Select(function => function.Guard).ToArray(),
+            CatalogName = SafeCatalogString(entry, 0, language),
+            CatalogDescription = SafeCatalogString(entry, 1, language),
+            FunctionTable = functionEntries.Select(function => function.Action).ToArray(),
+            FunctionCheckTable = functionEntries.Select(function => function.Guard).ToArray(),
             BehaviorScope = scope,
             Interactions = entry.HasNoMasterInteractionTable ? null :
-                entry.FindInteractionTable(scope, language, registry.FindAlternativeType(entry)),
+                SafeFindInteractionTable(entry, scope, language, alternativeType),
             AlternativeTypeKey = alternativeType is null ? null : unchecked((int)alternativeType.Guid),
             AlternativeObjectPrice = alternativeType is null ? null : unchecked((short)alternativeType.Definition[ObjdField.Price]),
             AutonomyAlternativeTypeFlag = alternativeType is null ? (short)0 :
@@ -210,14 +212,45 @@ public static class SavedLotObjectLoader
         return instance;
     }
 
+    private static IReadOnlyList<ushort> SafeActionFunctions(ObjectEntry entry)
+    {
+        try { return entry.ActionFunctions; }
+        catch (ResourceFormatException) { return []; }
+    }
+
+    private static IReadOnlyList<(ushort Guard, ushort Action)> SafeFunctionEntries(ObjectEntry entry)
+    {
+        try { return entry.FunctionEntries; }
+        catch (ResourceFormatException) { return []; }
+    }
+
+    private static string? SafeCatalogString(ObjectEntry entry, int index, byte language)
+    {
+        try { return entry.CatalogString(index, language); }
+        catch (ResourceFormatException) { return null; }
+    }
+
+    private static InteractionTable? SafeFindInteractionTable(ObjectEntry entry, BehaviorScope? scope, byte language, ObjectEntry? masterFallback)
+    {
+        try { return entry.FindInteractionTable(scope, language, masterFallback); }
+        catch (Exception ex) when (ex is ResourceFormatException or NotSupportedException) { return null; }
+    }
+
     /// <summary>Reads the body string entry at index 12 to resolve the character's gender and species mode.</summary>
     internal static short? AnimatorBodyStringMode(ObjectEntry entry, byte language)
     {
         var id = entry.Definition[ObjdField.BodyStringsId];
         if (id == 0 || entry.File.Find(ResourceType.Str, id) is not { } chunk) return null;
-        var strings = StringTable.Read(entry.File, chunk).ForLanguage(language);
-        return (strings.Count > 12 ? MapAnimatorBodyString13(strings[12]) : null)
-            ?? (strings.Count > 13 ? MapAnimatorBodyString13(strings[13]) : null);
+        try
+        {
+            var strings = StringTable.Read(entry.File, chunk).ForLanguage(language);
+            return (strings.Count > 12 ? MapAnimatorBodyString13(strings[12]) : null)
+                ?? (strings.Count > 13 ? MapAnimatorBodyString13(strings[13]) : null);
+        }
+        catch (ResourceFormatException)
+        {
+            return null;
+        }
     }
 
     internal static short? MapAnimatorBodyString13(string value) => value.Trim().ToLowerInvariant() switch
@@ -237,7 +270,9 @@ public static class SavedLotObjectLoader
     {
         var id = entry.Definition[ObjdField.BodyStringsId];
         if (id == 0 || entry.File.Find(ResourceType.Str, id) is not { } chunk) return null;
-        var strings = StringTable.Read(entry.File, chunk).ForLanguage(language);
+        IReadOnlyList<string> strings;
+        try { strings = StringTable.Read(entry.File, chunk).ForLanguage(language); }
+        catch (ResourceFormatException) { return null; }
         if (strings.Count < 3) return null;
 
         static (string, string) Pair(string value)
@@ -386,8 +421,9 @@ public static class SavedLotObjectLoader
             // reset on mismatch.
             if (typeEntry is not null)
             {
-                var tree0 = SavedTreeFingerprint(typeScope, typeEntry.ActionFunctions.ElementAtOrDefault(0));
-                var tree1 = SavedTreeFingerprint(typeScope, typeEntry.ActionFunctions.ElementAtOrDefault(1));
+                var actionFuncs = SafeActionFunctions(typeEntry);
+                var tree0 = SavedTreeFingerprint(typeScope, actionFuncs.ElementAtOrDefault(0));
+                var tree1 = SavedTreeFingerprint(typeScope, actionFuncs.ElementAtOrDefault(1));
                 if (tree0 != type.TreeValue0 || tree1 != type.TreeValue1)
                 {
                     world.ChangedCodeTypeGuids.Add(type.Guid);
@@ -481,11 +517,11 @@ public static class SavedLotObjectLoader
             var behaviorScope = findBehaviorScope(entry);
             var resourceScope = behaviorScope as BehaviorScope;
             var treeTableId = entry.Definition[ObjdField.TreeTableId];
+            var alternativeType = typeRegistry?.FindAlternativeType(entry);
             InteractionTable? interactionTable = null;
             if (treeTableId != 0 && !entry.HasNoMasterInteractionTable)
-                interactionTable = entry.FindInteractionTable(resourceScope, language, typeRegistry?.FindAlternativeType(entry));
-            var alternativeType = typeRegistry?.FindAlternativeType(entry);
-            var functionEntries = entry.FunctionEntries;
+                interactionTable = SafeFindInteractionTable(entry, resourceScope, language, alternativeType);
+            var functionEntries = SafeFunctionEntries(entry);
             instance.TypeRecord = new TypeRecord(unchecked((int)savedType.Guid))
             {
                 ObjectType = unchecked((short)entry.Definition[ObjdField.Type]),
@@ -494,8 +530,8 @@ public static class SavedLotObjectLoader
                 AnimatorBodyStringMode = AnimatorBodyStringMode(entry, language),
                 FootprintMask = entry.Definition[ObjdField.FootprintMask],
                 Name = entry.Chunk.Label,
-                CatalogName = entry.CatalogString(0, language),
-                CatalogDescription = entry.CatalogString(1, language),
+                CatalogName = SafeCatalogString(entry, 0, language),
+                CatalogDescription = SafeCatalogString(entry, 1, language),
                 FunctionTable = functionEntries.Select(function => function.Action).ToArray(),
                 FunctionCheckTable = functionEntries.Select(function => function.Guard).ToArray(),
                 BehaviorScope = behaviorScope,
@@ -843,7 +879,10 @@ public static class SavedLotObjectLoader
         if (slotsId == 0) return;
         var chunk = entry.File.OfType(SlotsType).FirstOrDefault(candidate => candidate.Id == slotsId);
         if (chunk is null) return;
-        var slots = SlotTable.Read(entry.File, chunk).Slots;
+        SlotTable table;
+        try { table = SlotTable.Read(entry.File, chunk); }
+        catch (ResourceFormatException) { return; }
+        var slots = table.Slots;
         for (var slotIndex = 0; slotIndex < slots.Count; slotIndex++)
         {
             var slot = slots[slotIndex];

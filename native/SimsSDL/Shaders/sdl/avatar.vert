@@ -12,7 +12,8 @@ layout(location = 2) out vec3 outNormal;
 layout(location = 3) flat out float outTextureOnly;
 
 void main() {
-    AvatarVertex vertex = vertices[gl_VertexIndex];
+    uint baseVertex = floatBitsToUint(quad.depthInterval.x);
+    AvatarVertex vertex = vertices[baseVertex + uint(gl_VertexIndex)];
     gl_Position = canvasPosition(quad.rect.xy + vertex.position.xy * quad.rect.zw, vertex.position.z);
     outUV = vertex.uv;
     outTint = quad.tint;

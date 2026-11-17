@@ -631,6 +631,9 @@ public static class SpritePixels
 /// <summary>Decodes FFN bitmap fonts (<c>FNTF</c> version 101) and measures, wraps, and rasterizes text.</summary>
 public sealed class SimsBitmapFont
 {
+    public const int HiDpiScale = 4;
+    public static bool SharpTextEnabled { get; set; } = true;
+
     public readonly record struct Glyph(
         int Width,
         int Height,
@@ -640,16 +643,34 @@ public sealed class SimsBitmapFont
         int OffsetY,
         int Advance);
 
+    public readonly record struct HiDpiRaster(
+        int LogicalWidth,
+        int LogicalHeight,
+        int PixelWidth,
+        int PixelHeight,
+        byte[] Rgba);
+
+    private readonly float _capInkSpanPx;
+    private readonly float _capBottomPx;
+    private readonly float _stemWidthPx;
+    private readonly Dictionary<ushort, float> _glyphInkCenterX;
+    private readonly bool _bold;
+
     public int Width { get; }
     public int Height { get; }
     public byte[] Coverage { get; }
     public IReadOnlyDictionary<ushort, Glyph> Glyphs { get; }
     public int LineHeight { get; }
     public int SpaceAdvance { get; }
+    public float CapInkSpanPx => _capInkSpanPx;
+    public float CapBottomPx => _capBottomPx;
+    public float CapTopPx => _capBottomPx - _capInkSpanPx;
+    public float CapMidYPx => _capBottomPx - 0.5f * _capInkSpanPx;
 
-    public SimsBitmapFont(byte[] data)
+    public SimsBitmapFont(byte[] data, bool bold = false)
     {
         ArgumentNullException.ThrowIfNull(data);
+        _bold = bold;
 
         long Value(int offset, int count)
         {
@@ -761,12 +782,104 @@ public sealed class SimsBitmapFont
         Width = width;
         Height = height;
         Coverage = pixels;
+
+        bool TryMeasureVerticalInk(Glyph g, out float span, out float bottom)
+        {
+            float rowSum = 0f;
+            float weightedY = 0f;
+            for (int ry = 0; ry < g.Height; ry++)
+            {
+                float rowMax = 0f;
+                int rowBase = (g.Y + ry) * Width + g.X;
+                for (int rx = 0; rx < g.Width; rx++)
+                {
+                    float cov = Coverage[rowBase + rx] * (1f / 255f);
+                    if (cov > rowMax)
+                        rowMax = cov;
+                }
+                if (rowMax > 0.02f)
+                {
+                    rowSum += rowMax;
+                    weightedY += (g.OffsetY + ry + 0.5f) * rowMax;
+                }
+            }
+
+            if (rowSum <= 0.25f)
+            {
+                span = 0f;
+                bottom = 0f;
+                return false;
+            }
+
+            float centroidY = weightedY / rowSum;
+            span = rowSum;
+            bottom = centroidY + 0.5f * span;
+            return span > 0f;
+        }
+
+        float capSpanSum = 0f;
+        float capBottomSum = 0f;
+        int capCount = 0;
+        foreach (ushort ch in new ushort[] { 'H', 'E', 'L', 'M' })
+        {
+            if (normalized.TryGetValue(ch, out Glyph cap) && TryMeasureVerticalInk(cap, out float span, out float bottom))
+            {
+                capSpanSum += span;
+                capBottomSum += bottom;
+                capCount++;
+            }
+        }
+        _capInkSpanPx = capCount > 0 ? Math.Max(3f, capSpanSum / capCount) : Math.Max(3f, LineHeight * 0.50f);
+        _capBottomPx = capCount > 0 ? Math.Max(3f, capBottomSum / capCount) : Math.Max(3f, LineHeight * 0.76f);
+
+        float stemWidth = 0f;
+        if (normalized.TryGetValue((ushort)'L', out Glyph lGlyph) && lGlyph.Width > 0 && lGlyph.Height > 0)
+        {
+            int ry = Math.Clamp(lGlyph.Height / 3, 0, lGlyph.Height - 1);
+            int rowBase = (lGlyph.Y + ry) * Width + lGlyph.X;
+            int limitX = Math.Min(lGlyph.Width - 1, lGlyph.Width / 2 + 2);
+            for (int rx = 0; rx <= limitX; rx++)
+                stemWidth += Coverage[rowBase + rx] * (1f / 255f);
+        }
+        _stemWidthPx = stemWidth > 0.4f ? stemWidth : Math.Max(1f, _capInkSpanPx * 0.115f);
+
+        _glyphInkCenterX = new Dictionary<ushort, float>(normalized.Count);
+        foreach (var (code, g) in normalized)
+        {
+            float colSum = 0f;
+            float weightedX = 0f;
+            for (int rx = 0; rx < g.Width; rx++)
+            {
+                float colMax = 0f;
+                for (int ry = 0; ry < g.Height; ry++)
+                {
+                    float cov = Coverage[(g.Y + ry) * Width + g.X + rx] * (1f / 255f);
+                    if (cov > colMax)
+                        colMax = cov;
+                }
+                if (colMax > 0.02f)
+                {
+                    colSum += colMax;
+                    weightedX += (g.OffsetX + rx + 0.5f) * colMax;
+                }
+            }
+
+            _glyphInkCenterX[code] = colSum > 0.1f
+                ? weightedX / colSum
+                : g.OffsetX + g.Width * 0.5f;
+        }
     }
 
-    private Glyph? ResolveGlyph(ushort character)
+    private Glyph? ResolveGlyph(ushort character) =>
+        TryResolveGlyph(character, out _, out Glyph glyph) ? glyph : null;
+
+    private bool TryResolveGlyph(ushort character, out ushort resolvedCode, out Glyph glyph)
     {
-        if (Glyphs.TryGetValue(character, out Glyph direct))
-            return direct;
+        if (Glyphs.TryGetValue(character, out glyph))
+        {
+            resolvedCode = character;
+            return true;
+        }
 
         ushort? cp1252 = character switch
         {
@@ -800,8 +913,11 @@ public sealed class SimsBitmapFont
             _ => null,
         };
 
-        if (cp1252 is ushort mappedCode && Glyphs.TryGetValue(mappedCode, out Glyph mapped))
-            return mapped;
+        if (cp1252 is ushort mappedCode && Glyphs.TryGetValue(mappedCode, out glyph))
+        {
+            resolvedCode = mappedCode;
+            return true;
+        }
 
         ushort fallbackCode = cp1252 ?? character;
         ushort? asciiFallback = fallbackCode switch
@@ -820,10 +936,20 @@ public sealed class SimsBitmapFont
             _ => null,
         };
 
-        if (asciiFallback is ushort asciiCode && Glyphs.TryGetValue(asciiCode, out Glyph ascii))
-            return ascii;
+        if (asciiFallback is ushort asciiCode && Glyphs.TryGetValue(asciiCode, out glyph))
+        {
+            resolvedCode = asciiCode;
+            return true;
+        }
 
-        return Glyphs.TryGetValue(63, out Glyph question) ? question : null;
+        if (Glyphs.TryGetValue(63, out glyph))
+        {
+            resolvedCode = 63;
+            return true;
+        }
+
+        resolvedCode = 0;
+        return false;
     }
 
     public int Advance(ushort character)
@@ -894,19 +1020,23 @@ public sealed class SimsBitmapFont
         return lines;
     }
 
-    public (int Width, int Height, byte[] Rgba) Rasterize(string text, (byte R, byte G, byte B) color)
+    public (int Width, int Height, byte[] Rgba) Rasterize(string text, (byte R, byte G, byte B) color) =>
+        RasterizeBitmap1x(text, color, margin: 3);
+
+    private (int Width, int Height, byte[] Rgba) RasterizeBitmap1x(string text, (byte R, byte G, byte B) color, int margin)
     {
         ArgumentNullException.ThrowIfNull(text);
         if (text.Length > 512 || text.Contains('\n') || text.Contains('\r'))
             throw new ContentError("Invalid bitmap font label");
+        ArgumentOutOfRangeException.ThrowIfNegative(margin);
 
-        int width = Math.Max(1, TextWidth(text) + 6);
-        int height = LineHeight + 6;
+        int width = Math.Max(1, TextWidth(text) + 2 * margin);
+        int height = LineHeight + 2 * margin;
         if (width > 8192 || height <= 0 || height > 1024)
             throw new ContentError("Bitmap font label exceeds size limits");
 
         byte[] output = new byte[width * height * 4];
-        int cursor = 3;
+        int cursor = margin;
         foreach (char ch in text)
         {
             ushort character = ch;
@@ -917,7 +1047,7 @@ public sealed class SimsBitmapFont
                     for (int x = 0; x < glyph.Width; x++)
                     {
                         int targetX = cursor + glyph.OffsetX + x;
-                        int targetY = 3 + glyph.OffsetY + y;
+                        int targetY = margin + glyph.OffsetY + y;
                         if (targetX < 0 || targetY < 0 || targetX >= width || targetY >= height)
                             continue;
 
@@ -938,4 +1068,148 @@ public sealed class SimsBitmapFont
 
     public (int Width, int Height, byte[] Rgba) Rasterize(string text, byte r, byte g, byte b) =>
         Rasterize(text, (r, g, b));
+
+    public HiDpiRaster RasterizeHiDpi(string text, byte r, byte g, byte b, int logicalMargin = 3) =>
+        RasterizeHiDpi(text, (r, g, b), logicalMargin);
+
+    public HiDpiRaster RasterizeHiDpi(string text, (byte R, byte G, byte B) color, int logicalMargin = 3)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        if (text.Length > 512 || text.Contains('\n') || text.Contains('\r'))
+            throw new ContentError("Invalid bitmap font label");
+        ArgumentOutOfRangeException.ThrowIfNegative(logicalMargin);
+
+        if (!SharpTextEnabled)
+        {
+            var classic = RasterizeBitmap1x(text, color, logicalMargin);
+            return new HiDpiRaster(classic.Width, classic.Height, classic.Width, classic.Height, classic.Rgba);
+        }
+
+        int logicalW = Math.Max(1, TextWidth(text) + 2 * logicalMargin);
+        int logicalH = Math.Max(1, LineHeight + 2 * logicalMargin);
+        int pixelW = logicalW * HiDpiScale;
+        int pixelH = logicalH * HiDpiScale;
+        if (pixelW > 8192 || pixelH <= 0 || pixelH > 4096)
+            throw new ContentError("Bitmap font label exceeds size limits");
+
+        byte[] output = new byte[pixelW * pixelH * 4];
+        TrueTypeFont? ttf = _bold ? TrueTypeFont.DefaultBold : TrueTypeFont.DefaultRegular;
+        if (ttf is not null)
+        {
+            float pxPerUnit = (_capInkSpanPx * HiDpiScale) / Math.Max(1f, ttf.CapInkSpanUnits);
+            float baselineY = (logicalMargin + _capBottomPx) * HiDpiScale + ttf.CapBottomUnits * pxPerUnit;
+            float lum = (0.2126f * color.R + 0.7152f * color.G + 0.0722f * color.B) / 255f;
+            float ttfStemPx = ttf.StemWidthUnits * pxPerUnit;
+            float targetStemPx = _stemWidthPx * HiDpiScale - (lum > 0.5f ? 0.35f : 0f);
+            float maxSafeErode = Math.Max(0f, 0.5f * (ttfStemPx - 3.1f));
+            float erodePx = Math.Clamp(0.5f * (ttfStemPx - targetStemPx), 0f, Math.Min(0.85f, maxSafeErode));
+
+            int cursor = logicalMargin;
+            foreach (char ch in text)
+            {
+                ushort code = ch;
+                if (ch != ' ')
+                {
+                    if (ttf.HorizontalInkBounds(ch) is var (leftU, rightU))
+                    {
+                        float cellCenterLogical = TryResolveGlyph(code, out ushort resolvedCode, out _)
+                            && _glyphInkCenterX.TryGetValue(resolvedCode, out float icx)
+                            ? cursor + icx
+                            : cursor + Advance(code) * 0.5f;
+                        float originX = cellCenterLogical * HiDpiScale - 0.5f * (leftU + rightU) * pxPerUnit;
+                        ttf.RenderGlyph(ch, originX, baselineY, pxPerUnit, color, output, pixelW, pixelH, erodePx);
+                    }
+                    else if (ResolveGlyph(code) is Glyph fallbackGlyph)
+                    {
+                        BlitUpsampledBitmapGlyph(
+                            fallbackGlyph,
+                            (cursor + fallbackGlyph.OffsetX) * HiDpiScale,
+                            (logicalMargin + fallbackGlyph.OffsetY) * HiDpiScale,
+                            color,
+                            output,
+                            pixelW,
+                            pixelH);
+                    }
+                }
+
+                cursor += Advance(code);
+            }
+        }
+        else
+        {
+            int cursor = logicalMargin * HiDpiScale;
+            foreach (char ch in text)
+            {
+                if (ch != ' ' && ResolveGlyph(ch) is Glyph glyph)
+                {
+                    BlitUpsampledBitmapGlyph(
+                        glyph,
+                        cursor + glyph.OffsetX * HiDpiScale,
+                        (logicalMargin + glyph.OffsetY) * HiDpiScale,
+                        color,
+                        output,
+                        pixelW,
+                        pixelH);
+                }
+                cursor += Advance(ch) * HiDpiScale;
+            }
+        }
+
+        return new HiDpiRaster(logicalW, logicalH, pixelW, pixelH, output);
+    }
+
+    private void BlitUpsampledBitmapGlyph(
+        Glyph glyph,
+        int originX,
+        int originY,
+        (byte R, byte G, byte B) color,
+        byte[] output,
+        int dstWidth,
+        int dstHeight)
+    {
+        int outW = glyph.Width * HiDpiScale;
+        int outH = glyph.Height * HiDpiScale;
+        float invScale = 1f / HiDpiScale;
+
+        for (int py = 0; py < outH; py++)
+        {
+            int dstY = originY + py;
+            if ((uint)dstY >= (uint)dstHeight)
+                continue;
+
+            float srcY = (py + 0.5f) * invScale - 0.5f;
+            int y0 = Math.Clamp((int)MathF.Floor(srcY), 0, glyph.Height - 1);
+            int y1 = Math.Min(glyph.Height - 1, y0 + 1);
+            float fy = Math.Clamp(srcY - y0, 0f, 1f);
+
+            for (int px = 0; px < outW; px++)
+            {
+                int dstX = originX + px;
+                if ((uint)dstX >= (uint)dstWidth)
+                    continue;
+
+                float srcX = (px + 0.5f) * invScale - 0.5f;
+                int x0 = Math.Clamp((int)MathF.Floor(srcX), 0, glyph.Width - 1);
+                int x1 = Math.Min(glyph.Width - 1, x0 + 1);
+                float fx = Math.Clamp(srcX - x0, 0f, 1f);
+
+                float c00 = Coverage[(glyph.Y + y0) * Width + glyph.X + x0];
+                float c10 = Coverage[(glyph.Y + y0) * Width + glyph.X + x1];
+                float c01 = Coverage[(glyph.Y + y1) * Width + glyph.X + x0];
+                float c11 = Coverage[(glyph.Y + y1) * Width + glyph.X + x1];
+                float cov = (c00 * (1f - fx) + c10 * fx) * (1f - fy) + (c01 * (1f - fx) + c11 * fx) * fy;
+                int a = Math.Clamp((int)(cov + 0.5f), 0, 255);
+                if (a <= 0)
+                    continue;
+
+                int off = (dstY * dstWidth + dstX) * 4;
+                int oldA = output[off + 3];
+                int newA = oldA + ((255 - oldA) * a + 127) / 255;
+                output[off] = color.R;
+                output[off + 1] = color.G;
+                output[off + 2] = color.B;
+                output[off + 3] = (byte)Math.Clamp(newA, 0, 255);
+            }
+        }
+    }
 }

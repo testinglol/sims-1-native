@@ -46,6 +46,19 @@ public sealed record BehaviorScope(IffFile Global, IffFile Private, IffFile? Sem
         _ => null,
     };
 
+    private static readonly HashSet<string> LoggedMalformedChunks = new(StringComparer.OrdinalIgnoreCase);
+
+    private static void LogMalformedChunkOnce(IffFile file, string kind, ushort id, Exception error)
+    {
+        string key = $"{file.Source}#{kind}:{id}";
+        lock (LoggedMalformedChunks)
+        {
+            if (!LoggedMalformedChunks.Add(key))
+                return;
+        }
+        Console.Error.WriteLine($"Native content: skipping malformed {kind} #{id} in {file.Source}: {error.Message}");
+    }
+
     /// <summary>Loads string bytes by searching STR# resources first and falling back to CTSS, returning
     /// the one-based entry for the specified language.</summary>
     public byte[]? StringTableBytes(short treeId, ushort tableId, int oneBasedIndex, byte language)
@@ -55,19 +68,36 @@ public sealed record BehaviorScope(IffFile Global, IffFile Private, IffFile? Sem
         var chunk = file.Find(ResourceType.Str, tableId) ?? file.Find(ResourceType.Ctss, tableId);
         if (chunk is null) return null;
 
-        var table = StringTable.Read(file, chunk);
-        if (!table.ReadBySimsExe) return null;
-        var strings = table.ForLanguage(language);
-        return oneBasedIndex <= strings.Count
-            ? ResourceReader.EncodingForLanguage(language == 0 ? (byte)1 : language).GetBytes(strings[oneBasedIndex - 1])
-            : null;
+        try
+        {
+            var table = StringTable.Read(file, chunk);
+            if (!table.ReadBySimsExe) return null;
+            var strings = table.ForLanguage(language);
+            return oneBasedIndex <= strings.Count
+                ? ResourceReader.EncodingForLanguage(language == 0 ? (byte)1 : language).GetBytes(strings[oneBasedIndex - 1])
+                : null;
+        }
+        catch (ResourceFormatException error)
+        {
+            LogMalformedChunkOnce(file, "STR#", tableId, error);
+            return null;
+        }
     }
 
     public Bhav? Find(short id)
     {
         var file = FileFor(id);
         var chunk = file?.Find(ResourceType.Bhav, (ushort)id);
-        return chunk is null ? null : Bhav.Read(file!, chunk);
+        if (chunk is null) return null;
+        try
+        {
+            return Bhav.Read(file!, chunk);
+        }
+        catch (ResourceFormatException error)
+        {
+            LogMalformedChunkOnce(file!, "BHAV", (ushort)id, error);
+            return null;
+        }
     }
 
     /// <summary>Searches private, semi-global, and global scopes for a BCON resource by ID, applying
@@ -83,7 +113,16 @@ public sealed record BehaviorScope(IffFile Global, IffFile Private, IffFile? Sem
         };
         var chunk = file?.Find(ResourceType.Bcon, id);
         if (chunk is null) return null;
-        var bcon = Bcon.Read(file!, chunk);
+        Bcon bcon;
+        try
+        {
+            bcon = Bcon.Read(file!, chunk);
+        }
+        catch (ResourceFormatException error)
+        {
+            LogMalformedChunkOnce(file!, "BCON", id, error);
+            return null;
+        }
         if (allowTuningOverride && bcon.TuningOverride && ReferenceEquals(file, Private) &&
             ConstantOverrides.TryGetValue(Private, out var overrides))
         {

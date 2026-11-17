@@ -1,3 +1,4 @@
+using System.Numerics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -7,6 +8,7 @@ using SimsEngine.Simulation;
 using SimsEngine.World;
 using SimsSDL.Client;
 using SimsSDL.Core;
+using SimsSDL.UI;
 using SimsSimulation;
 using Xunit;
 
@@ -500,8 +502,320 @@ public sealed class Wave17UserFeedbackRegressionTests
     [Fact]
     public void FullscreenOverlayScale_AspectFitsLargeViewportsAndKeepsSmallScaling()
     {
-        Assert.Equal(1600.0 / 600.0, OriginalUIScalingLayout.FullscreenOverlayScale(new CGSize(2560, 1600), 2.0f), 4);
-        Assert.Equal(1.8, OriginalUIScalingLayout.FullscreenOverlayScale(new CGSize(1920, 1080), 1.0f), 4);
+        Assert.Equal(2.3, OriginalUIScalingLayout.FullscreenOverlayScale(new CGSize(2560, 1600), 2.0f), 4);
+        Assert.Equal(1.15, OriginalUIScalingLayout.FullscreenOverlayScale(new CGSize(1920, 1080), 1.0f), 4);
         Assert.Equal(0.5, OriginalUIScalingLayout.FullscreenOverlayScale(new CGSize(400, 300), 1.0f), 4);
+    }
+
+    [Fact]
+    public void SimsBitmapFont_RasterizeHiDpi_Produces4xCrispPixelsWhilePreservingLogicalMetrics()
+    {
+        var gameDir = LocateGameDirectory();
+        if (gameDir is null)
+        {
+            return;
+        }
+
+        var content = new GameContent(gameDir, LocatePackDirectories(gameDir));
+        var font = new SimsBitmapFont(content.Read("UIGraphics/Fonts/variablesans_10.ffn"));
+        Assert.Equal(4, SimsBitmapFont.HiDpiScale);
+
+        var raster = font.RasterizeHiDpi("5 Sim Lane", (255, 255, 255), logicalMargin: 0);
+        Assert.Equal(Math.Max(1, font.TextWidth("5 Sim Lane")), raster.LogicalWidth);
+        Assert.Equal(Math.Max(1, font.LineHeight), raster.LogicalHeight);
+        Assert.Equal(raster.LogicalWidth * 4, raster.PixelWidth);
+        Assert.Equal(raster.LogicalHeight * 4, raster.PixelHeight);
+        Assert.Equal(raster.PixelWidth * raster.PixelHeight * 4, raster.Rgba.Length);
+
+        var hasOpaqueGlyph = false;
+        var hasAntiAliasedEdge = false;
+        for (var i = 3; i < raster.Rgba.Length; i += 4)
+        {
+            var alpha = raster.Rgba[i];
+            if (alpha == 255)
+            {
+                hasOpaqueGlyph = true;
+            }
+            else if (alpha is > 0 and < 255)
+            {
+                hasAntiAliasedEdge = true;
+            }
+        }
+        Assert.True(hasOpaqueGlyph);
+        Assert.True(hasAntiAliasedEdge);
+
+        var tip = PlacementTooltip.RasterizeHiDpi("Switch to Downtown View", font);
+        Assert.Equal(tip.LogicalWidth * 4, tip.PixelWidth);
+        Assert.Equal(tip.LogicalHeight * 4, tip.PixelHeight);
+        Assert.Equal((byte)0, tip.Rgba[0]);
+        Assert.Equal((byte)0, tip.Rgba[1]);
+        Assert.Equal((byte)0, tip.Rgba[2]);
+        Assert.Equal((byte)255, tip.Rgba[3]);
+
+        var interiorOffset = (4 * tip.PixelWidth + 4) * 4;
+        Assert.Equal((byte)255, tip.Rgba[interiorOffset]);
+        Assert.Equal((byte)255, tip.Rgba[interiorOffset + 1]);
+        Assert.Equal((byte)224, tip.Rgba[interiorOffset + 2]);
+        Assert.Equal((byte)255, tip.Rgba[interiorOffset + 3]);
+
+        for (var i = 3; i < tip.Rgba.Length; i += 4)
+        {
+            Assert.Equal((byte)255, tip.Rgba[i]);
+        }
+    }
+
+    [Fact]
+    public void NeighborhoodOverlay_RolloverAndBannerTooltip_AreOpaqueAndHiDpi()
+    {
+        var gameDir = LocateGameDirectory();
+        if (gameDir is null
+            || !File.Exists(Path.Combine(gameDir, "UserData", "Neighborhood.iff"))
+            || !File.Exists(Path.Combine(gameDir, "UserData", "Houses", "House05.iff")))
+        {
+            return;
+        }
+
+        var previousNeighborhood = Neighborhoods.Current;
+        var (tempRoot, profile, session) = CreateIsolatedProfile(gameDir, 5);
+        try
+        {
+            Neighborhoods.Current = 1;
+            using var outputStream = new MemoryStream();
+            using var writer = new StreamWriter(outputStream, new UTF8Encoding(false)) { AutoFlush = true };
+            var server = SimulationServer.Load(gameDir, session, profile, 0, writer);
+            DrainEvents(outputStream, writer);
+
+            Assert.True(server.Handle("""{"id":"ngh","op":"neighborhood","mode":1}"""));
+            var nghResp = ResponseFor(DrainEvents(outputStream, writer), "ngh");
+            Assert.True(nghResp.GetProperty("ok").GetBoolean());
+
+            var manifestPath = Path.Combine(session, "neighborhood.json");
+            Assert.True(File.Exists(manifestPath));
+
+            var content = new GameContent(gameDir, LocatePackDirectories(gameDir));
+            var font = new SimsBitmapFont(content.Read("UIGraphics/Fonts/variablesans_10.ffn"));
+            var overlay = new OriginalNeighborhoodOverlay(content, new UIDevice(), manifestPath, session, font);
+
+            var canvas = new CGSize(1600, 1000);
+            const float uiScale = 2f;
+            var baseCount = overlay.DrawItems(canvas, uiScale, time: 0.0).Count;
+
+            var house5 = overlay.Controls(canvas, uiScale).Single(c => c.Label.EndsWith(" 5", StringComparison.Ordinal));
+            overlay.UpdateHover(new CGPoint(house5.Rect.MidX, house5.Rect.MidY), canvas, uiScale);
+            Assert.Equal(5, overlay.HoveredHouse);
+
+            var hoverItems = overlay.DrawItems(canvas, uiScale, time: 0.0);
+            Assert.True(hoverItems.Count >= baseCount + 16);
+            foreach (var item in hoverItems)
+            {
+                Assert.Equal(1f, item.Opacity);
+            }
+
+            var backgroundSlices = hoverItems.Where(i => i.Image.Size == new CGSize(111, 111)).ToArray();
+            Assert.Equal(9, backgroundSlices.Length);
+            foreach (var slice in backgroundSlices)
+            {
+                Assert.Equal(1f, slice.Opacity);
+            }
+            var bgTex = backgroundSlices[0].Image.Texture;
+            var bgCenterOffset = (55 * bgTex.Width + 55) * 4;
+            Assert.Equal((byte)255, bgTex.Pixels[bgCenterOffset + 3]);
+
+            var hiDpiLines = hoverItems
+                .Where(i => i.Image.Texture.Height == (int)i.Image.Size.Height * 4 && i.Image.Size.Height == font.LineHeight)
+                .ToArray();
+            Assert.True(hiDpiLines.Length >= 4);
+
+            for (var p = hoverItems.Count - 3; p < hoverItems.Count; p++)
+            {
+                var portrait = hoverItems[p];
+                Assert.Equal(new CGSize(25, 25), portrait.Image.Size);
+                Assert.Equal(1f, portrait.Opacity);
+                var tex = portrait.Image.Texture;
+                var centerOffset = (12 * tex.Width + 12) * 4;
+                Assert.Equal((byte)255, tex.Pixels[centerOffset + 3]);
+            }
+
+            overlay.UpdateHover(new CGPoint(-100, -100), canvas, uiScale);
+            var bannerControls = overlay.BannerControls(canvas, uiScale);
+            Assert.NotEmpty(bannerControls);
+            var bannerTarget = bannerControls.FirstOrDefault(c => c.Label.Contains("Downtown", StringComparison.OrdinalIgnoreCase));
+            if (bannerTarget.Label is null)
+            {
+                bannerTarget = bannerControls[0];
+            }
+
+            overlay.UpdateBannerHover(new CGPoint(bannerTarget.Rect.MidX, bannerTarget.Rect.MidY), canvas, quickTips: true, uiScale);
+            overlay.DrawItems(canvas, uiScale, time: 1.0);
+            Thread.Sleep(280);
+            var tipItems = overlay.DrawItems(canvas, uiScale, time: 1.3);
+
+            var tipItem = tipItems[^1];
+            Assert.Equal(1f, tipItem.Opacity);
+            Assert.Equal(new Vector4(0f, 0f, 1f, 1f), tipItem.UV);
+            Assert.Equal((int)tipItem.Image.Size.Width * 4, tipItem.Image.Texture.Width);
+            Assert.Equal((int)tipItem.Image.Size.Height * 4, tipItem.Image.Texture.Height);
+
+            var tipPixels = tipItem.Image.Texture.Pixels;
+            var tipCornerOffset = (4 * tipItem.Image.Texture.Width + 4) * 4;
+            Assert.Equal((byte)255, tipPixels[tipCornerOffset]);
+            Assert.Equal((byte)255, tipPixels[tipCornerOffset + 1]);
+            Assert.Equal((byte)224, tipPixels[tipCornerOffset + 2]);
+            Assert.Equal((byte)255, tipPixels[tipCornerOffset + 3]);
+            for (var i = 3; i < tipPixels.Length; i += 4)
+            {
+                Assert.Equal((byte)255, tipPixels[i]);
+            }
+        }
+        finally
+        {
+            Neighborhoods.Current = previousNeighborhood;
+            DeleteTempTree(tempRoot);
+        }
+    }
+
+    [Fact]
+    public void SharpTextOption_DefaultsTrue_FitsOnGraphicsPage_AndTogglesClassic1xFfn()
+    {
+        var defaults = new OriginalOptionsPanelOverlay.PlayOptionsState();
+        Assert.True(defaults.SharpText);
+        Assert.True(SimsBitmapFont.SharpTextEnabled);
+
+        var legacyDeserialized = JsonSerializer.Deserialize<OriginalOptionsPanelOverlay.PlayOptionsState>("{}");
+        Assert.True(legacyDeserialized.SharpText);
+
+        Assert.Equal(
+            OriginalOptionsPanelOverlay.Page.Graphics,
+            OriginalOptionsPanelOverlay.PlayOption.SharpText.Page());
+        Assert.True(OriginalOptionsPanelOverlay.PlayOption.SharpText.Value(defaults));
+        var toggled = OriginalOptionsPanelOverlay.PlayOption.SharpText.Toggled(defaults);
+        Assert.False(toggled.SharpText);
+
+        var gameDir = LocateGameDirectory();
+        if (gameDir is null)
+        {
+            return;
+        }
+
+        var content = new GameContent(gameDir, LocatePackDirectories(gameDir));
+        var font = new SimsBitmapFont(content.Read("UIGraphics/Fonts/variablesans_10.ffn"));
+        var strings = new OriginalUIStrings(content);
+        var panel = new OriginalOptionsPanelOverlay(content, new UIDevice(), strings, font);
+        panel.Select(OriginalOptionsPanelOverlay.Page.Graphics);
+
+        var canvas = new CGSize(800, 600);
+        var controls = panel.Controls(canvas);
+        var sharpControl = Assert.Single(controls, c => string.Equals(c.Label, "Sharp Text, on", StringComparison.Ordinal));
+
+        // SubpanelOrigin = (220, 50) at top = 600 - 150 = 450 => subpanel spans [220..800] x [500..600].
+        Assert.True(sharpControl.Rect.MinX >= 220);
+        Assert.True(sharpControl.Rect.MaxX <= 800);
+        Assert.True(sharpControl.Rect.MinY >= 500);
+        Assert.True(sharpControl.Rect.MaxY <= 600);
+
+        static bool Intersects(CGRect a, CGRect b) =>
+            a.MinX < b.MaxX && b.MinX < a.MaxX && a.MinY < b.MaxY && b.MinY < a.MaxY;
+
+        foreach (var other in controls)
+        {
+            if (string.Equals(other.Label, sharpControl.Label, StringComparison.Ordinal))
+            {
+                continue;
+            }
+            Assert.False(
+                Intersects(sharpControl.Rect, other.Rect),
+                $"Sharp Text ({sharpControl.Rect}) overlapped {other.Label} ({other.Rect})");
+        }
+
+        var hitPoint = new CGPoint(sharpControl.Rect.MidX, sharpControl.Rect.MidY);
+        Assert.Equal(OriginalOptionsPanelOverlay.PlayOption.SharpText, panel.OptionAt(hitPoint, canvas));
+        panel.Hover(hitPoint, canvas);
+        Assert.Equal(OriginalOptionsPanelOverlay.PlayOption.SharpText, panel.HoveredOption);
+        Assert.False(string.IsNullOrWhiteSpace(panel.AboutText(hitPoint, canvas)));
+        var hoveredParts = panel.Parts(canvas);
+        Assert.NotEmpty(hoveredParts);
+
+        var previousSharpText = SimsBitmapFont.SharpTextEnabled;
+        try
+        {
+            SimsBitmapFont.SharpTextEnabled = false;
+            var expected1x = font.Rasterize("Bella Goth", (255, 255, 255));
+            var fallback = font.RasterizeHiDpi("Bella Goth", (255, 255, 255));
+            Assert.Equal(expected1x.Width, fallback.PixelWidth);
+            Assert.Equal(expected1x.Height, fallback.PixelHeight);
+            Assert.Equal(fallback.LogicalWidth, fallback.PixelWidth);
+            Assert.Equal(fallback.LogicalHeight, fallback.PixelHeight);
+            Assert.Equal(expected1x.Rgba, fallback.Rgba);
+
+            var classicTip = PlacementTooltip.RasterizeHiDpi("Move in Family", font);
+            Assert.Equal(classicTip.LogicalWidth, classicTip.PixelWidth);
+            Assert.Equal(classicTip.LogicalHeight, classicTip.PixelHeight);
+
+            panel.PlayOptions = toggled;
+            panel.RefreshText();
+            var offControl = Assert.Single(panel.Controls(canvas), c => string.Equals(c.Label, "Sharp Text, off", StringComparison.Ordinal));
+            Assert.Equal(sharpControl.Rect.MinX, offControl.Rect.MinX);
+            Assert.Equal(sharpControl.Rect.MinY, offControl.Rect.MinY);
+        }
+        finally
+        {
+            SimsBitmapFont.SharpTextEnabled = previousSharpText;
+            panel.PlayOptions = defaults;
+            panel.RefreshText();
+        }
+    }
+
+    [Fact]
+    public void Bhav0x8003BigEndianAndMalformedCustomContent_LoadCleanlyWithoutCrashing()
+    {
+        var bhavData = new byte[13 + 2 * 12];
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(bhavData, 0x8003);
+        bhavData[2] = 0;
+        bhavData[3] = 1;
+        bhavData[4] = 2;
+        bhavData[5] = 1;
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(bhavData.AsSpan(9, 4), 2u);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(bhavData.AsSpan(13, 2), 2);
+        bhavData[15] = 1;
+        bhavData[16] = 0xFF;
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(bhavData.AsSpan(25, 2), 2);
+        bhavData[27] = 0xFE;
+        bhavData[28] = 0xFE;
+
+        var badBhavData = new byte[] { 0xFF, 0xFF, 1, 2, 3 };
+        var iffBytes = BuildSingleOrMultiChunkIff(
+            ("BHAV", 4104, bhavData),
+            ("BHAV", 4105, badBhavData));
+        var iff = new SimsEngine.Formats.IffFile(iffBytes, "tso_conveyorcontrol.iff");
+
+        var parsed = SimsEngine.Formats.Bhav.Read(iff, iff.Find(SimsEngine.Formats.ResourceType.Bhav, 4104)!);
+        Assert.Equal(0x8003, parsed.Signature);
+        Assert.Equal(2, parsed.Instructions.Count);
+        Assert.Equal(2, parsed.Instructions[0].Opcode);
+
+        var scope = new SimsEngine.Content.BehaviorScope(iff, iff, null);
+        Assert.NotNull(scope.Find(4104));
+        Assert.Null(scope.Find(4105));
+        Assert.NotEqual(0u, SimsEngine.Simulation.SavedLotObjectLoader.SavedTreeFingerprint(scope, 4104));
+        Assert.Equal(0u, SimsEngine.Simulation.SavedLotObjectLoader.SavedTreeFingerprint(scope, 4105));
+    }
+
+    private static byte[] BuildSingleOrMultiChunkIff(params (string Type, ushort Id, byte[] Data)[] chunks)
+    {
+        using var ms = new MemoryStream();
+        ms.Write(Encoding.ASCII.GetBytes("IFF FILE 2.5:TYPE FOLLOWED BY SIZE\0 JAMIE DOORNBOS & MAXIS 1"));
+        Span<byte> u32 = stackalloc byte[4];
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(u32, 0u);
+        ms.Write(u32);
+        foreach (var (type, id, payload) in chunks)
+        {
+            var header = new byte[76];
+            Encoding.ASCII.GetBytes(type.PadRight(4).AsSpan(0, 4), header.AsSpan(0, 4));
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(header.AsSpan(4, 4), (uint)(76 + payload.Length));
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(header.AsSpan(8, 2), id);
+            ms.Write(header);
+            ms.Write(payload);
+        }
+        return ms.ToArray();
     }
 }

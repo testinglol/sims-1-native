@@ -227,12 +227,15 @@ public sealed class OriginalDialogOverlay
         // 23px, 14 is 27px), requiring a 12pt title font (13px cap) and 10pt body font (10px cap) to align
         // with standard button heights.
         var loaded12 = TryFont(content, "UIGraphics/Fonts/variablesans_12.ffn") ?? font;
+        var loaded09 = TryFont(content, "UIGraphics/Fonts/variablesans_09.ffn") ?? font;
         TitleFont = loaded12;
         DialogTitleFont = loaded12;
-        MessageBodyFont = font;
-        InputFont = font;
-        ButtonFont = font;
-        TooltipFont = TryFont(content, "UIGraphics/Fonts/variablesans_08.ffn") ?? font;
+        MessageBodyFont = loaded09;
+        InputFont = loaded09;
+        ButtonFont = loaded09;
+        TooltipFont = TryFont(content, "UIGraphics/Fonts/variablesans_07.ffn")
+            ?? TryFont(content, "UIGraphics/Fonts/variablesans_08.ffn")
+            ?? loaded09;
         Device = device;
         InputFocused = dialog.Kind == 3 && dialog.Blocking;
 
@@ -244,10 +247,10 @@ public sealed class OriginalDialogOverlay
                 SpritePixels.PremultipliedSRGB(bitmap.Rgba, removeMagenta: transparent));
 
         ButtonLabels MakeButtonLabels(string caption) => new(
-            Label(caption, font, device, DefaultTextColor),
-            Label(caption, font, device, SelectedTextColor),
-            Label(caption, font, device, HoverTextColor),
-            Label(caption, font, device, DisabledTextColor));
+            Label(caption, ButtonFont, device, DefaultTextColor),
+            Label(caption, ButtonFont, device, SelectedTextColor),
+            Label(caption, ButtonFont, device, HoverTextColor),
+            Label(caption, ButtonFont, device, DisabledTextColor));
 
         SimsBitmap? illustrationBitmap = null;
         try
@@ -545,7 +548,7 @@ public sealed class OriginalDialogOverlay
             UITextureDescriptor.PixelFormat.Rgba8UnormSrgb,
             width,
             height,
-            mipmapped: false);
+            mipmapped: true);
         var texture = device.MakeTexture(descriptor)
             ?? throw new ContentError("Cannot allocate game dialog texture");
         texture.Replace(new UIRegion(0, 0, width, height), 0, pixels, width * 4);
@@ -554,32 +557,10 @@ public sealed class OriginalDialogOverlay
 
     private static Image Label(string value, SimsBitmapFont font, UIDevice device, (byte R, byte G, byte B) color)
     {
-        // Crops 3 pixels of rasterization padding from each margin to match the exact glyph cell
-        // boundaries.
-        var image = font.Rasterize(value, color);
-        const int pad = 3;
-        if (image.Width > 2 * pad && image.Height > 2 * pad)
-        {
-            int width = image.Width - 2 * pad;
-            int height = image.Height - 2 * pad;
-            byte[] cropped = new byte[width * height * 4];
-            for (int y = pad; y < pad + height; y++)
-            {
-                Buffer.BlockCopy(
-                    image.Rgba,
-                    (y * image.Width + pad) * 4,
-                    cropped,
-                    (y - pad) * width * 4,
-                    width * 4);
-            }
-            return new Image(
-                Texture(device, width, height, SpritePixels.PremultipliedSRGB(cropped)),
-                new CGSize(width, height));
-        }
-
+        var raster = font.RasterizeHiDpi(value, color, logicalMargin: 0);
         return new Image(
-            Texture(device, image.Width, image.Height, SpritePixels.PremultipliedSRGB(image.Rgba)),
-            new CGSize(image.Width, image.Height));
+            Texture(device, raster.PixelWidth, raster.PixelHeight, SpritePixels.PremultipliedSRGB(raster.Rgba)),
+            new CGSize(raster.LogicalWidth, raster.LogicalHeight));
     }
 
     private static CGRect ScrollbarThumbRect(CGRect bar, int scroll, int maxScroll)
@@ -1023,12 +1004,18 @@ public sealed class OriginalDialogOverlay
             int start = Math.Clamp(_scroll, 0, _message.Count);
             int take = Math.Min(count, _message.Count - start);
             var lines = new List<(Image Image, CGRect Rect)>(take);
+            bool centerShortPrompt = Illustration is null
+                && _message.Count <= 2
+                && _messageScrollbarRect.Width <= 0
+                && Dialog.Kind != 3;
             for (int offset = 0; offset < take; offset++)
             {
                 int lineIndex = start + offset;
                 var image = _message[lineIndex];
                 bool isSide = lineIndex < _messageSideFlags.Count && _messageSideFlags[lineIndex];
-                double minX = isSide ? _messageSideOriginX : _messageFullOriginX;
+                double minX = centerShortPrompt
+                    ? BodyRect.MinX + Math.Floor((BodyRect.Width - image.Size.Width) / 2.0)
+                    : (isSide ? _messageSideOriginX : _messageFullOriginX);
                 lines.Add((image, new CGRect(minX, BodyRect.MinY + offset * lineH, image.Size.Width, image.Size.Height)));
             }
             return lines;

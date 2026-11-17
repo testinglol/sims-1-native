@@ -19,10 +19,10 @@ public sealed class LiveUI
     public OriginalBuildOverlay Build { get; }
     public OriginalOptionsPanelOverlay OptionsPanel { get; }
     public OriginalUIStrings Strings { get; }
-    public OriginalCameraOverlay Camera { get; }
-    public OriginalPhotoAlbumOverlay Album { get; }
-    public OriginalHelpOverlay HelpOverlay { get; }
-    public OriginalBudgetReportOverlay BudgetReport { get; }
+    public OriginalCameraOverlay Camera { get; private set; }
+    public OriginalPhotoAlbumOverlay Album { get; private set; }
+    public OriginalHelpOverlay HelpOverlay { get; private set; }
+    public OriginalBudgetReportOverlay BudgetReport { get; private set; }
     public OriginalSoundOptionsOverlay SoundOptions { get; }
 
     public OriginalCatalogPopup CatalogPopup { get; }
@@ -31,7 +31,8 @@ public sealed class LiveUI
     private readonly UITexture _backPatch;
 
     private readonly UITexture? _setup;
-    private readonly UITexture? _splashCopyrightTexture;
+    private (UITexture Texture, CGSize Size)? _splashCopyright;
+    private bool? _appliedSharpText;
     private readonly UITexture _black = new(1, 1, [0, 0, 0, 255]);
 
     public OriginalTravelLoadScreen? TravelLoadScreen { get; set; }
@@ -80,13 +81,16 @@ public sealed class LiveUI
 
             try
             {
-                var raster = SplashFont.Rasterize(value, 255, 255, 255);
-                if (raster.Width <= 0 || raster.Height <= 0)
+                var raster = SplashFont.RasterizeHiDpi(value, 255, 255, 255);
+                if (raster.LogicalWidth <= 0 || raster.LogicalHeight <= 0)
                     return;
 
                 byte[] pixels = SpritePixels.PremultipliedSRGB(raster.Rgba, removeMagenta: false);
                 _previousLoadingLine = _loadingLine;
-                _loadingLine = (value, new UITexture(raster.Width, raster.Height, pixels));
+                _loadingLine = (
+                    value,
+                    new UITexture(raster.PixelWidth, raster.PixelHeight, pixels),
+                    new CGSize(raster.LogicalWidth, raster.LogicalHeight));
                 _loadingLineTransitionStart = CurrentUptime();
             }
             catch (ContentError)
@@ -95,8 +99,8 @@ public sealed class LiveUI
         }
     }
 
-    private (string Text, UITexture Texture)? _loadingLine;
-    private (string Text, UITexture Texture)? _previousLoadingLine;
+    private (string Text, UITexture Texture, CGSize Size)? _loadingLine;
+    private (string Text, UITexture Texture, CGSize Size)? _previousLoadingLine;
     private double? _loadingLineTransitionStart;
 
     public bool HelpVisible { get; set; }
@@ -468,21 +472,7 @@ public sealed class LiveUI
         var strings = new OriginalUIStrings(content);
         Strings = strings;
 
-        UITexture? copyrightTex = null;
-        try
-        {
-            var raster = SplashFont.Rasterize(strings.SplashCopyright(), 255, 255, 255);
-            if (raster.Width > 0 && raster.Height > 0)
-            {
-                byte[] pixels = SpritePixels.PremultipliedSRGB(raster.Rgba, removeMagenta: false);
-                copyrightTex = new UITexture(raster.Width, raster.Height, pixels);
-            }
-        }
-        catch
-        {
-            copyrightTex = null;
-        }
-        _splashCopyrightTexture = copyrightTex;
+        RebuildSplashCopyright();
 
         Gameplay = new OriginalGameplayOverlay(content, Font, Device, strings);
         Buy = new OriginalBuyOverlay(content, Font, Device, strings);
@@ -502,6 +492,85 @@ public sealed class LiveUI
             _speedTextures.Add(LoadTexture(control.Asset, transparent: true));
 
         _tutorialHighlightTexture = TryLoadTexture("UIGraphics/CPanel/TutHigh.bmp", transparent: true);
+        _appliedSharpText = SimsBitmapFont.SharpTextEnabled;
+    }
+
+    private void RebuildSplashCopyright()
+    {
+        (UITexture Texture, CGSize Size)? copyrightEntry = null;
+        try
+        {
+            var raster = SplashFont.RasterizeHiDpi(Strings.SplashCopyright(), 255, 255, 255);
+            if (raster.LogicalWidth > 0 && raster.LogicalHeight > 0)
+            {
+                byte[] pixels = SpritePixels.PremultipliedSRGB(raster.Rgba, removeMagenta: false);
+                copyrightEntry = (
+                    new UITexture(raster.PixelWidth, raster.PixelHeight, pixels),
+                    new CGSize(raster.LogicalWidth, raster.LogicalHeight));
+            }
+        }
+        catch
+        {
+            copyrightEntry = null;
+        }
+        _splashCopyright = copyrightEntry;
+    }
+
+    public void ApplySharpText(bool enabled)
+    {
+        if (_appliedSharpText == enabled && SimsBitmapFont.SharpTextEnabled == enabled)
+        {
+            return;
+        }
+
+        SimsBitmapFont.SharpTextEnabled = enabled;
+        _appliedSharpText = enabled;
+        RebuildSplashCopyright();
+        _cachedPipCaption = null;
+        _cachedDisposePrompt = null;
+
+        if (!string.IsNullOrEmpty(_loadingText))
+        {
+            var loading = _loadingText;
+            _loadingText = null;
+            _loadingLine = null;
+            _previousLoadingLine = null;
+            LoadingText = loading;
+        }
+
+        OptionsPanel.RefreshText();
+        SoundOptions.RefreshText();
+        Gameplay.RefreshText();
+        Buy.ClearTextCaches();
+        Build.ClearTextCaches();
+        Neighborhood?.ClearTextCaches();
+        CatalogPopup.ClearTextCaches();
+
+        bool cameraVisible = Camera.Visible;
+        int cameraSize = Camera.Size;
+        CGSize cameraCustom = Camera.CustomDimensions;
+        int cameraQuality = Camera.Quality;
+        Camera = new OriginalCameraOverlay(Content, Device, Strings)
+        {
+            Visible = cameraVisible,
+            Size = cameraSize,
+            CustomDimensions = cameraCustom,
+            Quality = cameraQuality
+        };
+
+        if (!Album.Visible)
+        {
+            Album = new OriginalPhotoAlbumOverlay(Content, Font, Device, Strings);
+        }
+
+        int helpSelected = HelpOverlay.Selected;
+        HelpOverlay = new OriginalHelpOverlay(Content, MediumFont, Device, Strings);
+        if (helpSelected > 0)
+        {
+            HelpOverlay.MoveSelection(helpSelected);
+        }
+
+        BudgetReport = new OriginalBudgetReportOverlay(Content, Font, Device, Strings);
     }
 
     private static SimsBitmapFont? TryFont(byte[] data)
@@ -897,12 +966,12 @@ public sealed class LiveUI
                         draws.Add(new UIDraw(_setup, new Vector4(splashX, splashY, splashW, splashH)));
 
                     float lineHeight = SplashFont.LineHeight;
-                    if (_splashCopyrightTexture is { } copyright)
+                    if (_splashCopyright is { } copyright)
                     {
-                        float cw = copyright.Width * fit;
-                        float ch = copyright.Height * fit;
+                        float cw = (float)copyright.Size.Width * fit;
+                        float ch = (float)copyright.Size.Height * fit;
                         float cy = splashY + ((boxHeight < 701f ? boxHeight - 3f * lineHeight : boxHeight - (lineHeight * 5f) / 2f) * fit);
-                        draws.Add(new UIDraw(copyright, new Vector4(splashX + (splashW - cw) / 2f, cy, cw, ch)));
+                        draws.Add(new UIDraw(copyright.Texture, new Vector4(splashX + (splashW - cw) / 2f, cy, cw, ch)));
                     }
 
                     if (_loadingLine is { } line)
@@ -912,10 +981,10 @@ public sealed class LiveUI
                         double elapsed = _loadingLineTransitionStart is { } startedAt ? Math.Max(0.0, now - startedAt) : 1.0;
                         float t = (float)Math.Min(1.0, elapsed);
 
-                        void AppendClippedText(UITexture tex, float x)
+                        void AppendClippedText(UITexture tex, CGSize texSize, float x)
                         {
-                            float w = tex.Width;
-                            float h = tex.Height;
+                            float w = (float)texSize.Width;
+                            float h = (float)texSize.Height;
                             float visX0 = MathF.Max(0f, x);
                             float visX1 = MathF.Min(boxWidth, x + w);
                             if (visX1 <= visX0 || w <= 0f)
@@ -926,25 +995,25 @@ public sealed class LiveUI
                             draws.Add(new UIDraw(
                                 tex,
                                 new Vector4(splashX + visX0 * fit, py, (visX1 - visX0) * fit, h * fit),
-                                new Vector4(u0, 0f, u1, 1f)));
+                                new Vector4(u0, 0f, u1 - u0, 1f)));
                         }
 
                         if (t < 1f && _previousLoadingLine is { } previous)
                         {
-                            float prevW = previous.Texture.Width;
+                            float prevW = (float)previous.Size.Width;
                             float prevStartX = (boxWidth - prevW) / 2f;
                             float prevX = prevStartX - (prevStartX + prevW) * t;
-                            AppendClippedText(previous.Texture, prevX);
+                            AppendClippedText(previous.Texture, previous.Size, prevX);
                         }
                         else if (t >= 1f)
                         {
                             _previousLoadingLine = null;
                         }
 
-                        float curW = line.Texture.Width;
+                        float curW = (float)line.Size.Width;
                         float targetX = (boxWidth - curW) / 2f;
                         float curX = t < 1f ? boxWidth - (boxWidth - targetX) * t : targetX;
-                        AppendClippedText(line.Texture, curX);
+                        AppendClippedText(line.Texture, line.Size, curX);
                     }
                 }
 
@@ -1425,17 +1494,7 @@ public sealed class LiveUI
 
             try
             {
-                var raster = MediumFont.Rasterize(line, color);
-                if (raster.Width <= 0 || raster.Height <= 0)
-                {
-                    result.Add(empty);
-                    continue;
-                }
-
-                byte[] pixels = SpritePixels.PremultipliedSRGB(raster.Rgba, removeMagenta: false);
-                result.Add(new OriginalGameplayOverlay.Image(
-                    new UITexture(raster.Width, raster.Height, pixels),
-                    new CGSize(raster.Width, raster.Height)));
+                result.Add(OriginalGameplayOverlay.CreateImage(Device, MediumFont.RasterizeHiDpi(line, color, logicalMargin: 3)));
             }
             catch
             {
@@ -1766,7 +1825,7 @@ public sealed class LiveUI
                 : dialog.Hovered == index ? 2 : 0;
             DrawTileButton(bounds, btnState);
             var label = dialog.ButtonLabelStates[index].Image(btnState);
-            AddCentred(label, bounds.MidX, Math.Floor(bounds.MidY - label.Size.Height / 2.0));
+            AddCentred(label, bounds.MidX, Math.Floor(bounds.MidY - dialog.ButtonFont.CapMidYPx));
         }
 
         if (dialog.BookIngredientTooltip is { } tip)

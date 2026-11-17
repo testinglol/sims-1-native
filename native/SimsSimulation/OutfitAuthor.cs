@@ -347,7 +347,7 @@ internal static class OutfitAuthor
     {
         if (string.IsNullOrWhiteSpace(relative) || Path.IsPathRooted(relative)) throw new InvalidDataException($"{what} must be a path relative to the document");
         var path = Path.GetFullPath(Path.Combine(root, relative));
-        if (!path.StartsWith(root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+        if (!path.StartsWith(root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
             throw new InvalidDataException($"{what} {relative} is outside the document directory");
         if (!File.Exists(path)) throw new InvalidDataException($"{what} {relative} does not exist");
         if (new FileInfo(path).Length > 32 * 1024 * 1024) throw new InvalidDataException($"{what} {relative} exceeds size limit");

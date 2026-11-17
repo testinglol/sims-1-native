@@ -473,30 +473,42 @@ public sealed partial class GameContent
         }
     }
 
+    private static volatile bool s_windowsSymlinksUnavailable;
+
     private static void LinkOrCopyItem(string source, string destination)
     {
-        try
+        bool isDir = Directory.Exists(source);
+        if (!OperatingSystem.IsWindows() || !s_windowsSymlinksUnavailable)
         {
-            if (Directory.Exists(source))
+            try
             {
-                Directory.CreateSymbolicLink(destination, source);
+                if (isDir)
+                {
+                    Directory.CreateSymbolicLink(destination, source);
+                }
+                else
+                {
+                    File.CreateSymbolicLink(destination, source);
+                }
+                return;
             }
-            else
+            catch
             {
-                File.CreateSymbolicLink(destination, source);
-            }
-            return;
-        }
-        catch
-        {
-            if (!OperatingSystem.IsWindows())
-            {
-                throw;
+                if (!OperatingSystem.IsWindows())
+                {
+                    throw;
+                }
+                s_windowsSymlinksUnavailable = true;
             }
         }
 
-        if (Directory.Exists(source))
+        if (isDir)
         {
+            if (OperatingSystem.IsWindows() && TryCreateWindowsJunction(destination, source))
+            {
+                return;
+            }
+
             Directory.CreateDirectory(destination);
             foreach (var child in Directory.EnumerateFileSystemEntries(source))
             {
@@ -727,4 +739,107 @@ public sealed partial class GameContent
     [DllImport("kernel32.dll", EntryPoint = "CreateHardLinkW", SetLastError = true, CharSet = CharSet.Unicode)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool CreateHardLinkW(string lpFileName, string lpExistingFileName, IntPtr lpSecurityAttributes);
+
+    [DllImport("kernel32.dll", EntryPoint = "CreateFileW", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern IntPtr CreateFileW(
+        string lpFileName,
+        uint dwDesiredAccess,
+        uint dwShareMode,
+        IntPtr lpSecurityAttributes,
+        uint dwCreationDisposition,
+        uint dwFlagsAndAttributes,
+        IntPtr hTemplateFile);
+
+    [DllImport("kernel32.dll", EntryPoint = "DeviceIoControl", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool DeviceIoControl(
+        IntPtr hDevice,
+        uint dwIoControlCode,
+        byte[] lpInBuffer,
+        int nInBufferSize,
+        IntPtr lpOutBuffer,
+        int nOutBufferSize,
+        out int lpBytesReturned,
+        IntPtr lpOverlapped);
+
+    [DllImport("kernel32.dll", EntryPoint = "CloseHandle", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CloseHandle(IntPtr hObject);
+
+    private static bool TryCreateWindowsJunction(string junctionPath, string targetDir)
+    {
+        const uint GENERIC_WRITE = 0x40000000;
+        const uint FILE_SHARE_ALL = 0x00000007;
+        const uint OPEN_EXISTING = 3;
+        const uint FILE_FLAG_BACKUP_SEMANTICS = 0x02000000;
+        const uint FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000;
+        const uint FSCTL_SET_REPARSE_POINT = 0x000900A4;
+        const uint IO_REPARSE_TAG_MOUNT_POINT = 0xA0000003;
+
+        string fullTarget = Path.GetFullPath(targetDir);
+        string printName = fullTarget;
+        string substituteName = fullTarget.StartsWith(@"\\?\", StringComparison.Ordinal)
+            ? @"\??\" + fullTarget[4..]
+            : @"\??\" + fullTarget;
+
+        byte[] subBytes = Encoding.Unicode.GetBytes(substituteName);
+        byte[] printBytes = Encoding.Unicode.GetBytes(printName);
+        int pathBufferLen = subBytes.Length + 2 + printBytes.Length + 2;
+        int reparseDataLen = 8 + pathBufferLen;
+        if (reparseDataLen > 16 * 1024 - 8)
+        {
+            return false;
+        }
+
+        byte[] buffer = new byte[8 + reparseDataLen];
+        BitConverter.TryWriteBytes(buffer.AsSpan(0, 4), IO_REPARSE_TAG_MOUNT_POINT);
+        BitConverter.TryWriteBytes(buffer.AsSpan(4, 2), (ushort)reparseDataLen);
+        BitConverter.TryWriteBytes(buffer.AsSpan(8, 2), (ushort)0);
+        BitConverter.TryWriteBytes(buffer.AsSpan(10, 2), (ushort)subBytes.Length);
+        BitConverter.TryWriteBytes(buffer.AsSpan(12, 2), (ushort)(subBytes.Length + 2));
+        BitConverter.TryWriteBytes(buffer.AsSpan(14, 2), (ushort)printBytes.Length);
+        subBytes.CopyTo(buffer, 16);
+        printBytes.CopyTo(buffer, 16 + subBytes.Length + 2);
+
+        try
+        {
+            Directory.CreateDirectory(junctionPath);
+        }
+        catch
+        {
+            return false;
+        }
+
+        IntPtr handle = CreateFileW(
+            junctionPath,
+            GENERIC_WRITE,
+            FILE_SHARE_ALL,
+            IntPtr.Zero,
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+            IntPtr.Zero);
+        if (handle == IntPtr.Zero || handle == new IntPtr(-1))
+        {
+            try { Directory.Delete(junctionPath, recursive: false); } catch { }
+            return false;
+        }
+
+        bool ok;
+        try
+        {
+            ok = DeviceIoControl(handle, FSCTL_SET_REPARSE_POINT, buffer, buffer.Length, IntPtr.Zero, 0, out _, IntPtr.Zero);
+        }
+        finally
+        {
+            _ = CloseHandle(handle);
+        }
+
+        if (!ok)
+        {
+            try { Directory.Delete(junctionPath, recursive: false); } catch { }
+            return false;
+        }
+
+        return true;
+    }
 }

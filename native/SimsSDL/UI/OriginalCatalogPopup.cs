@@ -118,6 +118,15 @@ public sealed class OriginalCatalogPopup
 
     public bool IsVisible => _item is not null && DelayElapsed;
 
+    public void ClearTextCaches()
+    {
+        _cachedItem = null;
+        _titleImage = null;
+        _descriptionImages = [];
+        _ratingImages = [];
+        _placementErrorImage = null;
+    }
+
     public bool IsFullyOpen
     {
         get
@@ -177,8 +186,7 @@ public sealed class OriginalCatalogPopup
         _placementErrorImage = null;
         if (text is not null)
         {
-            var pixels = PlacementTooltip.Rasterize(text, _placementFont);
-            _placementErrorImage = OriginalGameplayOverlay.CreateImage(_device, pixels.Width, pixels.Height, pixels.Rgba);
+            _placementErrorImage = OriginalGameplayOverlay.CreateImage(_device, PlacementTooltip.RasterizeHiDpi(text, _placementFont));
         }
     }
 

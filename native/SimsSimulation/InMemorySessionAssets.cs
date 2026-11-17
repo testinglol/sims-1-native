@@ -332,6 +332,26 @@ internal static class InMemorySessionAssets
             fullPath = Path.Combine(ResolveExistingRealPath(parent), leaf);
         }
 
+        if (OperatingSystem.IsWindows())
+        {
+            try
+            {
+                var attrs = File.GetAttributes(fullPath);
+                if (attrs == (FileAttributes)(-1) || (attrs & FileAttributes.ReparsePoint) == 0)
+                {
+                    return fullPath;
+                }
+                var link = (attrs & FileAttributes.Directory) != 0
+                    ? Directory.ResolveLinkTarget(fullPath, returnFinalTarget: true)
+                    : File.ResolveLinkTarget(fullPath, returnFinalTarget: true);
+                return Path.TrimEndingDirectorySeparator(link?.FullName ?? fullPath);
+            }
+            catch
+            {
+                return fullPath;
+            }
+        }
+
         if (File.Exists(fullPath))
         {
             return Path.TrimEndingDirectorySeparator(

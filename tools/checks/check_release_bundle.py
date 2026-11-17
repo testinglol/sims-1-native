@@ -145,7 +145,10 @@ def check_macos(bundle: Path) -> None:
 def check_windows(bundle: Path) -> None:
     require_file(bundle / "SimsSDL.exe", "Windows executable")
     require_file(bundle / "SDL3.dll", "bundled SDL3.dll")
-    require_non_empty_shaders(bundle / "Shaders", "Windows Shaders directory")
+    shaders = bundle / "Shaders"
+    require_non_empty_shaders(shaders, "Windows Shaders directory")
+    if not any(item.is_file() and item.suffix == ".dxil" for item in shaders.iterdir()):
+        raise SystemExit(f"Missing D3D12 .dxil shaders in Windows Shaders directory: {shaders}")
 
     for name in (
         "SimsSDL.dll",

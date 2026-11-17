@@ -390,6 +390,13 @@ public sealed class OriginalBuyOverlay
         _statusKey = key;
     }
 
+    public void ClearTextCaches()
+    {
+        _priceTips.Clear();
+        _statusKey = string.Empty;
+        _footer.Clear();
+    }
+
     public List<OriginalGameplayOverlay.Part> StatusParts(CGSize canvas)
     {
         var result = new List<OriginalGameplayOverlay.Part>(_footer.Count);
@@ -614,45 +621,7 @@ public sealed class OriginalBuyOverlay
         {
             string label = "§" + OriginalGameplayOverlay.Grouped(price);
             (byte R, byte G, byte B) color = unaffordable ? ((byte)255, (byte)0, (byte)0) : ((byte)0, (byte)0, (byte)0);
-            var glyphs = _tooltipFont.Rasterize(label, color);
-            if (glyphs.Width <= 0 || glyphs.Height <= 0)
-                return null;
-
-            int width = glyphs.Width + 6;
-            int height = glyphs.Height + 6;
-            var rgba = new byte[width * height * 4];
-            for (int y = 0; y < height; y++)
-            {
-                for (int x = 0; x < width; x++)
-                {
-                    int index = (y * width + x) * 4;
-                    bool border = x == 0 || y == 0 || x == width - 1 || y == height - 1;
-                    rgba[index] = border ? (byte)0 : (byte)255;
-                    rgba[index + 1] = border ? (byte)0 : (byte)255;
-                    rgba[index + 2] = border ? (byte)0 : (byte)224;
-                    rgba[index + 3] = 255;
-                }
-            }
-
-            byte[] source = glyphs.Rgba;
-            for (int y = 0; y < glyphs.Height; y++)
-            {
-                for (int x = 0; x < glyphs.Width; x++)
-                {
-                    int src = (y * glyphs.Width + x) * 4;
-                    int alpha = source[src + 3];
-                    if (alpha <= 0)
-                        continue;
-
-                    int dst = ((y + 3) * width + (x + 3)) * 4;
-                    int inv = 255 - alpha;
-                    rgba[dst] = (byte)((source[src] * alpha + rgba[dst] * inv) / 255);
-                    rgba[dst + 1] = (byte)((source[src + 1] * alpha + rgba[dst + 1] * inv) / 255);
-                    rgba[dst + 2] = (byte)((source[src + 2] * alpha + rgba[dst + 2] * inv) / 255);
-                }
-            }
-
-            var image = OriginalGameplayOverlay.CreateImage(Device, width, height, rgba);
+            var image = OriginalGameplayOverlay.CreateImage(Device, PlacementTooltip.RasterizeBoxHiDpi(label, _tooltipFont, color));
             _priceTips[key] = image;
             return image;
         }
