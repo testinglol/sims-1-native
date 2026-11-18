@@ -447,6 +447,21 @@ public sealed class GPUContext : IDisposable
         }
     }
 
+    public bool SupportsShaderAsset(string basePath)
+    {
+        if (string.IsNullOrWhiteSpace(basePath))
+            return false;
+
+        uint formats = SDL_GetGPUShaderFormats(Device);
+        if ((formats & SDL_GPU_SHADERFORMAT_MSL) != 0)
+            return File.Exists(basePath + ".msl");
+        if ((formats & SDL_GPU_SHADERFORMAT_DXIL) != 0 && File.Exists(basePath + ".dxil"))
+            return true;
+        if ((formats & SDL_GPU_SHADERFORMAT_SPIRV) != 0 && File.Exists(basePath + ".spv"))
+            return true;
+        return false;
+    }
+
     private unsafe nint Shader(string name, int stage, uint samplers = 0, uint storageBuffers = 0, uint uniforms = 0)
     {
         string? source = EffectShaders.TryGetValue(name, out string? effectPath)

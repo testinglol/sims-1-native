@@ -2,6 +2,15 @@
 
 All notable changes to **The Sims Native** are documented in this file.
 
+## [0.4.1] - 2026-11-18
+
+### Windows Direct3D 12 Crash Fix (`0x80070057` / `E_INVALIDARG`)
+- **Fixed D3D12 Graphics Pipeline Creation Crash**: Fixed inter-stage HLSL/DXIL register linkage mismatches (`OSG1` -> `ISG1`) in `sprite.frag`, `ghost.frag`, `censor.frag`, and `terrain.frag` where skipped fragment `layout(location)` inputs shifted packed DXC `TEXCOORD` / `SV_Position` register indices relative to `sprite.vert` and `terrain.vert`, causing `SDL_CreateGPUGraphicsPipeline` (`CreateGraphicsPipelineState`) to fail with `0x80070057` (`E_INVALIDARG`) on Direct3D 12 at startup and lot entry.
+- **Automated HLSL/DXIL Linkage & Live Windows D3D12 CI Verification**: Added `tools/build_sdl_hlsl_shaders.py`, Windows SDK `dxc.exe` DXIL compilation during CI/packaging, binary `OSG1`/`ISG1` signature validation, and an automated Windows Direct3D 12 `GPUContext.Pipeline` test suite across all core shader programs, depth modes, and MSAA sample counts.
+- **Crash Dialog & Watchdog Polish**: Prevented false stall-watchdog log entries while the native crash report dialog is waiting on user input, fixed decimal second formatting in watchdog alerts, and shortened the crash dialog button label (`Open Logs`) so it never clips at 135%+ Windows DPI scaling.
+
+---
+
 ## [0.4.0] - 2026-11-18
 
 ### Diagnostics, Logging & Windows Hang Fixes

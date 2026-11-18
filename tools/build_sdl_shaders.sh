@@ -10,3 +10,4 @@ for shader in "$source"/*.vert "$source"/*.frag; do
     glslangValidator -V --quiet -I"$source" -o "$output/$name.spv" "$shader"
 done
 python3 "$root/tools/build_sdl_msl_shaders.py"
+python3 "$root/tools/build_sdl_hlsl_shaders.py"

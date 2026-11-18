@@ -2,6 +2,7 @@
 // Per-pixel terrain shader using 128-shade light-to-dark grass ramps (shade 0 = base lit ground),
 // 4x2 alternating dither offsets ([0, -8, 0, -6] / [-6, 0, -8, 0]), and procedural per-pixel grass blades
 // (300..800 medium, 500..1200 high, quartered at far zoom; heights 1 px far/medium, 1..4 px near).
+layout(location = 0) in vec4 inColor;
 layout(location = 1) in vec2 inCoordinate;
 layout(location = 2) in vec4 inLight;
 layout(location = 3) in vec4 inDark;

@@ -42,6 +42,33 @@ if (Test-Path $Stage) { Remove-Item $Stage -Recurse -Force }
 New-Item -ItemType Directory -Path $Dist -Force | Out-Null
 New-Item -ItemType Directory -Path $Stage -Force | Out-Null
 
+$ShadersDir = Join-Path $Root "native\SimsSDL\Shaders"
+$HlslDir = Join-Path $ShadersDir "hlsl"
+if (Test-Path $HlslDir) {
+    $DxcExe = (Get-Command dxc.exe -ErrorAction SilentlyContinue)?.Source
+    if (-not $DxcExe) {
+        $KitsBin = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\bin"
+        if (Test-Path $KitsBin) {
+            $DxcExe = Get-ChildItem -Path $KitsBin -Filter "dxc.exe" -Recurse -File -ErrorAction SilentlyContinue |
+                Where-Object { $_.FullName -match '\\x64\\dxc\.exe$' } |
+                Sort-Object FullName -Descending |
+                Select-Object -First 1 -ExpandProperty FullName
+        }
+    }
+    if ($DxcExe) {
+        Write-Host "Compiling HLSL shaders to signed DXIL using $DxcExe..."
+        foreach ($HlslFile in Get-ChildItem -Path $HlslDir -Filter "*.hlsl" -File) {
+            $Stem = $HlslFile.Name.Substring(0, $HlslFile.Name.Length - 5)
+            $Profile = if ($Stem.EndsWith(".vert")) { "vs_6_0" } else { "ps_6_0" }
+            $DxilOut = Join-Path $ShadersDir "$Stem.dxil"
+            & $DxcExe -T $Profile -E main -O3 -Fo $DxilOut $HlslFile.FullName
+            if ($LASTEXITCODE -ne 0) {
+                throw "dxc.exe failed compiling $($HlslFile.Name) with exit code $LASTEXITCODE"
+            }
+        }
+    }
+}
+
 Write-Host "Publishing self-contained Windows SimsSDL client + simulation engine ($Version)..."
 $Project = Join-Path $Root "native\SimsSDL\SimsSDL.csproj"
 & dotnet restore $Project -r win-x64 -p:EnableWindowsTargeting=true -p:NuGetAudit=false --disable-build-servers -nologo

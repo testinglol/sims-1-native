@@ -2505,7 +2505,14 @@ public sealed class LotRenderer : IDisposable
             foreach (var (key, shaderPath) in effect.Shaders)
             {
                 string stage = key is "groundDepth" or "heightScatter" or "fullscreen" ? ".vert" : ".frag";
-                nextShaders[key + stage] = value.Asset(shaderPath);
+                string assetPath = value.Asset(shaderPath);
+                if (!GPU.SupportsShaderAsset(assetPath))
+                {
+                    AppLog.Warn($"Skipping environment shader '{key + stage}' at '{assetPath}': no compiled bytecode matching active GPU backend ({GPU.DriverName}).");
+                    nextShaders.Clear();
+                    break;
+                }
+                nextShaders[key + stage] = assetPath;
             }
         }
 

@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Release version string (e.g. 0.4.0)
+        description: Release version string (e.g. 0.4.1)
         required: false
-        default: '0.4.0'
+        default: '0.4.1'
   push:
     tags:
       - 'v*'
@@ -84,7 +84,43 @@ jobs:
           Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
           $sdlNested = Get-ChildItem -Path $extractDir -Directory -Filter "SDL3-*" | Select-Object -First 1
           $sdlRoot = if ($sdlNested) { $sdlNested.FullName } else { $extractDir }
+          $sdlDll = Get-ChildItem -Path $sdlRoot -Recurse -Filter "SDL3.dll" -File |
+            Where-Object { $_.FullName -notmatch 'arm64|x86' } |
+            Select-Object -First 1
+          if (-not $sdlDll) {
+            $sdlDll = Get-ChildItem -Path $sdlRoot -Recurse -Filter "SDL3.dll" -File | Select-Object -First 1
+          }
+          if (-not $sdlDll) { throw "SDL3.dll not found inside extracted archive" }
           "SDL3_DIR=$sdlRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "SIMS_SDL3_PATH=$($sdlDll.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Compile HLSL shaders to signed DXIL
+        shell: pwsh
+        run: |
+          $dxc = (Get-Command dxc.exe -ErrorAction SilentlyContinue)?.Source
+          if (-not $dxc) {
+            $kits = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\bin"
+            $dxc = Get-ChildItem -Path $kits -Filter "dxc.exe" -Recurse -File |
+              Where-Object { $_.FullName -match '\\x64\\dxc\.exe$' } |
+              Sort-Object FullName -Descending |
+              Select-Object -First 1 -ExpandProperty FullName
+          }
+          if (-not $dxc) { throw "Could not find dxc.exe in Windows SDK" }
+          Write-Host "Using DXC: $dxc"
+          foreach ($hlsl in Get-ChildItem -Path "native/SimsSDL/Shaders/hlsl" -Filter "*.hlsl" -File) {
+            $stem = $hlsl.Name.Substring(0, $hlsl.Name.Length - 5)
+            $profile = if ($stem.EndsWith(".vert")) { "vs_6_0" } else { "ps_6_0" }
+            $out = Join-Path "native/SimsSDL/Shaders" "$stem.dxil"
+            & $dxc -T $profile -E main -O3 -Fo $out $hlsl.FullName
+            if ($LASTEXITCODE -ne 0) { throw "dxc failed for $($hlsl.Name)" }
+          }
+
+      - name: Upload compiled DXIL shaders
+        uses: actions/upload-artifact@v4
+        with:
+          name: Compiled-DXIL-Shaders
+          path: native/SimsSDL/Shaders/*.dxil
+          if-no-files-found: error
 
       - name: Determine release version
         shell: pwsh
@@ -239,6 +275,7 @@ jobs:
       - name: Download release artifacts
         uses: actions/download-artifact@v4
         with:
+          pattern: The-Sims-Native-*
           merge-multiple: true
 
       - name: Publish GitHub Release

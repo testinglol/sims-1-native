@@ -1967,34 +1967,42 @@ internal static unsafe partial class Program
             : string.Empty;
         string message = $"The Sims Native encountered an unexpected error and had to close.\n\n{ex.GetType().Name}: {ex.Message}{logSection}";
 
+        AppLog.BeginModalWait("Crash report dialog");
         try
-        {
-            if (!string.IsNullOrEmpty(logsDir) && Directory.Exists(logsDir))
-            {
-                if (ShowCrashMessageBoxWithLogsButton(title, message))
-                {
-                    AppLog.RevealLogInFileManager(logPath, logsDir);
-                }
-
-                return;
-            }
-
-            _ = SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, title, message, nint.Zero);
-            return;
-        }
-        catch
-        {
-        }
-
-        if (OperatingSystem.IsWindows())
         {
             try
             {
-                _ = MessageBoxW(nint.Zero, message, title, 0x00000010u);
+                if (!string.IsNullOrEmpty(logsDir) && Directory.Exists(logsDir))
+                {
+                    if (ShowCrashMessageBoxWithLogsButton(title, message))
+                    {
+                        AppLog.RevealLogInFileManager(logPath, logsDir);
+                    }
+
+                    return;
+                }
+
+                _ = SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, title, message, nint.Zero);
+                return;
             }
             catch
             {
             }
+
+            if (OperatingSystem.IsWindows())
+            {
+                try
+                {
+                    _ = MessageBoxW(nint.Zero, message, title, 0x00000010u);
+                }
+                catch
+                {
+                }
+            }
+        }
+        finally
+        {
+            AppLog.EndModalWait();
         }
     }
 
@@ -2003,7 +2011,7 @@ internal static unsafe partial class Program
         nint titlePtr = Marshal.StringToCoTaskMemUTF8(title);
         nint messagePtr = Marshal.StringToCoTaskMemUTF8(message);
         nint closePtr = Marshal.StringToCoTaskMemUTF8("Close");
-        nint openLogsPtr = Marshal.StringToCoTaskMemUTF8("Open Logs Folder");
+        nint openLogsPtr = Marshal.StringToCoTaskMemUTF8("Open Logs");
         try
         {
             var buttons = new SDL_MessageBoxButtonData[2];

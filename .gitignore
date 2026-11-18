@@ -96,6 +96,7 @@ __pycache__/
 !/native/SimsSimulation/WorldBootstrap.cs
 /tools/*
 !/tools/build_native_app.command
+!/tools/build_sdl_hlsl_shaders.py
 !/tools/build_sdl_msl_shaders.py
 !/tools/build_sdl_shaders.sh
 !/tools/package_linux.sh

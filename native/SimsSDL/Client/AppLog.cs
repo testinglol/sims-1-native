@@ -689,7 +689,7 @@ internal static class AppLog
                 {
                     _stageWarnLevel = nextLevel;
                     stageAlert = FormattableString.Invariant(
-                        $"[WATCHDOG] STALL DETECTED: stage '{_currentStage}' still in progress after {stageSec:0.1}s (framesRendered={frames}, mainThreadIdle={frameIdleSec:0.1}s)");
+                        $"[WATCHDOG] STALL DETECTED: stage '{_currentStage}' still in progress after {stageSec:0.0}s (framesRendered={frames}, mainThreadIdle={frameIdleSec:0.0}s)");
                 }
             }
 
@@ -704,7 +704,7 @@ internal static class AppLog
                 {
                     Interlocked.Exchange(ref _frameWarnLevel, nextFrameLevel);
                     frameAlert = FormattableString.Invariant(
-                        $"[WATCHDOG] MAIN THREAD UNRESPONSIVE: no rendered frame for {frameIdleSec:0.1}s (stage='{_currentStage}', framesRendered={frames})");
+                        $"[WATCHDOG] MAIN THREAD UNRESPONSIVE: no rendered frame for {frameIdleSec:0.0}s (stage='{_currentStage}', framesRendered={frames})");
                 }
             }
         }

@@ -4,6 +4,8 @@ layout(set = 2, binding = 1) uniform sampler2D depthMap;
 layout(location = 0) in vec2 inUV;
 layout(location = 1) flat in vec4 inTint;
 layout(location = 2) flat in vec4 inDepthInterval;
+layout(location = 3) flat in float inOpacity;
+layout(location = 4) flat in vec4 inUVRect;
 layout(location = 0) out vec4 color;
 void main() {
     ivec2 dims = textureSize(lotColor, 0);
