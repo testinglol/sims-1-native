@@ -78,20 +78,70 @@ internal static class ProfileBootstrap
             }
             finally
             {
-                if (Directory.Exists(staging)) Directory.Delete(staging, true);
+                DeleteDirectorySafely(staging);
             }
         }
         return imported;
     }
 
-    private static void CopyProfileFile(string source, string destination)
+    private static void CopyProfileFile(string source, string destination, bool overwrite = false)
     {
-        if (OperatingSystem.IsMacOS() &&
+        if (!overwrite &&
+            OperatingSystem.IsMacOS() &&
             NativeCopyFile(source, destination, IntPtr.Zero, CopyFileData | CopyFileClone) == 0)
+        {
+            ClearReadOnlyAttribute(destination);
+            return;
+        }
+
+        if (File.Exists(destination))
+        {
+            ClearReadOnlyAttribute(destination);
+            if (!overwrite)
+                File.Delete(destination);
+        }
+
+        File.Copy(source, destination, overwrite);
+        ClearReadOnlyAttribute(destination);
+    }
+
+    private static void ClearReadOnlyAttribute(string path)
+    {
+        try
+        {
+            var attrs = File.GetAttributes(path);
+            if ((attrs & FileAttributes.ReadOnly) != 0)
+            {
+                var cleared = attrs & ~FileAttributes.ReadOnly;
+                File.SetAttributes(path, cleared == 0 ? FileAttributes.Normal : cleared);
+            }
+        }
+        catch
+        {
+        }
+    }
+
+    private static void DeleteDirectorySafely(string directory)
+    {
+        if (!Directory.Exists(directory))
             return;
 
-        if (File.Exists(destination)) File.Delete(destination);
-        File.Copy(source, destination, false);
+        try
+        {
+            Directory.Delete(directory, true);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            try
+            {
+                foreach (var file in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories))
+                    ClearReadOnlyAttribute(file);
+                Directory.Delete(directory, true);
+            }
+            catch
+            {
+            }
+        }
     }
 
     private static IEnumerable<string> EnumerateNeighborhoodFiles(string source)
@@ -182,7 +232,7 @@ internal static class ProfileBootstrap
                     if (!target.StartsWith(stagingUserData + Path.DirectorySeparatorChar, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
                         throw new InvalidDataException("An imported path escapes the profile.");
                     Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-                    File.Copy(file, target, false);
+                    CopyProfileFile(file, target);
                 }
                 MergeNeighborhoodTemplates(game, stagingUserData);
             }
@@ -200,7 +250,7 @@ internal static class ProfileBootstrap
         }
         finally
         {
-            if (Directory.Exists(staging)) Directory.Delete(staging, true);
+            DeleteDirectorySafely(staging);
         }
     }
 
@@ -271,7 +321,7 @@ internal static class ProfileBootstrap
             {
                 var filename = Path.GetFileName(file);
                 var target = Path.Combine(userData, NeighborhoodFiles.Contains(filename) ? "" : "Houses", filename);
-                if (!File.Exists(target)) File.Copy(file, target, false);
+                if (!File.Exists(target)) CopyProfileFile(file, target);
                 else if (filename.Equals("LotLocations.iff", StringComparison.OrdinalIgnoreCase)) MergeMissingStringChunks(target, file);
             }
         }
@@ -299,7 +349,7 @@ internal static class ProfileBootstrap
                 if (family == null || House(family) <= 0 || occupied.Contains(House(family))) continue;
                 Directory.CreateDirectory(import);
                 var target = Path.Combine(import, Path.GetFileName(file));
-                if (!File.Exists(target)) File.Copy(file, target, false);
+                if (!File.Exists(target)) CopyProfileFile(file, target);
             }
             catch (Exception error) when (error is InvalidDataException or IOException or EndOfStreamException or ArgumentException)
             {
@@ -498,6 +548,7 @@ internal static class ProfileBootstrap
                 foreach (var chunk in additions) output.Write(chunk.Bytes);
                 output.Flush(true);
             }
+            if (File.Exists(destination)) ClearReadOnlyAttribute(destination);
             File.Move(temporary, destination, true);
         }
         finally
@@ -516,11 +567,11 @@ internal static class ProfileBootstrap
             foreach (var file in Directory.EnumerateFiles(templateDir, "House*.iff", new EnumerationOptions { MatchCasing = MatchCasing.CaseInsensitive }))
             {
                 var houseDest = Path.Combine(userData, "Houses", Path.GetFileName(file));
-                if (!File.Exists(houseDest)) File.Copy(file, houseDest, false);
+                if (!File.Exists(houseDest)) CopyProfileFile(file, houseDest);
             }
             var source = Path.Combine(templateDir, "LotLocations.iff");
             if (!File.Exists(source)) continue;
-            if (!File.Exists(destination)) File.Copy(source, destination, false);
+            if (!File.Exists(destination)) CopyProfileFile(source, destination);
             else MergeMissingStringChunks(destination, source);
         }
         UseLongestStreetNames(gameDirectory, userData);
@@ -545,7 +596,7 @@ internal static class ProfileBootstrap
             var length = LotTableLength(source);
             if (length > currentLength) { best = source; currentLength = length; }
         }
-        if (best != null) File.Copy(best, destination, true);
+        if (best != null) CopyProfileFile(best, destination, overwrite: true);
     }
 
     private static void UseLongestLotZoning(string gameDirectory, string userData)
@@ -565,7 +616,7 @@ internal static class ProfileBootstrap
             var length = ZoningTableLength(source);
             if (length > currentLength) { best = source; currentLength = length; }
         }
-        if (best != null && currentLength == 0) File.Copy(best, destination, true);
+        if (best != null && currentLength == 0) CopyProfileFile(best, destination, overwrite: true);
     }
 
     private static void UpgradeBaseNeighborhoodLayout(string gameDirectory, string userData)
@@ -614,6 +665,7 @@ internal static class ProfileBootstrap
                 if (!replaced) throw new InvalidDataException("Neighborhood resource has no base lot layout to update");
                 output.Flush(true);
             }
+            if (File.Exists(destination)) ClearReadOnlyAttribute(destination);
             File.Move(temporary, destination, true);
         }
         finally

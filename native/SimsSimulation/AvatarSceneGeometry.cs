@@ -32,6 +32,9 @@ internal sealed class AvatarSceneGeometry
     private sealed record SkateSkeletonFrames(string Age, Dictionary<string, SkateSideFrame> Frames);
     private sealed record SkateAttachmentFrames(int SchemaVersion, string CoordinateSystem,
         Dictionary<string, SkateSkeletonFrames> Skeletons);
+    private sealed record HandPropEntry(string Stem, string Bone, float[] AdultMatrix, float[] ChildMatrix);
+    private sealed record HandPropManifest(int SchemaVersion, Dictionary<string, HandPropEntry> Props);
+    private sealed record HandPropBinding(string Stem, string Bone, Matrix4x4 AdultMatrix, Matrix4x4 ChildMatrix);
 
     private sealed class SkeletonInfo
     {
@@ -183,6 +186,7 @@ internal sealed class AvatarSceneGeometry
     private readonly Dictionary<(IffFile File, ushort ChunkId), IReadOnlyList<string>> bodyStringsCache = [];
     private readonly Dictionary<string, SkateMesh> skateMeshes = new(StringComparer.OrdinalIgnoreCase);
     private SkateAttachmentFrames? skateAttachmentFrames;
+    private Dictionary<uint, HandPropBinding>? handPropBindings;
     private readonly Dictionary<string, AnimationSource?> animations = new(StringComparer.OrdinalIgnoreCase);
     private readonly AvatarAnimations.SharedCharacterIndex sharedIndex;
     private CharacterSearchPath? animationPath;
@@ -240,10 +244,13 @@ internal sealed class AvatarSceneGeometry
         (int A, int B, int C)[] Faces, byte[] Texture, Vector3? HeadPivot = null, float HeadHeight = 0f,
         Vector3? HeadOrigin = null, float HeadScale = 1f);
 
+    internal bool HasHandPropMesh(uint guid) => ReadHandPropBindings().ContainsKey(guid);
+
     internal IReadOnlyList<Part> Build(XPerson person, int level, int cameraOrientation,
         Func<float, float, float> elevation, LotCamera camera, List<PosedHeadMesh>? headMeshes = null,
         Vector3? attachmentRoot = null, float? inheritedRootDirection = null, int headIndicatorKind = 0,
-        float subTickAlpha = 0f, long updates = 0, ISimulationCareerHost? careerHost = null)
+        float subTickAlpha = 0f, long updates = 0, ISimulationCareerHost? careerHost = null,
+        IReadOnlyList<uint>? heldPropGuids = null)
     {
         var character = person.PresentationCharacter ?? person.SavedCharacter;
         if (character is null)
@@ -699,6 +706,8 @@ internal sealed class AvatarSceneGeometry
         }
         if (hasSkates)
             AddSkateParts(person, parts, skateFootPositions!, tileX, tileY, altitude, camera);
+        if (headMeshes is null && heldPropGuids is { Count: > 0 })
+            AddHandPropParts(person, heldPropGuids, skeletonInfo, boneMatrices, facingMatrix, rootTransform, camera, parts);
         if (headMeshes is null && headIndicatorKind is 1 or 2 or 3 && head is not null)
             AddHeadIndicatorPart(person, headIndicatorKind, head, facingMatrix, rootTransform, camera, parts, subTickAlpha);
         return parts;
@@ -899,6 +908,31 @@ internal sealed class AvatarSceneGeometry
             if (idEnd < 0) idEnd = candidate.Length;
             var prefix = candidate[..idEnd] + skin;
             var texture = texturesByPrefix.FirstOrDefault(item => item.StartsWith(prefix, StringComparison.Ordinal));
+            if (texture is not null) return $"{candidate},BODY={texture}";
+        }
+        return null;
+    }
+
+    internal string? ResolveWinterSuit(XPerson person)
+    {
+        var values = ReadBodyStrings(person);
+        if (ResolveCategorySuit(values, 33, 'w') is { Length: > 0 } resolved) return resolved;
+        var child = PersonAgeCategory.IsChild(person[PersonData.PersonAge]);
+        var female = person[PersonData.Gender] != 0;
+        var prefix = child ? (female ? "fc" : "mc") : (female ? "fa" : "ma");
+        var skin = values is { Count: > 14 } ? values[14].Split(';')[0].Trim().ToLowerInvariant() : "lgt";
+        if (skin.Length == 0) skin = "lgt";
+        var texturesByPrefix = textures.Files.Select(file => Path.GetFileNameWithoutExtension(file.Name).ToLowerInvariant()).ToArray();
+        foreach (var name in appearances.Keys)
+        {
+            var candidate = name.ToLowerInvariant();
+            if (candidate.Length < 6 || candidate[0] != 'w' ||
+                !char.IsDigit(candidate[1]) || !char.IsDigit(candidate[2]) || !char.IsDigit(candidate[3])) continue;
+            if (!candidate[4..].StartsWith(prefix, StringComparison.Ordinal)) continue;
+            var idEnd = candidate.IndexOf('_');
+            var baseId = idEnd < 0 ? candidate : candidate[..idEnd];
+            var texture = texturesByPrefix.FirstOrDefault(item => item.StartsWith(baseId + skin, StringComparison.Ordinal))
+                ?? texturesByPrefix.FirstOrDefault(item => item.StartsWith(baseId, StringComparison.Ordinal));
             if (texture is not null) return $"{candidate},BODY={texture}";
         }
         return null;
@@ -2066,6 +2100,91 @@ internal sealed class AvatarSceneGeometry
         }
         skateAttachmentFrames = metadata;
         return metadata;
+    }
+
+    private IReadOnlyDictionary<uint, HandPropBinding> ReadHandPropBindings()
+    {
+        if (handPropBindings is not null) return handPropBindings;
+        var file = skins.Find("hand-prop-attachments.txt");
+        if (file is null)
+        {
+            handPropBindings = [];
+            return handPropBindings;
+        }
+        var manifest = JsonSerializer.Deserialize<HandPropManifest>(file.Read().Span,
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+            ?? throw new InvalidDataException("Hand prop attachment metadata is empty");
+        if (manifest.SchemaVersion != 1 || manifest.Props is null)
+            throw new InvalidDataException("Hand prop attachment metadata has an unsupported schema");
+
+        static Matrix4x4 ParseMatrix(float[] values, string key, string label)
+        {
+            if (values is null || values.Length != 12 || values.Any(v => !float.IsFinite(v)))
+                throw new InvalidDataException($"Hand prop {key} has invalid {label} transform");
+            return new Matrix4x4(
+                values[0], values[1], values[2], 0f,
+                values[3], values[4], values[5], 0f,
+                values[6], values[7], values[8], 0f,
+                values[9], values[10], values[11], 1f);
+        }
+
+        var parsed = new Dictionary<uint, HandPropBinding>(manifest.Props.Count);
+        foreach (var (rawKey, entry) in manifest.Props)
+        {
+            var hex = rawKey.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? rawKey[2..] : rawKey;
+            if (!uint.TryParse(hex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var guid))
+                throw new InvalidDataException($"Hand prop metadata key '{rawKey}' is not a valid hex GUID");
+            if (entry is null || string.IsNullOrWhiteSpace(entry.Stem) || string.IsNullOrWhiteSpace(entry.Bone))
+                throw new InvalidDataException($"Hand prop {rawKey} is missing a mesh stem or target bone");
+            var bone = entry.Bone.Equals("R_HAND", StringComparison.OrdinalIgnoreCase)
+                ? "R_HAND"
+                : entry.Bone.Equals("L_HAND", StringComparison.OrdinalIgnoreCase)
+                    ? "L_HAND"
+                    : throw new InvalidDataException($"Hand prop {rawKey} names unsupported bone '{entry.Bone}'");
+            parsed[guid] = new HandPropBinding(
+                entry.Stem.Trim(),
+                bone,
+                ParseMatrix(entry.AdultMatrix, rawKey, "adultMatrix"),
+                ParseMatrix(entry.ChildMatrix, rawKey, "childMatrix"));
+        }
+        handPropBindings = parsed;
+        return handPropBindings;
+    }
+
+    /// <summary>Transforms 3D hand prop meshes into lot coordinates directly from the Sim's live
+    /// animated hand bone matrix.</summary>
+    private void AddHandPropParts(XPerson person, IReadOnlyList<uint> heldPropGuids, SkeletonInfo skeletonInfo,
+        Matrix4x4[] boneMatrices, Matrix4x4 facingMatrix, Matrix4x4 rootTransform, LotCamera camera, List<Part> parts)
+    {
+        var bindings = ReadHandPropBindings();
+        if (bindings.Count == 0) return;
+        var isChild = PersonAgeCategory.IsChild(person[PersonData.PersonAge]);
+        for (var p = 0; p < heldPropGuids.Count; p++)
+        {
+            if (!bindings.TryGetValue(heldPropGuids[p], out var binding)) continue;
+            if (!skeletonInfo.IndexByNameIgnoreCase.TryGetValue(binding.Bone, out var handBoneIndex)) continue;
+            var mesh = ReadSkateMesh(binding.Stem);
+            var localMatrix = isChild ? binding.ChildMatrix : binding.AdultMatrix;
+            var combined = localMatrix * boneMatrices[handBoneIndex];
+            var vertices = new Vertex[mesh.Corners.Length];
+            for (var index = 0; index < mesh.Corners.Length; index++)
+            {
+                var corner = mesh.Corners[index];
+                var pos = Vector3.Transform(mesh.Positions[corner.Position], combined);
+                var norm = Vector3.TransformNormal(mesh.Normals[corner.Normal], combined);
+                if (norm.LengthSquared() > 1e-12f) norm = Vector3.Normalize(norm);
+                norm = Vector3.TransformNormal(norm, facingMatrix);
+                var camNorm = camera.CameraNormal(new Microsoft.Xna.Framework.Vector3(norm.Z, norm.Y, norm.X));
+                if (camNorm.LengthSquared() > 0f) camNorm.Normalize();
+                var rootPos = Vector3.Transform(pos, rootTransform);
+                var lotPos = AvatarCoordinates.ToLot(rootPos);
+                var point = camera.Project(lotPos.X, lotPos.Y, rootPos.Y * 40f);
+                var depth = camera.Depth(lotPos.X, lotPos.Y, rootPos.Y);
+                var rawUv = mesh.UVs[corner.UV];
+                vertices[index] = new Vertex(point.X, point.Y, depth, rawUv.X, 1f - rawUv.Y, camNorm.X, camNorm.Y, camNorm.Z);
+            }
+            parts.Add(new Part(mesh.Texture.Bytes, mesh.Texture.Sha1Hex, mesh.Texture.Encoding, mesh.Texture.Width, mesh.Texture.Height, vertices));
+        }
     }
 
     private SkateMesh ReadSkateMesh(string stem)

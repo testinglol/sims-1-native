@@ -953,7 +953,10 @@ public sealed record LotScene
             TerrainVertices = terrainVertices,
             Meshes = meshes,
             CensorRects = ToCensorRects(payload.CensorRects),
-            Limitations = payload.Limitations
+            Limitations = payload.Limitations,
+            OverheadMap = payload.OverheadMap is { } om
+                ? new OverheadMapData(om.Width, om.Height, om.SamplesPerTile, om.Pixels)
+                : null
         };
     }
 
@@ -1221,9 +1224,9 @@ public sealed record LotScene
 
         if (OverheadMap is { } map)
         {
-            if (map.SamplesPerTile != 4
+            if (map.SamplesPerTile is not (4 or 8)
                 || LotWidth is not int mw || LotHeight is not int mh
-                || map.Width != mw * 4 || map.Height != mh * 4
+                || map.Width != mw * map.SamplesPerTile || map.Height != mh * map.SamplesPerTile
                 || map.Width <= 0 || map.Height <= 0 || map.Width > 2048 || map.Height > 2048
                 || map.Pixels is null || map.Pixels.Length != map.Width * map.Height * 4)
             {
@@ -1373,7 +1376,7 @@ public sealed record LotScene
                 throw new ContentError("Sprite exceeds visible story");
 
             bool withinBounds = allowSpriteOverhang
-                ? sprite.X >= -4096 && sprite.Y >= -4096 && sprite.X + sprite.Width <= Width + 4096 && sprite.Y + sprite.Height <= Height + 4096
+                ? sprite.X >= -8192 && sprite.Y >= -8192 && sprite.X + sprite.Width <= Width + 8192 && sprite.Y + sprite.Height <= Height + 8192
                 : sprite.X >= 0 && sprite.Y >= 0 && sprite.X + sprite.Width <= Width + 1 && sprite.Y + sprite.Height <= Height + 1;
 
             if (!ValidTextureIndex(sprite.Texture)

@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 210 110">
+  <path data-role="shadow" fill="#001838" fill-rule="evenodd" d="M 40.00 101.00 L 200.00 101.00 L 200.00 21.00 L 40.00 21.00 Z"/>
+  <path data-role="moat" fill="#004090" fill-rule="evenodd" d="M 30.00 90.00 L 190.00 90.00 L 190.00 10.00 L 30.00 10.00 Z"/>
+  <path data-role="fg" fill="#D0DCE6" fill-rule="evenodd" d="M 30.00 90.00 L 190.00 90.00 L 190.00 10.00 L 30.00 10.00 Z M 93.15 16.80 L 125.15 16.80 L 125.15 85.29 L 93.15 85.29 Z M 43.51 27.92 L 69.18 27.92 L 69.18 71.02 L 43.51 71.02 Z M 151.31 28.02 L 176.95 28.02 L 176.95 70.99 L 151.31 70.99 Z"/>
+</svg>

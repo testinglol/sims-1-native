@@ -206,4 +206,107 @@ public class AccessoryAttachmentTransformTests
         Assert.Equal(3, person[PersonData.CurrentOutfit]);
         Assert.Equal(0, person[PersonData.CostumeTrunkOffsetHouseParty]);
     }
+
+    [Fact]
+    public void AvatarSceneGeometry_HandPropAttachment_RendersInWorldAndSkipsPortrait()
+    {
+        var tempGameDir = Path.Combine(Path.GetTempPath(), $"sims-handprop-{Guid.NewGuid():N}");
+        var skinsDir = Path.Combine(tempGameDir, "GameData", "Skins");
+        Directory.CreateDirectory(skinsDir);
+        try
+        {
+            var skeleton = new Skeleton("adult",
+            [
+                new Bone("ROOT", "NULL", [], new Vector3(0f, 3f, 0f), Quaternion.Identity, [0, 0, 0], [0f, 0f]),
+                new Bone("R_HAND", "ROOT", [], new Vector3(0.5f, 0f, 0f), Quaternion.Identity, [0, 0, 0], [0f, 0f]),
+            ]);
+            var appearance = new Appearance("b001mafit_test", [0, 0],
+            [
+                new Binding("R_HAND", "xskin-b001mafit_test", [0, 0]),
+            ]);
+            using (var cmxStream = File.Create(Path.Combine(skinsDir, "test-handprop.cmx")))
+                AnimationAuthor.WriteCharacterContainer(cmxStream, [skeleton], [appearance], [], cmx: true);
+
+            var bodyMesh = new Mesh(
+                "xskin-b001mafit_test",
+                "b001mafit_test",
+                ["R_HAND"],
+                [new MeshFace(0, 1, 2)],
+                [new MeshBinding(0, 0, 3, -1, 0)],
+                [new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(0f, 1f)],
+                [],
+                [
+                    new MeshVertex(new Vector3(0f, 0f, 0f), Vector3.UnitY),
+                    new MeshVertex(new Vector3(0.1f, 0f, 0f), Vector3.UnitY),
+                    new MeshVertex(new Vector3(0f, 0.1f, 0f), Vector3.UnitY),
+                ]);
+            File.WriteAllBytes(Path.Combine(skinsDir, "xskin-b001mafit_test.skn"), OutfitMesh.Write(bodyMesh));
+            File.WriteAllBytes(Path.Combine(skinsDir, "b001mafit_test.bmp"), OutfitAuthor.WriteBitmap(4, 4, new byte[4 * 4 * 4]));
+
+            byte[] pngBytes =
+            [
+                0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+                0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+                0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x04,
+                0x08, 0x06, 0x00, 0x00, 0x00, 0xA9, 0xF1, 0x9E,
+                0x7E, 0x00, 0x00, 0x00, 0x15, 0x49, 0x44, 0x41,
+                0x54, 0x78, 0x9C, 0x63, 0x34, 0x28, 0x8A, 0xF9,
+                0xCF, 0x80, 0x04, 0x98, 0x90, 0x39, 0xC4, 0x09,
+                0x00, 0x00, 0x82, 0x64, 0x02, 0x05, 0xB8, 0x9D,
+                0xBD, 0xCA, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45,
+                0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+            ];
+            File.WriteAllBytes(Path.Combine(skinsDir, "seasons-handprop-watering-can.png"), pngBytes);
+            File.WriteAllText(Path.Combine(skinsDir, "seasons-handprop-watering-can.mtl"),
+                "newmtl mat\nKd 1 1 1\nmap_Kd seasons-handprop-watering-can.png\n");
+            File.WriteAllText(Path.Combine(skinsDir, "seasons-handprop-watering-can.obj"),
+                "mtllib seasons-handprop-watering-can.mtl\n" +
+                "v 0 0 0\nv 0.2 0 0\nv 0 0.2 0\n" +
+                "vt 0.25 0.1\nvt 0.75 0.1\nvt 0.25 0.6\n" +
+                "vn 0 1 0\n" +
+                "f 1/1/1 2/2/1 3/3/1\n");
+            File.WriteAllText(Path.Combine(skinsDir, "hand-prop-attachments.txt"),
+                """
+                {
+                  "schemaVersion": 1,
+                  "props": {
+                    "0xE5200021": {
+                      "stem": "seasons-handprop-watering-can",
+                      "bone": "R_HAND",
+                      "adultMatrix": [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0],
+                      "childMatrix": [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0]
+                    }
+                  }
+                }
+                """);
+
+            var geometry = AvatarSceneGeometry.For(tempGameDir, new ObjectRegistry());
+            Assert.True(geometry.HasHandPropMesh(0xE5200021u));
+            Assert.False(geometry.HasHandPropMesh(0xDEADBEEFu));
+
+            var person = new XPerson(1, PrimitiveTestWorld.Definition(XPerson.PersonType))
+            {
+                SavedCharacter = new PersonCharacter(0, 0,
+                    [("b001mafit_test", "b001mafit_test"), ("NONE", ""), ("NONE", ""), ("NONE", ""), ("NONE", "")],
+                    [], [], null, []),
+                Position = new ObjectPosition(0x20, 0x20, 1),
+            };
+            var camera = new LotCamera(0, 64, 64);
+
+            var worldParts = geometry.Build(person, 1, 0, (_, _) => 0f, camera, heldPropGuids: [0xE5200021u]);
+            Assert.Equal(2, worldParts.Count);
+            Assert.Equal("png", worldParts[1].Encoding);
+            Assert.Equal(0.25f, worldParts[1].Vertices[0].U, 0.001f);
+            Assert.Equal(0.9f, worldParts[1].Vertices[0].V, 0.001f);
+
+            var headMeshes = new List<AvatarSceneGeometry.PosedHeadMesh>();
+            var portraitParts = geometry.Build(person, 1, 0, (_, _) => 0f, camera, headMeshes: headMeshes, heldPropGuids: [0xE5200021u]);
+            Assert.Single(portraitParts);
+        }
+        finally
+        {
+            if (Directory.Exists(tempGameDir))
+                Directory.Delete(tempGameDir, recursive: true);
+        }
+    }
 }

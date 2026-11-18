@@ -1,11 +1,20 @@
 using SimsEngine.Content;
+using SimsEngine.Formats;
 using SimsEngine.Simulation;
 using SimsNative.Plugins;
 
 namespace SimsSimulation;
 
-internal sealed class PluginWorld(Func<SimulationWorld?> world, Func<short> house, Func<ushort?> family,
-    Func<ObjectRegistry?> registry, Func<bool> paused) : IPluginSimulation, PluginHost.IPluginWorld
+internal sealed class PluginWorld(
+    Func<SimulationWorld?> world,
+    Func<short> house,
+    Func<ushort?> family,
+    Func<ObjectRegistry?> registry,
+    Func<bool> paused,
+    Func<IffFile?>? lot = null,
+    Func<int>? lotSize = null,
+    Func<XPerson, bool>? wearingOutdoorSuit = null,
+    Action<short, int?>? setSuitOverride = null) : IPluginSimulation, PluginHost.IPluginWorld
 {
     private static readonly HashSet<int> ChangeableMotives = [5, 6, 7, 8, 9, 14, 15];
     private Func<short, PluginObject, PluginInteraction, bool> interactionAllowed = (_, _, _) => true;
@@ -37,7 +46,10 @@ internal sealed class PluginWorld(Func<SimulationWorld?> world, Func<short> hous
 
     public IReadOnlyList<PluginSim> HouseholdSims => Household()
         .Select(person => new PluginSim(person.Id, person[PersonData.NeighborId], Name(person), PersonAgeCategory.IsChild(person[PersonData.PersonAge]))
-            { Animation = person.AnimationPlayback?.Clip.Name })
+        {
+            Animation = person.AnimationPlayback?.Clip.Name,
+            WearingOutdoorSuit = wearingOutdoorSuit?.Invoke(person) ?? false,
+        })
         .ToArray();
 
     public IReadOnlyList<string> GetQueuedActions(short simId)
@@ -69,10 +81,17 @@ internal sealed class PluginWorld(Func<SimulationWorld?> world, Func<short> hous
 
     private bool Outside(XObject item) => World.RoomIsOutside(World.RoomAtTile(item.Position.X >> 4, item.Position.Y >> 4, item.Position.Height));
 
+    private bool Sheltered(XObject item) =>
+        lot?.Invoke() is { } currentLot && world() is { } currentWorld &&
+        SceneExporter.IsShelteredAt(currentLot, currentWorld, lotSize?.Invoke() ?? 64, item.Position);
+
     internal PluginObject Describe(XObject item) => new(item.Id,
         unchecked((uint)(item.TypeRecord?.Key ?? 0)), item is XPerson person ? Name(person) : item.TypeRecord?.Name ?? "",
         item.Position.X >> 4, item.Position.Y >> 4, item.Position.Height, item.MultiTileMasterId != 0 ? item.MultiTileMasterId : item.Id)
-        { Outside = Outside(item) };
+        {
+            Outside = Outside(item),
+            Sheltered = Sheltered(item),
+        };
 
     public IReadOnlyList<PluginObject> Objects => World.Objects.Values.Select(Describe).ToArray();
 
@@ -119,11 +138,18 @@ internal sealed class PluginWorld(Func<SimulationWorld?> world, Func<short> hous
 
     public PluginEnvironmentClock Clock(int house, int mapMode)
     {
-        if (world() is not { } lot) return new PluginEnvironmentClock(house, mapMode, 0, 0, 720, []);
+        if (world() is not { } currentWorld) return new PluginEnvironmentClock(house, mapMode, 0, 0, 720, []);
+        var currentLot = lot?.Invoke();
+        var size = lotSize?.Invoke() ?? 64;
         var actors = Persons().Select(person => new PluginActor(person.Id, person.Position.X / 16f, person.Position.Y / 16f,
-            person.Position.Height, false, PersonAgeCategory.IsChild(person[PersonData.PersonAge]), false) { Outside = Outside(person) }).ToArray();
-        return new PluginEnvironmentClock(house, mapMode, lot.CurrentDate?.Month ?? 0, lot.CurrentDate?.Day ?? 0,
-            lot.Clock.Hour * 60 + lot.Clock.Minute, actors);
+            person.Position.Height, false, PersonAgeCategory.IsChild(person[PersonData.PersonAge]), false)
+        {
+            Outside = Outside(person),
+            Sheltered = currentLot is not null && SceneExporter.IsShelteredAt(currentLot, currentWorld, size, person.Position),
+            WearingOutdoorSuit = wearingOutdoorSuit?.Invoke(person) ?? false,
+        }).ToArray();
+        return new PluginEnvironmentClock(house, mapMode, currentWorld.CurrentDate?.Month ?? 0, currentWorld.CurrentDate?.Day ?? 0,
+            currentWorld.Clock.Hour * 60 + currentWorld.Clock.Minute, actors);
     }
 
     private XObject OwnedObject(string packId, short objectId, int? index)
@@ -135,6 +161,97 @@ internal sealed class PluginWorld(Func<SimulationWorld?> world, Func<short> hous
         if (index is { } attribute && attribute >= item.Attributes.Length) throw new ArgumentOutOfRangeException(nameof(index));
         return item;
     }
+
+    public short? TryPlaceOwnedObject(string packId, uint guid, int tileX, int tileY, int level, short direction, short? clearForSimId)
+    {
+        if (world() is not { } currentWorld || level < 1) return null;
+        var source = registry()?.Find(guid)?.Source;
+        if (source is null || !source.Replace('\\', '/').Contains("/Downloads/" + packId + "/", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Only this pack's own objects may be placed");
+        using var savedTypes = currentWorld.BeginSavedObjectTypeRegistrationScope();
+        var group = currentWorld.ObjectGroupFactory?.Invoke(unchecked((int)guid));
+        if (group is { Count: 0 }) return null;
+        XObject root;
+        if (group is { Count: > 0 })
+        {
+            root = group[0];
+        }
+        else
+        {
+            if (currentWorld.ObjectFactory?.Invoke(unchecked((int)guid)) is not { } single) return null;
+            currentWorld.Add(single);
+            currentWorld.InitializeCreatedObject(single);
+            group = [single];
+            root = single;
+        }
+        var actor = clearForSimId is { } simId ? currentWorld.ObjectById(simId) as XPerson : null;
+        var maxCoord = (lotSize?.Invoke() ?? 64) - 2;
+        var placed = false;
+        try
+        {
+            var baseFacing = (short)(direction & 6);
+            var facings = actor is not null
+                ? new short[] { 0, 2, 4, 6 }.OrderBy(d =>
+                {
+                    var spotPxX = tileX * 16 + 8;
+                    var spotPxY = tileY * 16 + 8;
+                    var (fx, fy) = d switch { 0 => (0, -1), 2 => (1, 0), 4 => (0, 1), _ => (-1, 0) };
+                    return -((fx * (actor.Position.X - spotPxX)) + (fy * (actor.Position.Y - spotPxY)));
+                }).ToArray()
+                : [baseFacing, (short)((baseFacing + 2) & 6), (short)((baseFacing + 4) & 6), (short)((baseFacing + 6) & 6)];
+
+            for (var radius = 0; radius <= 3 && !placed; radius++)
+            for (var dy = -radius; dy <= radius && !placed; dy++)
+            for (var dx = -radius; dx <= radius && !placed; dx++)
+            {
+                if (Math.Max(Math.Abs(dx), Math.Abs(dy)) != radius) continue;
+                var cx = tileX + dx;
+                var cy = tileY + dy;
+                if (cx < 1 || cy < 1 || cx > maxCoord || cy > maxCoord) continue;
+                var spot = new ObjectPosition((short)(cx * 16 + 8), (short)(cy * 16 + 8), (sbyte)level);
+                if (!currentWorld.RoomIsOutside(currentWorld.RoomAtTile(cx, cy, level)) && level == 1)
+                {
+                    // Allow indoor or outdoor placement depending on caller, respecting CanPlaceCreatedObject.
+                }
+                foreach (var facing in facings)
+                {
+                    currentWorld.FaceCreatedObject(root, group, facing);
+                    if (!currentWorld.CanPlaceCreatedObject(root, spot, actor)) continue;
+                    currentWorld.PlaceCreatedObject(root, spot);
+                    placed = true;
+                    break;
+                }
+            }
+            return placed ? root.Id : null;
+        }
+        finally
+        {
+            if (!placed) currentWorld.RemoveCreatedObjectGroup(root);
+        }
+    }
+
+    public bool TryRemoveOwnedObject(string packId, short objectId)
+    {
+        if (world() is not { } currentWorld) return false;
+        if (currentWorld.ObjectById(objectId) is not { } existing) return false;
+        var source = existing.TypeRecord is { } type ? registry()?.Find(unchecked((uint)type.Key))?.Source : null;
+        if (source is null || !source.Replace('\\', '/').Contains("/Downloads/" + packId + "/", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Only this pack's own objects may be removed");
+        if (existing[ObjectData.UseCount] > 0) return false;
+        var root = existing.MultiTileMasterId != 0 ? (currentWorld.ObjectById(existing.MultiTileMasterId) ?? existing) : existing;
+        if (root[ObjectData.UseCount] > 0) return false;
+        var seen = new HashSet<short> { root.Id };
+        for (var nextId = root.MultiTileNextId; nextId != 0 && seen.Add(nextId); )
+        {
+            if (currentWorld.ObjectById(nextId) is not { } part) break;
+            if (part[ObjectData.UseCount] > 0) return false;
+            nextId = part.MultiTileNextId;
+        }
+        currentWorld.RemoveCreatedObjectGroup(root);
+        return true;
+    }
+
+    public void SetSimSuitOverride(short simId, int? suitCategory) => setSuitOverride?.Invoke(simId, suitCategory);
 
     public short GetObjectAttribute(string packId, short objectId, int index) => OwnedObject(packId, objectId, index).Attributes[index];
     public void SetObjectAttribute(string packId, short objectId, int index, short value)

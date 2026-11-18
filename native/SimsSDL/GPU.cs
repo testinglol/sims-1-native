@@ -350,6 +350,7 @@ public sealed class GPUContext : IDisposable
     private int _disposed;
 
     public nint Device => _owner.Handle;
+    public string DriverName => SDL_GetGPUDeviceDriver(Device);
     public int PreferredSampleCount { get; private set; }
     public nint Sampler { get; private set; }
     public nint RoofSampler { get; private set; }
@@ -364,12 +365,19 @@ public sealed class GPUContext : IDisposable
     public nint SpriteDepthPipeline => Pipeline(Program.SpriteDepth, DepthMode.Mesh);
     public nint SpriteDepthEdgePipeline => Pipeline(Program.SpriteDepth, DepthMode.MeshEdge);
 
-    public GPUContext()
+    public GPUContext(string? preferredDriver = null)
     {
-        nint device = SDL_CreateGPUDevice(
-            SDL_GPU_SHADERFORMAT_SPIRV | SDL_GPU_SHADERFORMAT_MSL |
-            (ShaderDirectory is { } shaderDir && File.Exists(Path.Combine(shaderDir, "sprite.vert.dxil")) ? SDL_GPU_SHADERFORMAT_DXIL : 0),
-            false, null);
+        string? driverHint = string.IsNullOrWhiteSpace(preferredDriver)
+            ? Environment.GetEnvironmentVariable("SIMS_GPU_DRIVER")
+            : preferredDriver;
+        if (string.IsNullOrWhiteSpace(driverHint))
+            driverHint = null;
+
+        uint requestedFormats = SDL_GPU_SHADERFORMAT_SPIRV | SDL_GPU_SHADERFORMAT_MSL |
+            (ShaderDirectory is { } shaderDir && File.Exists(Path.Combine(shaderDir, "sprite.vert.dxil")) ? SDL_GPU_SHADERFORMAT_DXIL : 0);
+        AppLog.Info(FormattableString.Invariant(
+            $"Calling SDL_CreateGPUDevice (requestedFormats=0x{requestedFormats:X}, driverHint={driverHint ?? "<auto>"})..."));
+        nint device = SDL_CreateGPUDevice(requestedFormats, false, driverHint);
         if (device == nint.Zero)
             throw new SDLError("SDL_CreateGPUDevice");
 
@@ -425,6 +433,8 @@ public sealed class GPUContext : IDisposable
             throw new SDLError("SDL_CreateGPUSampler");
         return sampler;
     }
+
+    internal static string? ResolvedShaderDirectory => ShaderDirectory;
 
     private static string? ShaderDirectory
     {

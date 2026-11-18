@@ -54,6 +54,7 @@ __pycache__/
 !/native/SimsSimulation/BitmapCodec.cs
 !/native/SimsSimulation/SimCareerCatalog.cs
 !/native/SimsSimulation/SceneDepth.cs
+!/native/SimsSimulation/SeasonalOutfitService.cs
 !/native/SimsSimulation/SimOutfits.cs
 !/native/SimsSimulation/PluginWorld.cs
 !/native/SimsSimulation/EntityTransform.cs

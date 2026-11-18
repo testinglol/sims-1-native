@@ -5,11 +5,12 @@ namespace SimsSDL;
 internal sealed partial class LiveController
 {
     public SimulationBridge? Bridge { get; private set; }
-    public GameContent Content { get; }
+    public GameContent Content { get; private set; }
     public string Workspace { get; }
     public LotRenderer Renderer { get; }
-    public LiveUI Ui { get; }
+    public LiveUI Ui { get; private set; }
     internal Options Options { get; }
+    private string? _safeModeBootError;
     private OriginalUIStrings Strings => Ui.Strings;
     public bool HasBlockingDialog => Ui.GameDialog?.Dialog.Blocking == true && Ui.GameDialog?.Submitting == false;
     private bool _tutorialLiveModeClicked;
@@ -57,6 +58,8 @@ internal sealed partial class LiveController
         public float X { get; set; }
         public float Y { get; set; }
         public int Level { get; set; } = 1;
+        public bool WinterClothes { get; set; }
+        public bool OutfitChanging { get; set; }
     }
 
     private readonly record struct PlacedObjectMeta(
@@ -73,6 +76,7 @@ internal sealed partial class LiveController
     private Dictionary<int, LotSimInfo> _lotSims = new();
     private List<string> _simAnimations = [];
     public bool ScriptSimIdle { get; private set; }
+    public bool? ScriptSimWinterClothes => _lotSims.TryGetValue(_selectedSim, out var sim) && !sim.OutfitChanging ? sim.WinterClothes : null;
     public List<string> ScriptSimActions { get; private set; } = [];
     /// <summary>Buffers simulation state received before the lot scene finishes loading, applying it once
     /// the scene is ready.</summary>
@@ -201,6 +205,7 @@ internal sealed partial class LiveController
     private bool _pipCloseTracking;
     private bool _dialogButtonTracking;
     private bool _chooserOKTracking;
+    private bool _modsOverlayGesture;
     private int? _pendingPipCenterObjectID;
     private bool _pendingPipCenterChangesLevel;
     private long? _lastPictureInPictureSequence;
@@ -438,12 +443,19 @@ internal sealed partial class LiveController
             ?? InstallLocator.ResolveGameDirectory(explicitPath: null, workspace: workspace, dataRoot: dataRoot)
             ?? Path.Combine(workspace, "runtime", "game");
         resolvedOptions.Game = game;
-        Content = PackTool.LoadContent(game, resolvedOptions.Packs);
+        Content = ModManager.LoadStartupContentWithSafeMode(game, workspace, dataRoot, resolvedOptions.Packs, out _safeModeBootError);
+        AppLog.Info(FormattableString.Invariant(
+            $"GameContent loaded (language={Content.Language.Code}, activePacks={Content.Packs.Ordered.Count}, disabledDownloads={Content.DisabledDownloadFolders.Count}, safeMode={_safeModeBootError is not null})."));
+        if (_safeModeBootError is not null)
+        {
+            AppLog.Warn($"Mod Safe Mode triggered on startup: {_safeModeBootError}");
+        }
         Workspace = workspace;
         Options = resolvedOptions;
         Renderer = renderer;
         _currentNeighborhood = resolvedOptions.Neighborhood;
         Ui = new LiveUI(Content);
+        AppLog.Info("LiveUI initialized.");
         if (!options.AnswerDialogs)
         {
             ReviewPluginTrust();
@@ -608,6 +620,7 @@ internal sealed partial class LiveController
         var weakBridge = new WeakReference<SimulationBridge>(bridge);
         try
         {
+            AppLog.SetStage("Daemon: starting warm simulation server");
             await bridge.StartDaemonAsync(Content, nativeEngine: true).ConfigureAwait(false);
             bool active = await RunOnMainThreadAsync(() =>
             {
@@ -631,6 +644,7 @@ internal sealed partial class LiveController
                 return;
             }
 
+            AppLog.SetStage("Daemon: waiting for simulation server hello");
             await WaitForBridgeConnected().ConfigureAwait(false);
             MainThreadDispatcher.Post(() =>
             {
@@ -649,6 +663,7 @@ internal sealed partial class LiveController
         }
         catch (Exception error)
         {
+            AppLog.Error($"Warm simulation daemon startup failed: {error}");
             MainThreadDispatcher.Post(() =>
             {
                 if (!weakSelf.TryGetTarget(out var self) || !weakBridge.TryGetTarget(out var target))
@@ -663,9 +678,8 @@ internal sealed partial class LiveController
 
                 Log($"Simulation daemon: {error}");
                 self._audio?.StopLoadLoop();
-                self.Ui.Loading = false;
                 self._loadingNeighborhood = false;
-                self.ShowNeighborhoodError(error);
+                self.HandleInitialOrNeighborhoodError(error);
             });
         }
     }
@@ -704,8 +718,11 @@ internal sealed partial class LiveController
         });
         bridge.Failed = error => RunOnMainThread(() =>
         {
-            string sessionPath = weakBridge.TryGetTarget(out var targetForLog) ? targetForLog.Session : string.Empty;
-            Log($"{error} (log: {Path.Combine(sessionPath, "simulation.log")})");
+            var targetForLog = weakBridge.TryGetTarget(out var resolvedBridge) ? resolvedBridge : null;
+            string logHint = AppLog.CurrentLogPath is { Length: > 0 } currentLog
+                ? $" (log: {currentLog})"
+                : string.Empty;
+            Log($"{error}{logHint}");
             if (!weakSelf.TryGetTarget(out var self) || targetForLog is null)
             {
                 return;
@@ -1056,6 +1073,9 @@ internal sealed partial class LiveController
         audio.SetEnvironmentAudio(
             Renderer.Environment?.Effect.AudioGain ?? 1f,
             Renderer.Environment?.Effect.AudioCutoff ?? 0f);
+        audio.UpdateAmbientBeds(
+            Renderer.LiveMode && Ui.ShowsLot ? Renderer.Environment : null,
+            paused: _liveModePaused || HasBlockingDialog || !Renderer.LiveMode || !Ui.ShowsLot);
         // Updates positional audio and floor attenuation on camera or scene changes.
         if (Renderer.Pan != _lastAudioPan
             || Renderer.Zoom != _lastAudioZoom

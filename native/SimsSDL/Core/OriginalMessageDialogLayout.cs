@@ -226,13 +226,6 @@ public static class OriginalMessageDialogLayout
         if (lines.Count > 512)
             throw new ContentError("Bitmap font paragraph has too many lines");
 
-        if (sideLineLimit < int.MaxValue &&
-            lines.Count == sideLineLimit + 1 &&
-            font.TextWidth(lines[sideLineLimit].Text) <= clampedSide)
-        {
-            lines[sideLineLimit] = new WrappedLine(lines[sideLineLimit].Text, true);
-        }
-
         return lines;
     }
 
@@ -266,8 +259,10 @@ public static class OriginalMessageDialogLayout
         }
         else
         {
-            int exclusionPixels = (int)Math.Ceiling(iconOverlapBelowTitle + ImageGap);
-            sideLineLimit = Math.Max(2, NearestExclusionLines(exclusionPixels, bodyLineHeight));
+            // Matches Sims.exe cTSPictureDialog (00526547 / 005353fa): vertical exclusion height is exact
+            // icon overlap below rawBodyTop (ImageGap is horizontal only).
+            int exclusionPixels = (int)Math.Ceiling(iconOverlapBelowTitle);
+            sideLineLimit = Math.Max(1, NearestExclusionLines(exclusionPixels, bodyLineHeight));
             bodyTopInset = rawBodyTop;
         }
 

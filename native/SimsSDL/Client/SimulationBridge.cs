@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Threading.Channels;
@@ -18,6 +20,7 @@ public sealed class SimulationBridge : IDisposable
     private static readonly Dictionary<string, Task<string>> SharedMountPreparations = new(StringComparer.Ordinal);
 
     private readonly Lock _lifecycleLock = new();
+    private readonly ConcurrentDictionary<string, (string Operation, long SentTimestamp)> _trackedRequests = new(StringComparer.Ordinal);
     private Channel<string>? _inputChannel;
     private Task? _serverTask;
     private LineForwardingTextWriter? _writer;
@@ -295,9 +298,20 @@ public sealed class SimulationBridge : IDisposable
             lock (SimulationHost.SimulationStateLock)
             {
                 _cachedAppearanceRegistry = null;
-                SimsSimulation.InMemorySessionAssets.EnableRoot(Session);
+                if (!string.Equals(Environment.GetEnvironmentVariable("SIMS_EXPORT_SCENE"), "1", StringComparison.Ordinal))
+                    SimsSimulation.InMemorySessionAssets.EnableRoot(Session);
                 SimulationHost.ApplyNativeEngineEnvironmentIfSelected(nativeEngine);
-                var (profilePath, _) = SimulationHost.PrepareNeighborhood(content.Root, DataRoot, ProfileId, Neighborhood);
+
+                long prepStamp = Stopwatch.GetTimestamp();
+                AppLog.Info(FormattableString.Invariant(
+                    $"Preparing neighborhood data (profile='{ProfileId}', neighborhood={Neighborhood}, house={house})..."));
+                var (profilePath, userDataPath) = SimulationHost.PrepareNeighborhood(content.Root, DataRoot, ProfileId, Neighborhood);
+                AppLog.Info(FormattableString.Invariant(
+                    $"Neighborhood data ready at {userDataPath} ({Stopwatch.GetElapsedTime(prepStamp).TotalMilliseconds:0} ms)."));
+
+                long loadStamp = Stopwatch.GetTimestamp();
+                AppLog.Info(FormattableString.Invariant(
+                    $"Loading SimulationServer (house={house}, language={content.Language.Code}, mountedContent='{mountedContent}')..."));
                 server = SimsSimulation.SimulationServer.Load(
                     mountedContent,
                     Session,
@@ -306,6 +320,8 @@ public sealed class SimulationBridge : IDisposable
                     writer,
                     (byte)content.Language.Code,
                     installRoot: content.Root);
+                AppLog.Info(FormattableString.Invariant(
+                    $"SimulationServer.Load completed for house={house} ({Stopwatch.GetElapsedTime(loadStamp).TotalMilliseconds:0} ms)."));
                 server.DirectAnimationSink = directFrame =>
                 {
                     if (_stopped || generation != Volatile.Read(ref _generation) || Animation is not { } handler)
@@ -445,6 +461,7 @@ public sealed class SimulationBridge : IDisposable
         }
         catch (Exception error)
         {
+            AppLog.Error($"SimulationServer crashed: {error}");
             exitError = error.Message;
             PostFailureAndExit(error.Message, generation);
         }
@@ -466,6 +483,7 @@ public sealed class SimulationBridge : IDisposable
         }
         catch (Exception error)
         {
+            AppLog.Error($"FrontendAudioServer crashed: {error}");
             exitError = error.Message;
             PostFailureAndExit(error.Message, generation);
         }
@@ -529,11 +547,15 @@ public sealed class SimulationBridge : IDisposable
         ArgumentException.ThrowIfNullOrEmpty(dataRoot);
 
         var fingerprint = content.Packs.Report().Fingerprint;
+        var disabledDownloadsKey = content.DisabledDownloadFolders.Count > 0
+            ? "disabled-dl:" + string.Join(",", content.DisabledDownloadFolders)
+            : string.Empty;
         var identity = string.Join(
             '\n',
             NormalizePath(dataRoot),
             NormalizePath(content.Root),
             fingerprint,
+            disabledDownloadsKey,
             nativeEngine ? "native" : "legacy");
         var key = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(identity)));
 
@@ -571,6 +593,7 @@ public sealed class SimulationBridge : IDisposable
                         {
                             SessionSweeper.Claim(targetCacheDirectory);
                             _ = Task.Run(() => SessionSweeper.SweepContentCaches(dataRoot, preserving: targetCacheDirectory));
+                            AppLog.Info($"Reusing cached content mount: {targetMount}");
                             return targetMount;
                         }
 
@@ -583,10 +606,14 @@ public sealed class SimulationBridge : IDisposable
                         targetMount = Path.Combine(targetCacheDirectory, "content");
                     }
 
+                    long mountStamp = Stopwatch.GetTimestamp();
+                    AppLog.Info($"Materializing content mount at {targetMount} (packs={content.Packs.Ordered.Count})...");
                     createdCacheDirectory = targetCacheDirectory;
                     Directory.CreateDirectory(targetCacheDirectory);
                     SessionSweeper.Claim(targetCacheDirectory);
                     content.Materialize(targetMount, cacheIdentity: identity, nativeOverlay: true);
+                    AppLog.Info(FormattableString.Invariant(
+                        $"Content mount materialized at {targetMount} ({Stopwatch.GetElapsedTime(mountStamp).TotalMilliseconds:0} ms)."));
                     _ = Task.Run(() => SessionSweeper.SweepContentCaches(dataRoot, preserving: targetCacheDirectory));
                     return targetMount;
                 });
@@ -653,13 +680,31 @@ public sealed class SimulationBridge : IDisposable
         message["op"] = operation;
         message["id"] = id;
         var json = JsonSerializer.Serialize(message, CamelCaseOptions);
+        if (IsLifecycleOperation(operation))
+        {
+            _trackedRequests[id] = (operation, Stopwatch.GetTimestamp());
+            AppLog.Info($"[Bridge ->] id={id} op={operation}");
+        }
         if (!channel.Writer.TryWrite(json))
         {
+            _trackedRequests.TryRemove(id, out _);
             throw new ContentError("Simulation is not running");
         }
 
         return id;
     }
+
+    private static bool IsLifecycleOperation(string operation) => operation is
+        "neighborhood"
+        or "openLot"
+        or "closeLot"
+        or "save"
+        or "load"
+        or "warmup"
+        or "createHousehold"
+        or "moveInFamily"
+        or "restoreBackup"
+        or "quit";
 
     public string SendCommand(string operation, IReadOnlyDictionary<string, object?>? parameters = null) =>
         Send(operation, parameters);
@@ -1043,6 +1088,25 @@ public sealed class SimulationBridge : IDisposable
         }
 
         var type = message.JsonString("type");
+        if (string.Equals(type, "hello", StringComparison.Ordinal))
+        {
+            AppLog.Info($"[Bridge <-] hello (house={message.JsonInt("house")?.ToString(CultureInfo.InvariantCulture) ?? "?"})");
+        }
+        else if (string.Equals(type, "response", StringComparison.Ordinal)
+            && message.JsonString("id") is { } respId
+            && _trackedRequests.TryRemove(respId, out var tracked))
+        {
+            double elapsedMs = Stopwatch.GetElapsedTime(tracked.SentTimestamp).TotalMilliseconds;
+            bool ok = message.JsonBool("ok") == true;
+            string? err = ok ? null : message.JsonString("error");
+            AppLog.Info(FormattableString.Invariant(
+                $"[Bridge <-] id={respId} op={tracked.Operation} ok={ok}{(err is not null ? $" error='{err}'" : "")} ({elapsedMs:0} ms)"));
+        }
+        else if (string.Equals(type, "error", StringComparison.Ordinal))
+        {
+            AppLog.Error($"[Bridge <-] host error: {message.JsonString("error") ?? "<unknown>"}");
+        }
+
         if (string.Equals(type, "scene", StringComparison.Ordinal))
         {
             OnScene?.Invoke(message);

@@ -300,6 +300,206 @@ internal static class SceneExporter
 
     internal sealed record SoundSourceRecord(short ObjectID, int Level, float X, float Y, float Z);
 
+    internal sealed record OverheadMapRecord(int Width, int Height, int SamplesPerTile, byte[] Pixels);
+
+    private sealed record ShelterCacheEntry(
+        IffFile Lot,
+        ulong Fingerprint,
+        int StoriesCount,
+        ushort[][] Floors,
+        LotArray?[] Walls,
+        RoofGrid?[] Roofs,
+        RoomMap?[] Rooms,
+        HashSet<ushort>?[] RoofableRooms);
+
+    private static readonly object shelterCacheLock = new();
+    private static ShelterCacheEntry? cachedShelter;
+    private static readonly ushort[] ShelterArrayIds = [0, 1, 2, 11, 101, 102, 111];
+    private static readonly ResourceType ArryType = ResourceType.Parse("Arry");
+    private static readonly ResourceType RoofType = ResourceType.Parse("ROOF");
+    private static readonly (float Dx, float Dy)[] EaveOffsets =
+    [
+        (0.45f, 0f), (-0.45f, 0f), (0f, 0.45f), (0f, -0.45f),
+        (0.32f, 0.32f), (-0.32f, 0.32f), (0.32f, -0.32f), (-0.32f, -0.32f),
+    ];
+
+    private static ulong ArchitectureFingerprint(IffFile lot, SimulationWorld world)
+    {
+        var hash = 14695981039346656037UL;
+        void Mix(ulong value)
+        {
+            hash ^= value;
+            hash *= 1099511628211UL;
+        }
+        void MixSpan(ReadOnlySpan<byte> span)
+        {
+            Mix((ulong)span.Length);
+            var i = 0;
+            for (; i + 8 <= span.Length; i += 8) Mix(BitConverter.ToUInt64(span.Slice(i, 8)));
+            for (; i < span.Length; i++) Mix(span[i]);
+        }
+
+        foreach (var id in ShelterArrayIds)
+        {
+            Mix(id);
+            if (lot.Find(ArryType, id) is { } chunk) MixSpan(chunk.Data.Span);
+            else Mix(0);
+        }
+        foreach (var chunk in lot.Chunks)
+        {
+            if (chunk.Type != RoofType) continue;
+            Mix(chunk.Id);
+            MixSpan(chunk.Data.Span);
+        }
+        foreach (var item in world.WalkOrder)
+        {
+            if (item is XPerson) continue;
+            Mix((ulong)(uint)item.Id);
+            Mix((ulong)item.Position.X);
+            Mix((ulong)item.Position.Y);
+            Mix((ulong)(uint)item.Position.Height);
+            Mix((ulong)(uint)(item.TypeRecord?.Key ?? 0));
+        }
+        return hash;
+    }
+
+    private static ShelterCacheEntry GetShelterCache(IffFile lot, SimulationWorld world)
+    {
+        var fingerprint = ArchitectureFingerprint(lot, world);
+        lock (shelterCacheLock)
+        {
+            if (cachedShelter is { } entry && ReferenceEquals(entry.Lot, lot) && entry.Fingerprint == fingerprint)
+                return entry;
+
+            var stories = Stories(lot);
+            var floors = new ushort[stories + 1][];
+            var walls = new LotArray?[stories + 1];
+            for (var level = 1; level <= stories; level++)
+            {
+                floors[level] = ReadFloors(lot, level);
+                walls[level] = ReadWalls(lot, level);
+            }
+            var maxRoofLevel = Math.Min(stories, 2);
+            var roofs = new RoofGrid?[maxRoofLevel + 1];
+            var rooms = new RoomMap?[maxRoofLevel + 1];
+            var roofableRooms = new HashSet<ushort>?[maxRoofLevel + 1];
+            var terrain = LotTerrain.Read(lot);
+            var items = world.WalkOrder.ToArray();
+            RoofGrid? upper = null;
+            for (var buildLevel = maxRoofLevel; buildLevel >= 1; buildLevel--)
+            {
+                var grid = LotRoofGrid.Build(lot, buildLevel, items, upper);
+                roofs[buildLevel] = grid;
+                upper = grid;
+
+                var levelRooms = RoomMap.Build(lot, buildLevel, Size, Size);
+                rooms[buildLevel] = levelRooms;
+                var localObjects = items.Where(item => item.Position.Height == buildLevel)
+                    .ToLookup(item => (X: item.Position.X >> 4, Y: item.Position.Y >> 4));
+                var roofable = new HashSet<ushort>();
+                foreach (var roomId in levelRooms.RoomIds)
+                {
+                    var tiles = levelRooms.TilesInRoom(roomId).ToArray();
+                    var flat = tiles.All(tile => terrain.IsFlatAt(tile.X, tile.Y, terrain.ReferenceHeight(tile.X, tile.Y)));
+                    var roomOverride = (roomId & 0x3ff) != 0 && tiles.Any(tile => localObjects[tile].Any(item =>
+                        item.Data[(int)ObjectData.Hidden] == 0 && item.RoomWord84 >= 0 &&
+                        item.Data[(int)ObjectData.Category] == 8));
+                    if (flat && (roomOverride || !levelRooms.IsOutside(roomId)))
+                        roofable.Add(roomId);
+                }
+                roofableRooms[buildLevel] = roofable;
+            }
+            entry = new ShelterCacheEntry(lot, fingerprint, stories, floors, walls, roofs, rooms, roofableRooms);
+            cachedShelter = entry;
+            return entry;
+        }
+    }
+
+    internal static bool IsShelteredAt(IffFile? lot, SimulationWorld world, int lotSize, ObjectPosition position)
+    {
+        if (lot is null || position.Height < 1 || position.X < 0 || position.Y < 0) return false;
+        var tileX = position.X >> 4;
+        var tileY = position.Y >> 4;
+        if (tileX < 0 || tileY < 0 || tileX >= lotSize || tileY >= lotSize) return false;
+        var cache = GetShelterCache(lot, world);
+        var fx = (position.X & 15) / 16f;
+        var fy = (position.Y & 15) / 16f;
+        return IsCoveredSubtile(cache, position.Height, tileX, tileY, fx, fy);
+    }
+
+    private static bool IsDirectRoofedAt(ShelterCacheEntry cache, int rLevel, float worldTileX, float worldTileY)
+    {
+        if (rLevel < 1 || rLevel >= cache.Roofs.Length) return false;
+        if (worldTileX < 0f || worldTileY < 0f || worldTileX >= Size || worldTileY >= Size) return false;
+        if (cache.Roofs[rLevel] is not { } grid || cache.Rooms[rLevel] is not { } rooms || cache.RoofableRooms[rLevel] is not { } roofable)
+            return false;
+        var wx = Math.Clamp((int)MathF.Floor(worldTileX * 16f), 0, Size * 16 - 1);
+        var wy = Math.Clamp((int)MathF.Floor(worldTileY * 16f), 0, Size * 16 - 1);
+        var room = rooms.RoomAtPosition(wx, wy);
+        if (room == RoomMap.NoRoom || !roofable.Contains(room)) return false;
+        var row = Math.Clamp((int)MathF.Floor(worldTileY * 2f), 0, grid.Size - 1);
+        var col = Math.Clamp((int)MathF.Floor(worldTileX * 2f), 0, grid.Size - 1);
+        return grid.Has(row, col);
+    }
+
+    private static bool IsCoveredSubtile(ShelterCacheEntry cache, int level, int tx, int ty, float fx, float fy)
+    {
+        for (var upper = level + 1; upper <= cache.StoriesCount; upper++)
+        {
+            if (HasUpperFloorAt(cache.Floors[upper], cache.Walls[upper], tx, ty, fx, fy)) return true;
+        }
+        var maxRoofLevel = Math.Min(cache.StoriesCount, 2);
+        var worldX = tx + fx;
+        var worldY = ty + fy;
+        for (var rLevel = Math.Max(level, 1); rLevel <= maxRoofLevel; rLevel++)
+        {
+            if (IsDirectRoofedAt(cache, rLevel, worldX, worldY)) return true;
+        }
+        if (level >= 1 && level <= cache.StoriesCount &&
+            HasPavedNonRoadFloorAt(cache.Floors[level], cache.Walls[level], tx, ty, fx, fy))
+        {
+            for (var rLevel = level; rLevel <= maxRoofLevel; rLevel++)
+            {
+                foreach (var (dx, dy) in EaveOffsets)
+                {
+                    if (IsDirectRoofedAt(cache, rLevel, worldX + dx, worldY + dy)) return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static ushort FloorPatternAt(ushort[] floors, LotArray? walls, int tx, int ty, float fx, float fy)
+    {
+        if (floors.Length == 0 || tx < 0 || ty < 0 || tx >= Size || ty >= Size) return 0;
+        var diag = walls is not null && tx < walls.Rows && ty < walls.Width ? walls.Element(tx, ty)[0] & 0x30 : 0;
+        if (diag == 0x20)
+        {
+            var tile = walls!.Element(tx, ty);
+            var basePattern = floors[tx * Size + ty] == byte.MaxValue ? (ushort)0 : floors[tx * Size + ty];
+            return tile[2] == 0 && tile[4] == 0 ? basePattern : (fx > fy ? tile[4] : tile[2]);
+        }
+        if (diag == 0x10)
+        {
+            var tile = walls!.Element(tx, ty);
+            var basePattern = floors[tx * Size + ty] == byte.MaxValue ? (ushort)0 : floors[tx * Size + ty];
+            return tile[2] == 0 && tile[4] == 0 ? basePattern : (fx + fy < 1f ? tile[2] : tile[4]);
+        }
+        return floors[tx * Size + ty];
+    }
+
+    private static bool HasUpperFloorAt(ushort[] floors, LotArray? walls, int tx, int ty, float fx, float fy)
+    {
+        var pattern = FloorPatternAt(floors, walls, tx, ty, fx, fy);
+        return pattern is > 0 and < 65534 && pattern != byte.MaxValue;
+    }
+
+    private static bool HasPavedNonRoadFloorAt(ushort[] floors, LotArray? walls, int tx, int ty, float fx, float fy)
+    {
+        var pattern = FloorPatternAt(floors, walls, tx, ty, fx, fy);
+        return pattern is > 0 and < 65534 && pattern != byte.MaxValue && pattern is < 9 or > 11;
+    }
+
     internal sealed record ExportedLotScene(
         short House,
         float Width,
@@ -323,7 +523,8 @@ internal static class SceneExporter
         Mesh[] Meshes,
         CensorRect[] CensorRects,
         string[] Limitations,
-        string[] MissingResources);
+        string[] MissingResources,
+        OverheadMapRecord? OverheadMap = null);
 
     internal sealed record DirectAnimationMesh(
         int Texture,
@@ -2508,6 +2709,22 @@ internal static class SceneExporter
         }
         // Evaluates parent avatar poses before attached child avatars so child attachment transforms
         // inherit updated parent bone positions.
+        Dictionary<short, List<uint>>? heldPropGuidsByPerson = null;
+        foreach (var walkItem in world.WalkOrder)
+        {
+            if (walkItem is XPerson || walkItem[ObjectData.Hidden] != 0) continue;
+            if (walkItem[ObjectData.ContainerId] == 0 && walkItem[ObjectData.ParentId] == 0) continue;
+            var walkGuid = (uint)(walkItem.TypeRecord?.Key ?? 0);
+            if (walkGuid != 0 &&
+                avatarGeometry.HasHandPropMesh(walkGuid) &&
+                (ContainmentParent(world, walkItem) ??
+                 (walkItem[ObjectData.ContainerId] != 0 ? world.ObjectById(walkItem[ObjectData.ContainerId]) : null)) is XPerson holder)
+            {
+                if (!(heldPropGuidsByPerson ??= []).TryGetValue(holder.Id, out var list))
+                    heldPropGuidsByPerson[holder.Id] = list = [];
+                list.Add(walkGuid);
+            }
+        }
         foreach (var walkEntry in world.WalkOrder)
         {
             if (walkEntry is not XPerson person) continue;
@@ -2581,7 +2798,7 @@ internal static class SceneExporter
                 avatarParts[person.Id] = avatarGeometry.Build(person, person.Position.Height, cameraOrientation, Elevation,
                     camera, attachmentRoot: attachmentRoot, inheritedRootDirection: inheritedRootDirection,
                     headIndicatorKind: headIndicatorKind, subTickAlpha: animating ? subTickAlpha : 0f, updates: updates,
-                    careerHost: world.CareerHost);
+                    careerHost: world.CareerHost, heldPropGuids: heldPropGuidsByPerson?.GetValueOrDefault(person.Id));
             }
             catch
             {
@@ -3276,7 +3493,9 @@ internal static class SceneExporter
                 if (item is XPerson) continue;
                 if (item[ObjectData.ContainerId] == 0 && item[ObjectData.ParentId] == 0) continue;
                 var carrier = (ContainmentParent(world, item) ?? (item[ObjectData.ContainerId] != 0 ? world.ObjectById(item[ObjectData.ContainerId]) : null)) as XPerson;
-                if (carrier is not null) EmitDynamicWorldObject(item, carrier);
+                var itemGuid = (uint)(item.TypeRecord?.Key ?? 0);
+                if (carrier is not null && (itemGuid == 0 || !avatarGeometry.HasHandPropMesh(itemGuid)))
+                    EmitDynamicWorldObject(item, carrier);
             }
         }
         else
@@ -3288,7 +3507,9 @@ internal static class SceneExporter
                 var carrier = (ContainmentParent(world, item) ?? (item[ObjectData.ContainerId] != 0 ? world.ObjectById(item[ObjectData.ContainerId]) : null)) as XPerson;
                 if (carrier is not null)
                 {
-                    (carriedObjects ??= []).Add((item, carrier));
+                    var itemGuid = (uint)(item.TypeRecord?.Key ?? 0);
+                    if (itemGuid == 0 || !avatarGeometry.HasHandPropMesh(itemGuid))
+                        (carriedObjects ??= []).Add((item, carrier));
                     continue;
                 }
                 EmitDynamicWorldObject(item, null);
@@ -3772,6 +3993,37 @@ internal static class SceneExporter
                 var altitude = (source.Position.Height - 1) * EntityTransform.StoryHeight + Elevation(tileX, tileY) / 40f;
                 return new SoundSourceRecord(source.Id, source.Position.Height, tileX, tileY, altitude * 40f);
             }).ToArray();
+        OverheadMapRecord? overheadMap = null;
+        if (!animating)
+        {
+            const int samples = 8;
+            var mapWidth = lotSize * samples;
+            var mapHeight = lotSize * samples;
+            var mapPixels = new byte[mapWidth * mapHeight * 4];
+            var totalStories = Math.Min(Stories(lot), 5);
+            var shelterCache = GetShelterCache(lot, world);
+            for (var qy = 0; qy < mapHeight; qy++)
+            for (var qx = 0; qx < mapWidth; qx++)
+            {
+                var tx = qx / samples;
+                var ty = qy / samples;
+                var fx = (qx % samples + 0.5f) / samples;
+                var fy = (qy % samples + 0.5f) / samples;
+                var offset = (qy * mapWidth + qx) * 4;
+                for (var level = 1; level <= totalStories; level++)
+                {
+                    if (IsCoveredSubtile(shelterCache, level, tx, ty, fx, fy))
+                        mapPixels[offset] |= (byte)(1 << (level - 1));
+                }
+                var altitude = Elevation(tx + fx, ty + fy) / 40f;
+                var code = Math.Clamp((int)MathF.Round(altitude * 256f) + 32768, 0, 65535);
+                mapPixels[offset + 1] = (byte)(code >> 8);
+                mapPixels[offset + 2] = (byte)code;
+                mapPixels[offset + 3] = 255;
+            }
+            overheadMap = new OverheadMapRecord(mapWidth, mapHeight, samples, mapPixels);
+        }
+
         var exported = new ExportedLotScene(
             house,
             sceneWidth,
@@ -3795,7 +4047,8 @@ internal static class SceneExporter
             meshes.ToArray(),
             censorRects.ToArray(),
             ["native engine scene"],
-            missingResources.Order().ToArray());
+            missingResources.Order().ToArray(),
+            overheadMap);
         static object BuildJsonScene(ExportedLotScene payload) => new
         {
             schemaVersion = 1,
@@ -3839,6 +4092,9 @@ internal static class SceneExporter
             censorRects = payload.CensorRects,
             limitations = payload.Limitations,
             missingResources = payload.MissingResources,
+            overheadMap = payload.OverheadMap is { } om
+                ? new { width = om.Width, height = om.Height, samplesPerTile = om.SamplesPerTile, pixels = om.Pixels }
+                : null,
         };
         Lap("write");
         if (retain is not null)

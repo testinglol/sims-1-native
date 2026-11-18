@@ -123,6 +123,7 @@ internal sealed partial class LiveController
         }
         catch (Exception error)
         {
+            AppLog.Error($"Neighborhood reload failed (N{requestedNeighborhood}, mode {mode}): {error}");
             MainThreadDispatcher.Post(() =>
             {
                 if (!weakSelf.TryGetTarget(out var self))
@@ -241,6 +242,7 @@ internal sealed partial class LiveController
         }
         catch (Exception error)
         {
+            AppLog.Error($"Neighborhood web export failed (N{requestedNeighborhood}, mode {mode}): {error}");
             MainThreadDispatcher.Post(() =>
             {
                 if (!weakSelf.TryGetTarget(out var self))
@@ -447,6 +449,117 @@ internal sealed partial class LiveController
         if ((Bridge is null || _daemonMode) && Ui.Neighborhood?.Music is { Length: > 0 } music)
         {
             PlayFrontendMusic(music);
+        }
+    }
+
+    private void OpenModsOverlay(string? safeModeNotice = null)
+    {
+        try
+        {
+            FamilyPlacement = null;
+            _rezoneMode = false;
+            _evictMode = false;
+            Ui.Neighborhood?.SetRezoneMode(false);
+            Ui.Neighborhood?.SetEvictMode(false);
+            Ui.Neighborhood?.UpdateBannerHover(new CGPoint(-1000, -1000), _canvas, quickTips: false, uiScale: Renderer.UIScale);
+
+            string dataRoot = Options.DataRoot ?? Workspace;
+            string gameRoot = Options.Game ?? Content.Root;
+            Ui.ModsOverlay = new OriginalModsOverlay(
+                content: Content,
+                device: Ui.Device,
+                gameRoot: gameRoot,
+                workspace: Workspace,
+                dataRoot: dataRoot,
+                cliPacks: Options.Packs,
+                safeModeNotice: safeModeNotice);
+        }
+        catch (Exception error)
+        {
+            ShowNeighborhoodError(error);
+        }
+    }
+
+    private void HandleModsOverlay(OriginalModsOverlay.Action action)
+    {
+        PlayUISound("ui_click");
+        switch (action)
+        {
+            case OriginalModsOverlay.Action.Cancel:
+                Ui.ModsOverlay = null;
+                break;
+
+            case OriginalModsOverlay.Action.OpenModsFolder:
+                break;
+
+            case OriginalModsOverlay.Action.ApplyAndReload(var settings, var hasChanges):
+                ReloadWithUpdatedMods(settings, hasChanges);
+                break;
+        }
+    }
+
+    private void ReloadWithUpdatedMods(ModManager.ModSettingsFile settings, bool hasChanges)
+    {
+        string dataRoot = Options.DataRoot ?? Workspace;
+        string gameRoot = Options.Game ?? Content.Root;
+        try
+        {
+            ModManager.SaveSettings(dataRoot, settings);
+        }
+        catch (Exception error)
+        {
+            ShowNeighborhoodError(error);
+            return;
+        }
+
+        Ui.ModsOverlay = null;
+        if (!hasChanges)
+        {
+            return;
+        }
+
+        GameContent nextContent;
+        try
+        {
+            nextContent = ModManager.LoadConfiguredContent(gameRoot, Workspace, dataRoot, Options.Packs);
+        }
+        catch (Exception error)
+        {
+            ShowNeighborhoodError(error);
+            return;
+        }
+
+        _neighborhoodLoadGeneration++;
+        _safeModeBootError = null;
+        StopFrontendAudio();
+        _audio?.Close();
+        _audio = null;
+
+        if (Bridge is { } oldBridge)
+        {
+            Bridge = null;
+            _bridgeConnected = false;
+            _daemonWarmedUp = false;
+            oldBridge.Stop(save: false);
+            _ = Task.Run(() => oldBridge.WaitForExit(5));
+        }
+
+        Content = nextContent;
+        Ui = new LiveUI(Content);
+        LoadPlayOptions();
+        if (!Options.AnswerDialogs)
+        {
+            ReviewPluginTrust();
+        }
+
+        if (UsesNativeEngine)
+        {
+            _daemonMode = true;
+            StartWarmDaemon();
+        }
+        else
+        {
+            LoadBaseNeighborhood(mode: 1);
         }
     }
 
@@ -844,10 +957,12 @@ internal sealed partial class LiveController
         var weakBridge = new WeakReference<SimulationBridge>(bridge);
         try
         {
+            AppLog.SetStage(FormattableString.Invariant($"Lot: opening house {house}"));
             var tcs = new TaskCompletionSource<DaemonOpenLotResult>(TaskCreationOptions.RunContinuationsAsynchronously);
             string requestId = bridge.Send("openLot", new Dictionary<string, object?>(StringComparer.Ordinal) { ["house"] = house });
             _pendingDaemonOpenLotRequests[requestId] = tcs;
             DaemonOpenLotResult result = await tcs.Task.ConfigureAwait(false);
+            AppLog.SetStage(FormattableString.Invariant($"Lot: awaiting initial scene for house {house}"));
             MainThreadDispatcher.Post(() =>
             {
                 if (!weakSelf.TryGetTarget(out var self) || !weakBridge.TryGetTarget(out var target))
@@ -894,6 +1009,7 @@ internal sealed partial class LiveController
         }
         catch (Exception error)
         {
+            AppLog.Error($"Open lot {house} failed: {error}");
             MainThreadDispatcher.Post(() =>
             {
                 if (!weakSelf.TryGetTarget(out var self) || !weakBridge.TryGetTarget(out var target))
@@ -1837,6 +1953,7 @@ internal sealed partial class LiveController
         }
         catch (Exception error)
         {
+            AppLog.Warn($"FrontendAudioServer startup failed: {error.Message}");
             MainThreadDispatcher.Post(() =>
             {
                 if (!weakSelf.TryGetTarget(out var self)
@@ -1928,6 +2045,16 @@ internal sealed partial class LiveController
             if (credits.Click(point, _canvas, Renderer.UIScale))
             {
                 CloseCredits();
+            }
+
+            return true;
+        }
+
+        if (Ui.Neighborhood is not null && Ui.ModsOverlay is { } modsOverlay)
+        {
+            if (modsOverlay.Click(point, _canvas, Renderer.UIScale) is { } modAction)
+            {
+                HandleModsOverlay(modAction);
             }
 
             return true;
@@ -2058,6 +2185,21 @@ internal sealed partial class LiveController
             if (key is Key.Escape)
             {
                 CloseCredits();
+            }
+
+            return true;
+        }
+
+        if (Ui.ModsOverlay is { } modsOverlay)
+        {
+            if (modsOverlay.KeyPress(
+                isUp: key is Key.Up,
+                isDown: key is Key.Down,
+                isEnter: key is Key.Enter,
+                isEscape: key is Key.Escape,
+                isBackspace: key is Key.Backspace or Key.Delete) is { } modAction)
+            {
+                HandleModsOverlay(modAction);
             }
 
             return true;

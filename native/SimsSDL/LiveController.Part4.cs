@@ -1379,6 +1379,7 @@ internal sealed partial class LiveController
 
                     if (!self._awaitingLotSwitchChange && revision >= self._minimumSceneRevisionToFinishLoading)
                     {
+                        bool wasOpeningOrLoading = self._openingNeighborhoodLot || self._switchingLot || self.Ui.Loading;
                         self._hasCompletedInitialLoad = true;
                         if (self._openingNeighborhoodLot)
                         {
@@ -1394,6 +1395,13 @@ internal sealed partial class LiveController
                         {
                             self.Ui.Loading = false;
                             self._audio?.StopLoadLoop();
+                        }
+
+                        if (wasOpeningOrLoading)
+                        {
+                            AppLog.SetStage(
+                                FormattableString.Invariant($"Ready: Lot {self._currentHouse ?? 0} (scene revision {revision})"),
+                                isSteadyState: true);
                         }
                     }
 
@@ -1819,6 +1827,8 @@ internal sealed partial class LiveController
             float x = (float)(entry.JsonDouble("x") ?? 0.0);
             float y = (float)(entry.JsonDouble("y") ?? 0.0);
             int level = entry.JsonInt("level") ?? 1;
+            bool winterClothes = entry.JsonBool("winterClothes") ?? false;
+            bool outfitChanging = entry.JsonBool("outfitChanging") ?? false;
             nextLotSims[simId] = new LotSimInfo
             {
                 TooltipName = tooltipName,
@@ -1830,6 +1840,8 @@ internal sealed partial class LiveController
                 X = x,
                 Y = y,
                 Level = level,
+                WinterClothes = winterClothes,
+                OutfitChanging = outfitChanging,
             };
         }
 
@@ -2109,6 +2121,7 @@ internal sealed partial class LiveController
         var weakSelf = new WeakReference<LiveController>(this);
         try
         {
+            AppLog.SetStage(FormattableString.Invariant($"Neighborhood: loading N{targetNeighborhood} (mode {mode})"));
             var exported = await FetchNeighborhoodManifest(
                 mode: mode,
                 edit: null,
@@ -2120,6 +2133,7 @@ internal sealed partial class LiveController
                     return;
                 }
 
+                bool loaded = false;
                 try
                 {
                     if (self._neighborhoodLoadGeneration != requestGen
@@ -2137,6 +2151,7 @@ internal sealed partial class LiveController
                     self.Ui.Neighborhood = neighborhood;
                     self.Ui.Loading = false;
                     self._hasCompletedInitialLoad = true;
+                    loaded = true;
                     self.Renderer.DrawsLot = false;
                     self._neighborhoodHouseSelected = house =>
                     {
@@ -2146,6 +2161,9 @@ internal sealed partial class LiveController
                         }
                     };
                     Log($"neighborhood {targetNeighborhood} ({exported.Session})");
+                    AppLog.SetStage(
+                        FormattableString.Invariant($"Ready: Neighborhood N{targetNeighborhood} (mode {mode})"),
+                        isSteadyState: true);
                     self._audio?.StopLoadLoop();
                     self._startupLoadAudio?.Close();
                     self._startupLoadAudio = null;
@@ -2161,6 +2179,11 @@ internal sealed partial class LiveController
                     {
                         self.OpenFamilyPicker(house: 0, families: neighborhood.Families);
                     }
+                    else if (self._safeModeBootError is { } bootErr)
+                    {
+                        self._safeModeBootError = null;
+                        self.OpenModsOverlay(bootErr);
+                    }
                 }
                 catch (Exception error)
                 {
@@ -2168,7 +2191,7 @@ internal sealed partial class LiveController
                     {
                         self.Renderer.DrawsLot = false;
                         Log($"Neighborhood: {error}");
-                        self.ShowNeighborhoodError(error);
+                        self.HandleInitialOrNeighborhoodError(error);
                     }
                 }
                 finally
@@ -2176,7 +2199,10 @@ internal sealed partial class LiveController
                     if (self._neighborhoodLoadGeneration == requestGen)
                     {
                         self._loadingNeighborhood = false;
-                        self.Ui.Loading = false;
+                        if (loaded || self.Ui.Neighborhood is not null || self._hasCompletedInitialLoad)
+                        {
+                            self.Ui.Loading = false;
+                        }
                         self._audio?.StopLoadLoop();
                     }
 
@@ -2187,6 +2213,7 @@ internal sealed partial class LiveController
         }
         catch (Exception error)
         {
+            AppLog.Error($"Neighborhood load failed (N{targetNeighborhood}, mode {mode}): {error}");
             MainThreadDispatcher.Post(() =>
             {
                 if (!weakSelf.TryGetTarget(out var self))
@@ -2198,10 +2225,9 @@ internal sealed partial class LiveController
                 {
                     self.Renderer.DrawsLot = false;
                     Log($"Neighborhood: {error}");
-                    self.ShowNeighborhoodError(error);
                     self._loadingNeighborhood = false;
-                    self.Ui.Loading = false;
                     self._audio?.StopLoadLoop();
+                    self.HandleInitialOrNeighborhoodError(error);
                 }
 
                 self._startupLoadAudio?.Close();
@@ -2297,7 +2323,75 @@ internal sealed partial class LiveController
 
     private void ShowNeighborhoodError(Exception error)
     {
-        PresentLocalFeedback(Strings.MoveInErrorTitle(), error.ToString());
+        AppLog.Error($"Neighborhood/session error: {error}");
+        string summary = $"{error.GetType().Name}: {error.Message}";
+        if (AppLog.CurrentLogPath is { Length: > 0 } logPath)
+        {
+            summary += $"\n\nLog saved to:\n{logPath}";
+        }
+
+        PresentLocalFeedback(Strings.MoveInErrorTitle(), summary);
+    }
+
+    private void HandleInitialOrNeighborhoodError(Exception error)
+    {
+        AppLog.Error($"Startup/neighborhood failure: {error}");
+        AppLog.SetStage($"Error: {error.GetType().Name}", isSteadyState: true);
+        if (!_hasCompletedInitialLoad && Ui.Neighborhood is null && (_currentHouse ?? 0) == 0)
+        {
+            // Keep Loading = true so LiveUI renders the dialog over the splash screen rather than
+            // flipping ShowsLot to true over an empty black void with an hourglass cursor.
+            Ui.Loading = true;
+            string summary = $"{error.GetType().Name}: {error.Message}";
+            string? logPath = AppLog.CurrentLogPath;
+            string? logsDir = AppLog.CurrentLogsDirectory;
+            if (!string.IsNullOrEmpty(logPath))
+            {
+                summary += $"\n\nLog saved to:\n{logPath}";
+            }
+
+            if (!Options.AnswerDialogs && !string.IsNullOrEmpty(logsDir) && Directory.Exists(logsDir))
+            {
+                var weakSelf = new WeakReference<LiveController>(this);
+                PresentLocalConfirmation(
+                    Strings.MoveInErrorTitle(),
+                    summary,
+                    "Open Logs",
+                    "Quit",
+                    response: choice =>
+                    {
+                        if (choice == 0)
+                        {
+                            AppLog.Flush();
+                            AppLog.RevealLogInFileManager(logPath, logsDir);
+                        }
+
+                        if (weakSelf.TryGetTarget(out var self))
+                        {
+                            self.QuitRequested = true;
+                        }
+                    });
+                return;
+            }
+
+            var weakFallback = new WeakReference<LiveController>(this);
+            PresentLocalConfirmation(
+                Strings.MoveInErrorTitle(),
+                summary,
+                Strings.OkButton(),
+                "Quit",
+                response: _ =>
+                {
+                    if (weakFallback.TryGetTarget(out var self))
+                    {
+                        self.QuitRequested = true;
+                    }
+                });
+            return;
+        }
+
+        Ui.Loading = false;
+        ShowNeighborhoodError(error);
     }
 
     private (string Title, string Message) MagicTownStrings(
@@ -2344,7 +2438,7 @@ internal sealed partial class LiveController
     /// residential lots.</summary>
     private void SelectNeighborhoodHouse(int house)
     {
-        if (Ui.Neighborhood is not { } neighborhood || Ui.FamilyPicker is not null || Ui.Credits is not null)
+        if (Ui.Neighborhood is not { } neighborhood || Ui.FamilyPicker is not null || Ui.ModsOverlay is not null || Ui.Credits is not null)
         {
             return;
         }
@@ -2665,6 +2759,10 @@ internal sealed partial class LiveController
             case BannerAction.Previous:
             case BannerAction.Next:
                 SwitchNeighborhood(forward: action == BannerAction.Next);
+                break;
+
+            case BannerAction.Mods:
+                OpenModsOverlay();
                 break;
 
             case BannerAction.Internet:

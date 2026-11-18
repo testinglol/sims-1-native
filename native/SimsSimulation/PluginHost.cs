@@ -26,6 +26,9 @@ internal sealed class PluginHost : IDisposable
         short GetObjectAttribute(string packId, short objectId, int index);
         void SetObjectAttribute(string packId, short objectId, int index, short value);
         void SetObjectGraphic(string packId, short objectId, short graphic);
+        short? TryPlaceOwnedObject(string packId, uint guid, int tileX, int tileY, int level, short direction, short? clearForSimId) => null;
+        bool TryRemoveOwnedObject(string packId, short objectId) => false;
+        void SetSimSuitOverride(short simId, int? suitCategory) { }
     }
 
     private sealed class LoadedPlugin(PluginDescriptor descriptor, ISimsPlugin instance, PluginContext context, PluginLoadContext loadContext)
@@ -57,14 +60,16 @@ internal sealed class PluginHost : IDisposable
     private string? neighborhoodRoot;
     private bool environmentOnly;
     private readonly Dictionary<string, string> resourceOwners = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<uint, string> objectOwners = [];
     private readonly Dictionary<string, NeighborhoodRecord> neighborhoodRecords = [];
     private LoadedPlugin? environmentOwner;
     private readonly Dictionary<string, Dictionary<string, string>> sealedResources = [];
     private readonly Dictionary<string, string> approvedResources = [];
-    private static readonly HashSet<string> ShaderSlots = ["ambient", "ambientBlur", "atmosphere", "season", "trail", "groundDepth", "heightScatter", "depthOnly", "fullscreen"];
+    private static readonly HashSet<string> ShaderSlots = ["ambient", "ambientBlur", "atmosphere", "season", "trail", "groundDepth", "heightScatter", "depthOnly", "fullscreen", "terrain"];
     private LoadedPlugin[] scorers = [];
     private LoadedPlugin[] interactionFilters = [];
     private LoadedPlugin[] menuPlugins = [];
+    private LoadedPlugin[] groundMenuPlugins = [];
     private string? choosingPack;
     private string? shownPanel;
     private short? shownPanelAnchor;
@@ -105,6 +110,11 @@ internal sealed class PluginHost : IDisposable
             if (document.RootElement.TryGetProperty("resources", out var resources))
                 foreach (var resource in resources.EnumerateArray())
                     host.resourceOwners[resource.GetProperty("path").GetString()!] = resource.GetProperty("owner").GetString()!;
+            if (document.RootElement.TryGetProperty("objects", out var objects))
+                foreach (var obj in objects.EnumerateArray())
+                    if (obj.TryGetProperty("guid", out var guidEl) && guidEl.TryGetUInt32(out var guidVal) &&
+                        obj.TryGetProperty("owner", out var ownerEl) && ownerEl.GetString() is { } ownerName)
+                        host.objectOwners[guidVal] = ownerName;
         }
         var trusted = ReadTrust(TrustStorePath(dataRoot));
         foreach (var plugin in plugins) host.TryLoad(mount, plugin, trusted);
@@ -259,6 +269,7 @@ internal sealed class PluginHost : IDisposable
         scorers = loaded.Where(plugin => !plugin.Failed && plugin.Descriptor.ApiVersion >= 2 && Implements(plugin.Instance, nameof(ISimsPlugin.ScoreAutonomy))).ToArray();
         interactionFilters = loaded.Where(plugin => !plugin.Failed && plugin.Descriptor.ApiVersion >= 2 && Implements(plugin.Instance, nameof(ISimsPlugin.AllowInteraction))).ToArray();
         menuPlugins = loaded.Where(plugin => !plugin.Failed && plugin.Descriptor.ApiVersion >= 2 && Implements(plugin.Instance, nameof(ISimsPlugin.GetMenuEntries))).ToArray();
+        groundMenuPlugins = loaded.Where(plugin => !plugin.Failed && plugin.Descriptor.ApiVersion >= 4 && Implements(plugin.Instance, nameof(ISimsPlugin.GetGroundMenuEntries))).ToArray();
     }
 
     private static bool Implements(ISimsPlugin instance, string member)
@@ -361,6 +372,41 @@ internal sealed class PluginHost : IDisposable
         return new { accepted = !plugin.Failed, panel, anchorId };
     }
 
+    public IReadOnlyList<MenuEntry> GroundMenuEntries(short simId, PluginGroundPoint point)
+    {
+        var entries = new List<MenuEntry>();
+        foreach (var plugin in groundMenuPlugins)
+            Guard(plugin, "GetGroundMenuEntries", () =>
+            {
+                var offered = (plugin.Instance.GetGroundMenuEntries(simId, point) ?? []).Take(MaxMenuEntries + 1).ToArray();
+                if (offered.Length > MaxMenuEntries) throw new InvalidDataException($"GetGroundMenuEntries returned more than {MaxMenuEntries} entries");
+                var ids = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var entry in offered)
+                {
+                    if (entry == null || !ValidMenuId(entry.Id) || !ids.Add(entry.Id)) throw new InvalidDataException("GetGroundMenuEntries returned a missing, malformed or repeated entry ID");
+                    if (!ValidMenuName(entry.Name)) throw new InvalidDataException($"Ground menu entry {entry.Id} has a malformed name");
+                }
+                entries.AddRange(offered.Select(entry => new MenuEntry(plugin.Descriptor.PackId, entry.Id, entry.Name)));
+            });
+        return entries;
+    }
+
+    public object ChooseGroundMenuEntry(short simId, PluginGroundPoint point, string packId, string entryId)
+    {
+        var plugin = groundMenuPlugins.FirstOrDefault(candidate => candidate.Descriptor.PackId == packId && !candidate.Failed)
+            ?? throw new InvalidOperationException("The ground menu entry's plugin is not running");
+        if (!GroundMenuEntries(simId, point).Any(entry => entry.PackId == packId && entry.Entry == entryId))
+            throw new ArgumentException("The plugin no longer offers that ground menu entry");
+        (choosingPack, shownPanel, shownPanelAnchor) = (packId, null, null);
+        try { Guard(plugin, "OnGroundMenuEntry", () => plugin.Instance.OnGroundMenuEntry(simId, point, entryId)); }
+        finally { choosingPack = null; }
+        FlushPanels();
+        var panel = plugin.Failed ? null : shownPanel;
+        var anchorId = panel == null ? null : shownPanelAnchor;
+        if (panel != null) write(new { type = "pluginPanelShow", packId, panelId = panel, anchorId });
+        return new { accepted = !plugin.Failed, panel, anchorId };
+    }
+
     private static bool ValidMenuId(string? id) =>
         id is { Length: > 0 and <= MaxKeyLength } && id.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '-' or '_');
 
@@ -443,6 +489,16 @@ internal sealed class PluginHost : IDisposable
             ResourcePath(descriptor, indicator.Window);
             ResourcePath(descriptor, indicator.Overlay);
         }
+        if (effect.AmbientSounds.Length > 6)
+            throw new InvalidDataException("Too many plugin ambient sound layers");
+        foreach (var sound in effect.AmbientSounds)
+        {
+            if (sound is null || sound.Cue.Length is 0 or > MaxKeyLength ||
+                sound.Cue.Any(ch => !char.IsAsciiLetterOrDigit(ch) && ch != '-' && ch != '_') ||
+                !In(sound.Gain, 1))
+                throw new InvalidDataException("Invalid plugin ambient sound entry");
+            ResourcePath(descriptor, sound.Resource);
+        }
     }
 
     public PluginImage TransformNeighborhoodImage(PluginNeighborhoodImage image, EnvironmentState? environment)
@@ -468,6 +524,8 @@ internal sealed class PluginHost : IDisposable
         var resources = environment.Effect.Shaders.Values.SelectMany(resource => new[] { resource + ".msl", resource + ".spv" });
         if (environment.Effect.Indicator is { } indicator)
             resources = resources.Concat([indicator.Strip, indicator.WeatherIcon, indicator.Window, indicator.Overlay]);
+        if (environment.Effect.AmbientSounds.Length > 0)
+            resources = resources.Concat(environment.Effect.AmbientSounds.Select(sound => sound.Resource));
         foreach (var resource in resources)
         {
             var source = ResourcePath(descriptor, resource);
@@ -728,6 +786,30 @@ internal sealed class PluginHost : IDisposable
             if (graphic < 0) throw new ArgumentOutOfRangeException(nameof(graphic));
             if (host.world is not { } world) throw new InvalidOperationException("No plugin world is available");
             world.SetObjectGraphic(descriptor.PackId, objectId, graphic);
+        }
+
+        public short? TryPlaceOwnedObject(uint guid, int tileX, int tileY, int level = 1, short direction = 0, short? clearForSimId = null)
+        {
+            if (descriptor.ApiVersion < 4) throw new NotSupportedException("Pack object placement needs API4");
+            if (host.world is not { } world) throw new InvalidOperationException("No plugin world is available");
+            if (host.objectOwners.TryGetValue(guid, out var owner) && owner != descriptor.PackId)
+                throw new ArgumentException("Only this pack's own objects may be placed");
+            return world.TryPlaceOwnedObject(descriptor.PackId, guid, tileX, tileY, level, direction, clearForSimId);
+        }
+
+        public bool TryRemoveOwnedObject(short objectId)
+        {
+            if (descriptor.ApiVersion < 4) throw new NotSupportedException("Pack object removal needs API4");
+            if (host.world is not { } world) throw new InvalidOperationException("No plugin world is available");
+            return world.TryRemoveOwnedObject(descriptor.PackId, objectId);
+        }
+
+        public void SetSimSuitOverride(short simId, int? suitCategory)
+        {
+            if (descriptor.ApiVersion < 4) throw new NotSupportedException("Suit overrides need API4");
+            if (suitCategory is < 0 or > 255) throw new ArgumentOutOfRangeException(nameof(suitCategory));
+            if (host.world is not { } world) throw new InvalidOperationException("No plugin world is available");
+            world.SetSimSuitOverride(simId, suitCategory);
         }
 
         public void SetPanelValue(string panelId, string binding, string value)

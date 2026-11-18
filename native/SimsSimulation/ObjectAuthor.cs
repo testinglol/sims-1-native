@@ -2209,7 +2209,7 @@ internal static class ObjectAuthor
             foreach (var layer in view.Layers ?? [])
             {
                 if (view.Layers!.Length > 4) throw new InvalidDataException("Graphics views support at most four baked layers");
-                if (layer.SpriteOffset == null || layer.SpriteOffset.Length != 2 || layer.SpriteOffset.Any(v => v is < -4096 or > 4096))
+                if (layer.SpriteOffset == null || layer.SpriteOffset.Length != 2 || layer.SpriteOffset.Any(v => v is < -8192 or > 8192))
                     throw new InvalidDataException("Baked graphics layers require a bounded two-coordinate spriteOffset");
                 if (layer.ObjectOffset != null && (layer.ObjectOffset.Length != 3 || layer.ObjectOffset.Any(v => !float.IsFinite(v) || v is < -256 or > 256)))
                     throw new InvalidDataException("Baked graphics layer objectOffset must be three bounded coordinates");

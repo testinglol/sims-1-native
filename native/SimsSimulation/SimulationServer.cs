@@ -127,6 +127,14 @@ internal sealed class SimulationServer
     private readonly string? explicitInstallRoot;
     private HitAudioRuntime? audio;
     private SimOutfits? engineOutfits;
+    private SeasonalOutfitService? seasonalOutfits;
+    private (int House, int Minute, int? Suit) cachedOutdoorSuit = (-1, -1, null);
+
+    private void ResetSeasonalOutfits()
+    {
+        seasonalOutfits?.Reset(world);
+        cachedOutdoorSuit = (-1, -1, null);
+    }
     private (int FurnishingsObjects, int ArchitectureObjects) initialObjectValuation;
     private IffFile? initialValuationLot;
     private bool lotValuationEdited;
@@ -173,7 +181,11 @@ internal sealed class SimulationServer
             () => this.house,
             () => this.activeFamilyChunkId,
             () => this.registry,
-            () => this.speed == 0);
+            () => this.speed == 0,
+            () => this.lot,
+            () => LotWidth,
+            person => seasonalOutfits?.IsWearing(person) ?? false,
+            (simId, suit) => EnsureSeasonalOutfits()?.SetSuitOverride(simId, suit));
         plugins = PluginHost.Create(game, dataRoot, Write, () => this.house,
             host => this.pluginWorld, userData: Neighborhoods.UserData(profile), world: this.pluginWorld,
             playSoundResource: (path, owner, cue, loop) => audio.PlayResource(path, owner, cue, loop),
@@ -228,6 +240,34 @@ internal sealed class SimulationServer
         images ??= new PanelImages(SceneDirectory, registry);
         global ??= WorldBootstrap.GetOrLoadGlobalLibrary(game).Global;
         return registry;
+    }
+
+    private SeasonalOutfitService? EnsureSeasonalOutfits()
+    {
+        if (seasonalOutfits is not null) return seasonalOutfits;
+        if (registry is null) return null;
+        seasonalOutfits = new SeasonalOutfitService(game, registry);
+        return seasonalOutfits;
+    }
+
+    private SimsNative.Plugins.PluginGroundPoint GroundPoint(SimulationWorld currentWorld, ObjectPosition position)
+    {
+        var tx = position.X >> 4;
+        var ty = position.Y >> 4;
+        var level = position.Height;
+        ushort floorPattern = 0;
+        if (lot is { } currentLot && tx is >= 0 and < LotFloors.Size && ty is >= 0 and < LotFloors.Size)
+        {
+            try { floorPattern = LotFloors.Read(currentLot, level)[tx, ty]; }
+            catch (InvalidDataException) { }
+        }
+        var bare = floorPattern == 0 && !currentWorld.WalkOrder.Any(item =>
+            item is not XPerson && item.Position.Height == level &&
+            (item.Position.X >> 4) == tx && (item.Position.Y >> 4) == ty &&
+            item.TypeRecord?.Key != 0x7c4);
+        var outside = currentWorld.RoomIsOutside(currentWorld.RoomAtTile(tx, ty, level));
+        var sheltered = SceneExporter.IsShelteredAt(lot, currentWorld, LotWidth, position);
+        return new SimsNative.Plugins.PluginGroundPoint(tx, ty, level, bare, outside, sheltered);
     }
 
     private string ResolveInstallRoot()
@@ -1353,6 +1393,23 @@ internal sealed class SimulationServer
                             global = false,
                             objectID = choice.Owner?.Id,
                         }).ToList();
+                    if (IsHouseholdPerson(actor) && plugins is not null)
+                    {
+                        var point = GroundPoint(world!, position);
+                        foreach (var entry in plugins.GroundMenuEntries(actor.Id, point))
+                        {
+                            choices.Add(new
+                            {
+                                name = entry.Name,
+                                interaction = (byte)0,
+                                param0 = (short)0,
+                                global = false,
+                                objectID = (int?)0,
+                                plugin = entry.PackId,
+                                entry = entry.Entry,
+                            });
+                        }
+                    }
                     result = choices.ToArray();
                 }
                 finally { world!.Remove(target.Id); }
@@ -1361,6 +1418,20 @@ internal sealed class SimulationServer
             case "groundInteract":
             {
                 var actor = SelectedPerson();
+                if (request.TryGetProperty("plugin", out var groundPack) && groundPack.ValueKind == JsonValueKind.String)
+                {
+                    if (!IsHouseholdPerson(actor)) throw new InvalidOperationException("Plugin menu entries are for household Sims");
+                    if (plugins is null || pluginWorld is null) throw new InvalidOperationException("No pack plugins are loaded.");
+                    var (pluginPos, pluginTarget) = GroundPreview(request, persistent: false);
+                    try
+                    {
+                        var point = GroundPoint(world!, pluginPos);
+                        result = plugins.ChooseGroundMenuEntry(actor.Id, point, groundPack.GetString() ?? "",
+                            request.GetProperty("entry").GetString() ?? "");
+                    }
+                    finally { world!.Remove(pluginTarget.Id); }
+                    break;
+                }
                 var (position, target) = GroundPreview(request, persistent: true);
                 var retained = false;
                 try
@@ -1752,7 +1823,7 @@ internal sealed class SimulationServer
                 var exportInstallRoot = ResolveInstallRoot();
                 NeighborhoodExport.GameRoot = game;
                 result = NeighborhoodExport.Export(outputDirectory, neighborhoodMode, profile, language, dataRoot, exportInstallRoot,
-                    includeRenderScenes: webScenes, existingRegistry: registry);
+                    includeRenderScenes: webScenes, existingRegistry: registry, mountRoot: game);
                 break;
             }
             case "saveBackups":
@@ -1929,9 +2000,12 @@ internal sealed class SimulationServer
                     var removePacks = request.TryGetProperty("removePacks", out var removeValue) && removeValue.ValueKind == JsonValueKind.True;
                     compatibility = SaveCompatibility.Check(envelope.PackFingerprint, envelope.Packs,
                         packFingerprint, plugins?.MigratedPacks ?? [], removePacks);
+                    var removedPackIds = compatibility.Removed
+                        .Select(item => item.Split('@', 2)[0])
+                        .ToHashSet(StringComparer.OrdinalIgnoreCase);
                     savedPlugins = envelope.Plugins is null
                         ? null
-                        : envelope.Plugins.Where(entry => !compatibility.Removed.Contains(entry.Key, StringComparer.OrdinalIgnoreCase))
+                        : envelope.Plugins.Where(entry => !removedPackIds.Contains(entry.Key))
                             .ToDictionary(entry => entry.Key, entry => entry.Value, StringComparer.OrdinalIgnoreCase);
                     plugins?.ValidateSaved(savedPlugins);
                     if (compatibility.Migrated)
@@ -1966,6 +2040,7 @@ internal sealed class SimulationServer
                         Convert.FromBase64String(restoredHome.LotState), restoredHome.Runtime, restoredHome.Speed)
                     : null;
                 setup.World.AutonomyForced = world?.AutonomyForced;
+                ResetSeasonalOutfits();
                 lot = setup.Lot;
                 ClearBuildHistory();
                 world = setup.World;
@@ -2148,6 +2223,7 @@ internal sealed class SimulationServer
             saved = true;
         }
         RemoveTileCursor();
+        ResetSeasonalOutfits();
         audio?.Reset();
         audio?.SetMusicModeActive(false);
         world = null;
@@ -2392,6 +2468,13 @@ internal sealed class SimulationServer
             }
             if (!world.AvatarAnimationRootOnly && routeAnimBefore is not null)
                 DispatchRouteAnimationSounds(world, routeAnimBefore);
+            if (!world.AvatarAnimationRootOnly && plugins is not null && EnsureSeasonalOutfits() is { } outfits)
+            {
+                var suitMinute = world.Clock.Hour * 60 + world.Clock.Minute;
+                if (cachedOutdoorSuit.House != house || cachedOutdoorSuit.Minute != suitMinute)
+                    cachedOutdoorSuit = (house, suitMinute, plugins.Environment(house)?.Effect.OutdoorSuit);
+                outfits.Tick(world, cachedOutdoorSuit.Suit);
+            }
             if (world.Clock.Hour != previousHour) world.DispatchNotice(0xdb, world.Clock.Hour);
             if (allowAutoSpeed) UpdateAutoSpeed(world);
             if (traceActions) LogActionState();
@@ -4015,6 +4098,7 @@ internal sealed class SimulationServer
         var previous = world;
         var autonomyForced = previous?.AutonomyForced ?? true;
         RemoveTileCursor();
+        ResetSeasonalOutfits();
         audio?.Reset();
 
         var userData = Neighborhoods.UserData(profile);
@@ -5251,6 +5335,7 @@ internal sealed class SimulationServer
         var travelScopeKeys = CollectTravelScopeKeys(sourceSlots, clonedScopes);
 
         RemoveTileCursor();
+        ResetSeasonalOutfits();
         audio?.Reset();
 
         registry = registry?.WithRefreshedPeople(Path.Combine(userData, "Characters")) ?? registry;
@@ -6307,6 +6392,8 @@ internal sealed class SimulationServer
             level = person.Position.Height,
             animation = person.AnimationPlayback?.Clip.Name,
             interactionAttachments = person.InteractionAttachments.OrderBy(value => value, StringComparer.Ordinal).ToArray(),
+            winterClothes = seasonalOutfits?.IsWearing(person) ?? false,
+            outfitChanging = person.NativeOutfitTransitionActive,
             motives = new Dictionary<string, short>
             {
                 ["Hunger"] = (short)person[Motive.Hunger], ["Comfort"] = (short)person[Motive.Comfort],

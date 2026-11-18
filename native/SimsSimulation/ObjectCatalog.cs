@@ -390,7 +390,7 @@ internal static class ObjectCatalog
     /// within the 160x119 preview box with a 3-pixel margin on all sides.</summary>
     private static byte[]? RenderedPreview(ObjectEntry item) => RenderObjectFitting(item, 160, 119, fixedZoom: null);
 
-    internal static byte[]? RenderedDialogPreview(ObjectEntry item) => RenderObjectFitting(item, 118, 118, fixedZoom: null);
+    internal static byte[]? RenderedDialogPreview(ObjectEntry item) => RenderObjectFitting(item, 127, 97, fixedZoom: null);
 
     private static byte[]? RenderObjectFitting(ObjectEntry item, int maxWidth, int maxHeight, int? fixedZoom, bool twoStateCatalogSheet = false)
     {

@@ -620,6 +620,47 @@ public static unsafe partial class Sdl3Native
 
     public static string SDL_GetError() => Marshal.PtrToStringUTF8(SDL_GetErrorPtr()) ?? string.Empty;
 
+    [LibraryImport(LibraryName, EntryPoint = "SDL_GetCurrentVideoDriver")]
+    private static partial nint SDL_GetCurrentVideoDriverPtr();
+
+    public static string SDL_GetCurrentVideoDriver() => Marshal.PtrToStringUTF8(SDL_GetCurrentVideoDriverPtr()) ?? string.Empty;
+
+    [LibraryImport(LibraryName)]
+    public static partial int SDL_GetNumVideoDrivers();
+
+    [LibraryImport(LibraryName, EntryPoint = "SDL_GetVideoDriver")]
+    private static partial nint SDL_GetVideoDriverPtr(int index);
+
+    public static string SDL_GetVideoDriver(int index) => Marshal.PtrToStringUTF8(SDL_GetVideoDriverPtr(index)) ?? string.Empty;
+
+    [LibraryImport(LibraryName, EntryPoint = "SDL_GetCurrentAudioDriver")]
+    private static partial nint SDL_GetCurrentAudioDriverPtr();
+
+    public static string SDL_GetCurrentAudioDriver() => Marshal.PtrToStringUTF8(SDL_GetCurrentAudioDriverPtr()) ?? string.Empty;
+
+    [LibraryImport(LibraryName)]
+    public static partial uint SDL_GetPrimaryDisplay();
+
+    [LibraryImport(LibraryName)]
+    public static partial float SDL_GetDisplayContentScale(uint displayID);
+
+    [LibraryImport(LibraryName, EntryPoint = "SDL_GetGPUDeviceDriver")]
+    private static partial nint SDL_GetGPUDeviceDriverPtr(nint device);
+
+    public static string SDL_GetGPUDeviceDriver(nint device) =>
+        device == nint.Zero ? string.Empty : Marshal.PtrToStringUTF8(SDL_GetGPUDeviceDriverPtr(device)) ?? string.Empty;
+
+    [LibraryImport(LibraryName)]
+    public static partial nint SDL_GetDefaultLogOutputFunction();
+
+    [LibraryImport(LibraryName, EntryPoint = "SDL_SetLogOutputFunction")]
+    public static partial void SDL_SetLogOutputFunction(
+        delegate* unmanaged[Cdecl]<nint, int, int, byte*, void> callback,
+        nint userdata);
+
+    [LibraryImport(LibraryName, EntryPoint = "SDL_SetLogOutputFunction")]
+    public static partial void SDL_SetLogOutputFunction(nint callback, nint userdata);
+
     [LibraryImport(LibraryName)]
     public static partial void SDL_Delay(uint ms);
 

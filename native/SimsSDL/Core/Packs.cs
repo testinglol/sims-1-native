@@ -434,6 +434,14 @@ public sealed class PackManifest
     [JsonPropertyName("saveMigration")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public SaveMigration? SaveMigration { get; set; }
+
+    [JsonPropertyName("description")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Description { get; set; }
+
+    [JsonPropertyName("preview")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Preview { get; set; }
 }
 
 public sealed partial class ContentPack
@@ -597,16 +605,20 @@ public sealed partial class PackStack
     internal IReadOnlyDictionary<string, string> AvatarContainers { get; }
     public IReadOnlyList<ObjectGUIDReservation> Reservations { get; }
     internal IReadOnlyDictionary<string, string> ObjectResources { get; }
+    public IReadOnlyList<(string Path, string WinnerPackId, string LoserPackId)> OverriddenResources { get; }
 
-    public PackStack(IEnumerable<ContentPack> packs)
+    public PackStack(IEnumerable<ContentPack> packs, bool preserveOrderAndAllowOverrides = false)
     {
         var byID = new Dictionary<string, ContentPack>(StringComparer.Ordinal);
+        var inputOrder = new Dictionary<string, int>(StringComparer.Ordinal);
+        int nextIdx = 0;
         foreach (var pack in packs)
         {
             if (!byID.TryAdd(pack.Manifest.Id, pack))
             {
                 throw new ContentError($"Duplicate pack ID: {pack.Manifest.Id}");
             }
+            inputOrder[pack.Manifest.Id] = nextIdx++;
         }
 
         var pending = new HashSet<string>(byID.Keys, StringComparer.Ordinal);
@@ -616,7 +628,11 @@ public sealed partial class PackStack
         while (pending.Count > 0)
         {
             var progress = false;
-            foreach (var id in pending.OrderBy(static x => x, StringComparer.Ordinal))
+            IEnumerable<string> sequence = preserveOrderAndAllowOverrides
+                ? pending.OrderBy(id => inputOrder[id])
+                : pending.OrderBy(static x => x, StringComparer.Ordinal);
+
+            foreach (var id in sequence.ToArray())
             {
                 var pack = byID[id];
                 foreach (var dependency in pack.Manifest.Dependencies)
@@ -647,6 +663,7 @@ public sealed partial class PackStack
         var owners = new Dictionary<string, string>(StringComparer.Ordinal);
         var authoredPaths = new Dictionary<string, string>(StringComparer.Ordinal);
         var skinPaths = new Dictionary<string, string>(StringComparer.Ordinal);
+        var overridden = new List<(string Path, string WinnerPackId, string LoserPackId)>();
 
         foreach (var pack in ordered)
         {
@@ -662,9 +679,13 @@ public sealed partial class PackStack
                     skinPaths[skinName] = key;
                 }
 
-                if (resources.ContainsKey(key) && !declared.Contains(key))
+                if (resources.ContainsKey(key))
                 {
-                    throw new ContentError($"Conflicting pack resource {key}; declare it in overrides");
+                    if (!preserveOrderAndAllowOverrides && !declared.Contains(key))
+                    {
+                        throw new ContentError($"Conflicting pack resource {key}; declare it in overrides");
+                    }
+                    overridden.Add((key, pack.Manifest.Id, owners[key]));
                 }
 
                 resources[key] = file;
@@ -723,6 +744,7 @@ public sealed partial class PackStack
         Ordered = ordered;
         Assets = resources;
         AuthoredPaths = authoredPaths;
+        OverriddenResources = overridden;
     }
 }
 
@@ -732,16 +754,28 @@ public sealed partial class GameContent
     public InstalledGameLanguage Language { get; }
     public FARArchive UI { get; }
     public PackStack Packs { get; }
+    public IReadOnlyList<string> DisabledDownloadFolders { get; }
+    public IReadOnlyList<(string Path, string PackId)> BaseOverriddenResources { get; }
 
-    public GameContent(string root, IEnumerable<string>? packDirectories = null)
+    public GameContent(
+        string root,
+        IEnumerable<string>? packDirectories = null,
+        bool preserveOrderAndAllowOverrides = false,
+        IEnumerable<string>? disabledDownloadFolders = null)
     {
         var baseRoot = PackContentPaths.ResolveSymlinksInPath(root);
         Root = baseRoot;
         Language = InstalledGameLanguage.Detect(baseRoot);
         UI = new FARArchive(Path.Combine(baseRoot, "UIGraphics", "UIGraphics.far"));
+        DisabledDownloadFolders = (disabledDownloadFolders ?? [])
+            .Where(static s => !string.IsNullOrWhiteSpace(s))
+            .Select(static s => s.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(static s => s, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
 
         var loadedPacks = (packDirectories ?? []).Select(dir => new ContentPack(dir)).ToList();
-        Packs = new PackStack(loadedPacks);
+        Packs = new PackStack(loadedPacks, preserveOrderAndAllowOverrides);
         _ = Packs.ValidateBaseObjects(baseRoot);
         Packs.ValidateBaseAvatarResources(baseRoot);
 
@@ -793,6 +827,7 @@ public sealed partial class GameContent
             }
         }
 
+        var baseOverrides = new List<(string Path, string PackId)>();
         foreach (var pack in Packs.Ordered)
         {
             var declared = new HashSet<string>(pack.Manifest.Overrides.Select(PackContentPaths.ResourceKey), StringComparer.Ordinal);
@@ -822,12 +857,17 @@ public sealed partial class GameContent
                     (name is not null && archivedSkins.ContainsKey(name));
                 var existsOnDisk = DiskPath(key) is not null;
 
-                if ((existsInArchive || existsOnDisk) && !declared.Contains(key))
+                if (existsInArchive || existsOnDisk)
                 {
-                    throw new ContentError($"Pack {pack.Manifest.Id} replaces a base resource without declaring an override: {key}");
+                    if (!preserveOrderAndAllowOverrides && !declared.Contains(key))
+                    {
+                        throw new ContentError($"Pack {pack.Manifest.Id} replaces a base resource without declaring an override: {key}");
+                    }
+                    baseOverrides.Add((key, pack.Manifest.Id));
                 }
             }
         }
+        BaseOverriddenResources = baseOverrides;
     }
 
     internal static string? SkinIdentity(string name)

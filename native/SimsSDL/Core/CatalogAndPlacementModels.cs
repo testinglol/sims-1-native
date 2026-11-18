@@ -657,7 +657,7 @@ public static class PlacementTooltip
             maxLineWidth = Math.Max(maxLineWidth, font.TextWidth(lines[i]));
         }
 
-        return CompositeTrimmedBoxHiDpi(labels, font, maxLineWidth, padXLogical: 3, padYLogical: 2);
+        return CompositeTrimmedBoxHiDpi(labels, font, maxLineWidth, padXLogical: 2, padYLogical: 1);
     }
 
     public static SimsBitmapFont.HiDpiRaster RasterizeBoxHiDpi(
@@ -667,7 +667,7 @@ public static class PlacementTooltip
     {
         ArgumentNullException.ThrowIfNull(font);
         var glyphs = font.RasterizeHiDpi(label, textColor, logicalMargin: 0);
-        return CompositeTrimmedBoxHiDpi([glyphs], font, font.TextWidth(label), padXLogical: 3, padYLogical: 2);
+        return CompositeTrimmedBoxHiDpi([glyphs], font, font.TextWidth(label), padXLogical: 2, padYLogical: 1);
     }
 
     private static SimsBitmapFont.HiDpiRaster CompositeTrimmedBoxHiDpi(
@@ -681,10 +681,10 @@ public static class PlacementTooltip
             ? Math.Max(1, lines[0].PixelHeight / lines[0].LogicalHeight)
             : (SimsBitmapFont.SharpTextEnabled ? SimsBitmapFont.HiDpiScale : 1);
 
-        int nominalTopPx = Math.Max(0, (int)MathF.Floor(font.CapTopPx * s));
+        int nominalTopPx = Math.Max(0, (int)MathF.Floor((font.CapTopPx - 0.5f) * s));
         int nominalBotPx = Math.Min(
             font.LineHeight * s,
-            (int)MathF.Ceiling((font.CapBottomPx + Math.Max(1.8f, font.CapInkSpanPx * 0.28f)) * s));
+            (int)MathF.Ceiling((font.CapBottomPx + Math.Max(1.8f, font.CapInkSpanPx * 0.32f)) * s));
         if (nominalBotPx <= nominalTopPx)
         {
             nominalTopPx = 0;
@@ -694,9 +694,16 @@ public static class PlacementTooltip
         int lineStridePx = Math.Max(s, nominalBotPx - nominalTopPx + 2 * s);
         int minInkY = nominalTopPx;
         int maxInkY = nominalBotPx - 1;
+        var lineInkX = new (int MinX, int MaxX)[lines.Length];
+        int maxInkSpanPx = Math.Max(s, maxLineWidth * s);
+        bool anyHorizontalInk = false;
+        int actualMaxSpanPx = 0;
+
         for (int index = 0; index < lines.Length; index++)
         {
             var line = lines[index];
+            int lMinX = int.MaxValue;
+            int lMaxX = -1;
             for (int sy = 0; sy < line.PixelHeight; sy++)
             {
                 bool rowHasInk = false;
@@ -706,7 +713,8 @@ public static class PlacementTooltip
                     if (line.Rgba[rowBase + sx * 4] > 12)
                     {
                         rowHasInk = true;
-                        break;
+                        if (sx < lMinX) lMinX = sx;
+                        if (sx > lMaxX) lMaxX = sx;
                     }
                 }
                 if (!rowHasInk)
@@ -716,12 +724,31 @@ public static class PlacementTooltip
                 if (index == lines.Length - 1 && sy > maxInkY)
                     maxInkY = sy;
             }
+
+            if (lMaxX >= lMinX)
+            {
+                lineInkX[index] = (lMinX, lMaxX);
+                int spanPx = lMaxX - lMinX + 1;
+                if (spanPx > actualMaxSpanPx)
+                    actualMaxSpanPx = spanPx;
+                anyHorizontalInk = true;
+            }
+            else
+            {
+                lineInkX[index] = (0, Math.Max(0, line.PixelWidth - 1));
+            }
         }
 
+        if (anyHorizontalInk)
+            maxInkSpanPx = actualMaxSpanPx;
+
+        int borderPx = Math.Max(1, (s + 1) / 2);
+        int padXPx = Math.Max(s, padXLogical * s) + borderPx;
+        int padYPx = Math.Max(s, padYLogical * s) + borderPx;
         int contentPxH = Math.Max(s, (lines.Length - 1) * lineStridePx + (maxInkY - minInkY + 1));
-        int contentLogicalH = Math.Max(2, (contentPxH + s - 1) / s);
-        int logicalW = Math.Max(6, maxLineWidth + (padXLogical + 1) * 2);
-        int logicalH = Math.Max(4, contentLogicalH + (padYLogical + 1) * 2);
+
+        int logicalW = Math.Max(6, (maxInkSpanPx + padXPx * 2 + s - 1) / s);
+        int logicalH = Math.Max(4, (contentPxH + padYPx * 2 + s - 1) / s);
         int pixelW = logicalW * s;
         int pixelH = logicalH * s;
         byte[] pixels = new byte[pixelW * pixelH * 4];
@@ -738,7 +765,7 @@ public static class PlacementTooltip
         {
             for (int x = 0; x < pixelW; x++)
             {
-                if (x < s || y < s || x >= pixelW - s || y >= pixelH - s)
+                if (x < borderPx || y < borderPx || x >= pixelW - borderPx || y >= pixelH - borderPx)
                 {
                     int off = (y * pixelW + x) * 4;
                     pixels[off] = 0;
@@ -748,22 +775,26 @@ public static class PlacementTooltip
             }
         }
 
-        int dstX0 = (1 + padXLogical) * s;
-        int innerH = pixelH - 2 * s;
-        int startY = s + Math.Max(0, (innerH - contentPxH) / 2);
+        int innerW = pixelW - borderPx * 2;
+        int innerH = pixelH - borderPx * 2;
+        int startY = borderPx + Math.Max(0, (innerH - contentPxH) / 2);
+        int dstBlockX0 = borderPx + Math.Max(0, (innerW - maxInkSpanPx) / 2);
+
         for (int index = 0; index < lines.Length; index++)
         {
             var line = lines[index];
+            var (lMinX, _) = lineInkX[index];
+            int dstX0 = dstBlockX0 - lMinX;
             int dstY0 = startY + index * lineStridePx - minInkY;
             for (int sy = 0; sy < line.PixelHeight; sy++)
             {
                 int dy = dstY0 + sy;
-                if (dy < s || dy >= pixelH - s)
+                if (dy < borderPx || dy >= pixelH - borderPx)
                     continue;
                 for (int sx = 0; sx < line.PixelWidth; sx++)
                 {
                     int dx = dstX0 + sx;
-                    if (dx < s || dx >= pixelW - s)
+                    if (dx < borderPx || dx >= pixelW - borderPx)
                         continue;
 
                     int src = (sy * line.PixelWidth + sx) * 4;

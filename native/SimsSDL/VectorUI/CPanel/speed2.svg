@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 150">
+  <path data-role="shadow" fill="#001156" fill-rule="evenodd" d="M 192.50 93.88 L 91.82 50.00 L 91.37 72.11 L 40.24 50.23 L 40.00 137.00 L 91.51 115.52 L 91.61 136.97 L 192.50 93.88 Z"/>
+  <path data-role="fg" fill="#BDC1D2" fill-rule="evenodd" d="M 172.50 73.88 L 71.82 30.00 L 71.37 52.11 L 20.24 30.23 L 20.00 117.00 L 71.51 95.52 L 71.61 116.97 L 172.50 73.88 Z"/>
+</svg>

@@ -21,23 +21,21 @@ public sealed class OriginalPluginPanelOverlay
         }
     }
 
-    private static readonly (byte R, byte G, byte B) NormalTextColor = (195, 205, 205);
-    private static readonly (byte R, byte G, byte B) HoverTextColor = (255, 255, 255);
+    private static readonly (byte R, byte G, byte B) TitleTextColor = SimsVectorUiKit.TextTitle;
+    private static readonly (byte R, byte G, byte B) NormalTextColor = SimsVectorUiKit.TextNormal;
+    private static readonly (byte R, byte G, byte B) HoverTextColor = SimsVectorUiKit.TextHover;
 
     private readonly SimsBitmapFont _font;
     private readonly UIDevice _device;
-    private readonly OriginalGameplayOverlay.Image _frame;
-    private readonly double _frameEdge;
-    private readonly OriginalGameplayOverlay.Image _body;
-    private readonly OriginalGameplayOverlay.Image _button;
-    private readonly float _buttonSheetWidth;
-    private readonly double _buttonCapWidth;
+    private readonly OriginalGameplayOverlay.Image _panelFrame;
     private readonly OriginalGameplayOverlay.Image _meter;
     private readonly OriginalGameplayOverlay.Image _title;
     private readonly string _closeLabel;
     private readonly OriginalGameplayOverlay.Image _close;
     private readonly OriginalGameplayOverlay.Image _closeHover;
     private readonly Dictionary<string, OriginalGameplayOverlay.Image> _images = new(StringComparer.Ordinal);
+    private readonly Dictionary<(int W, int H, int Scale), OriginalGameplayOverlay.Image> _wellCache = new();
+    private readonly Dictionary<(int W, int H, int Scale), OriginalGameplayOverlay.Image> _buttonCache = new();
     private readonly Dictionary<string, OriginalGameplayOverlay.Image[]> _textCache = new(StringComparer.Ordinal);
     private readonly Dictionary<string, (OriginalGameplayOverlay.Image Normal, OriginalGameplayOverlay.Image Hover)> _buttonLabelCache = new(StringComparer.Ordinal);
     private Dictionary<string, string> _values = new(StringComparer.Ordinal);
@@ -85,16 +83,14 @@ public sealed class OriginalPluginPanelOverlay
             return OriginalGameplayOverlay.CreateImage(device, bitmap.Width, bitmap.Height, bitmap.Rgba, magenta: transparent);
         }
 
-        var popup = new SimsBitmap(content.Read("UIGraphics/CPanel/Backgrounds/PopupInfoTiles.bmp"));
-        _frame = OriginalGameplayOverlay.CreateImage(device, popup.Width, popup.Height, popup.Rgba, magenta: false);
-        _frameEdge = popup.Width / 3.0;
-        _body = Upload("UIGraphics/Shared/Dlg/LBoxTile.bmp");
-        var winBtnBitmap = new SimsBitmap(content.Read("UIGraphics/Shared/Sys/WinBtn.bmp"));
-        _button = OriginalGameplayOverlay.CreateImage(device, winBtnBitmap.Width, winBtnBitmap.Height, winBtnBitmap.Rgba, magenta: true);
-        _buttonSheetWidth = Math.Max(1, winBtnBitmap.Width);
-        _buttonCapWidth = (winBtnBitmap.Width / 4 - 1) / 2.0;
+        int uiScale = SimsVectorUiKit.CurrentScale();
+        var frameImg = SimsVectorUiKit.RenderPopupInfoFrame(
+            Math.Max(16, (int)Math.Round((double)description.Frame.Width)),
+            Math.Max(16, (int)Math.Round((double)description.Frame.Height)),
+            uiScale);
+        _panelFrame = OriginalGameplayOverlay.CreateImage(device, frameImg.PixelWidth, frameImg.PixelHeight, frameImg.Rgba, frameImg.LogicalSize);
         _meter = Upload("UIGraphics/cpanel/Buttons/optslideroff.bmp", transparent: true);
-        _title = OriginalGameplayOverlay.Text(description.Title, loadedTitleFont, device, NormalTextColor);
+        _title = OriginalGameplayOverlay.Text(description.Title, loadedTitleFont, device, TitleTextColor);
         _close = OriginalGameplayOverlay.Text(closeLabel, loadedButtonFont, device, NormalTextColor);
         _closeHover = OriginalGameplayOverlay.Text(closeLabel, loadedButtonFont, device, HoverTextColor);
 
@@ -232,22 +228,7 @@ public sealed class OriginalPluginPanelOverlay
 
         if (Description.Framed ?? true)
         {
-            double panelMinX = panel.X;
-            double panelMinY = panel.Y;
-            double panelMaxX = panel.X + panel.Width;
-            double panelMaxY = panel.Y + panel.Height;
-            double[] xs = [panelMinX, panelMinX + _frameEdge, panelMaxX - _frameEdge, panelMaxX];
-            double[] ys = [panelMinY, panelMinY + _frameEdge, panelMaxY - _frameEdge, panelMaxY];
-            for (int row = 0; row < 3; row++)
-            {
-                for (int column = 0; column < 3; column++)
-                {
-                    items.Add(new DrawItem(
-                        _frame,
-                        new CGRect(xs[column], ys[row], xs[column + 1] - xs[column], ys[row + 1] - ys[row]),
-                        new Vector4(column / 3f, row / 3f, 1f / 3f, 1f / 3f)));
-                }
-            }
+            items.Add(new DrawItem(_panelFrame, panel, whole));
 
             items.Add(new DrawItem(
                 _title,
@@ -283,21 +264,21 @@ public sealed class OriginalPluginPanelOverlay
                 }
                 case PanelDescription.Kind.List:
                 {
-                    items.Add(new DrawItem(_body, area, whole));
-                    var wrapped = Lines(Description.DisplayText(element, _values), (int)area.Width - 8);
+                    items.Add(new DrawItem(WellImage((int)Math.Round(area.Width), (int)Math.Round(area.Height)), area, whole));
+                    var wrapped = Lines(Description.DisplayText(element, _values), (int)area.Width - 14);
                     for (int index = 0; index < wrapped.Length; index++)
                     {
                         var line = wrapped[index];
-                        double y = area.Y + 2.0 + index * _font.LineHeight;
-                        if (y + _font.LineHeight > area.Y + area.Height)
+                        double y = area.Y + 6.0 + index * _font.LineHeight;
+                        if (y + _font.LineHeight > area.Y + area.Height - 4.0)
                         {
                             break;
                         }
 
                         items.Add(new DrawItem(
                             line,
-                            new CGRect(area.X + 4.0, y, Math.Min(line.Size.Width, area.Width - 8.0), line.Size.Height),
-                            new Vector4(0f, 0f, (float)Math.Min(1.0, (area.Width - 8.0) / Math.Max(1.0, line.Size.Width)), 1f)));
+                            new CGRect(area.X + 7.0, y, Math.Min(line.Size.Width, area.Width - 14.0), line.Size.Height),
+                            new Vector4(0f, 0f, (float)Math.Min(1.0, (area.Width - 14.0) / Math.Max(1.0, line.Size.Width)), 1f)));
                     }
                     break;
                 }
@@ -472,31 +453,40 @@ public sealed class OriginalPluginPanelOverlay
         }
     }
 
+    private OriginalGameplayOverlay.Image WellImage(int width, int height)
+    {
+        int w = Math.Max(16, width);
+        int h = Math.Max(16, height);
+        int scale = SimsVectorUiKit.CurrentScale();
+        var key = (w, h, scale);
+        if (_wellCache.TryGetValue(key, out var cached))
+            return cached;
+
+        var img = SimsVectorUiKit.RenderRecessedWell(w, h, cornerR: 6f, scale: scale);
+        var created = OriginalGameplayOverlay.CreateImage(_device, img.PixelWidth, img.PixelHeight, img.Rgba, img.LogicalSize);
+        if (_wellCache.Count > 64) _wellCache.Clear();
+        _wellCache[key] = created;
+        return created;
+    }
+
     private void AppendTileButton(CGRect bounds, int frameIndex, List<DrawItem> items)
     {
-        float framePx = _buttonSheetWidth / 4f;
-        float basePx = frameIndex * framePx;
-        float capPx = (float)_buttonCapWidth;
-        double capW = Math.Min(_buttonCapWidth, Math.Floor(bounds.Width / 2.0));
-        double midW = Math.Max(0.0, bounds.Width - capW * 2.0);
-
-        items.Add(new DrawItem(
-            _button,
-            new CGRect(bounds.X, bounds.Y, capW, bounds.Height),
-            new Vector4(basePx / _buttonSheetWidth, 0f, capPx / _buttonSheetWidth, 1f)));
-
-        if (midW > 0.0)
+        int w = Math.Max(24, (int)Math.Round(bounds.Width));
+        int h = Math.Max(18, (int)Math.Round(bounds.Height));
+        int scale = SimsVectorUiKit.CurrentScale();
+        var key = (w, h, scale);
+        if (!_buttonCache.TryGetValue(key, out var strip))
         {
-            items.Add(new DrawItem(
-                _button,
-                new CGRect(bounds.X + capW, bounds.Y, midW, bounds.Height),
-                new Vector4((basePx + capPx) / _buttonSheetWidth, 0f, Math.Max(1f, framePx - capPx * 2f) / _buttonSheetWidth, 1f)));
+            var rendered = SimsVectorUiKit.RenderSlantedButtonStrip(w, h, highlighted: false, scale: scale);
+            strip = OriginalGameplayOverlay.CreateImage(_device, rendered.PixelWidth, rendered.PixelHeight, rendered.Rgba, rendered.LogicalSize);
+            if (_buttonCache.Count > 64) _buttonCache.Clear();
+            _buttonCache[key] = strip;
         }
 
         items.Add(new DrawItem(
-            _button,
-            new CGRect(bounds.X + bounds.Width - capW, bounds.Y, capW, bounds.Height),
-            new Vector4((basePx + framePx - capPx) / _buttonSheetWidth, 0f, capPx / _buttonSheetWidth, 1f)));
+            strip,
+            bounds,
+            new Vector4(Math.Clamp(frameIndex, 0, 3) * 0.25f, 0f, 0.25f, 1f)));
     }
 
     private static SimsBitmapFont? TryLoadFont(GameContent content, string path)

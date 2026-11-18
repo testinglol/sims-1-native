@@ -73,7 +73,7 @@ internal sealed class InputScript
     {
         "lot", "album", "illustrated", "scene", "menu", "head", "panel", "dialog", "nodialog", "quiet",
         "neighborhood", "picker", "creation", "preview", "popup", "catalog", "placement", "cursor",
-        "built", "canundo", "canredo", "idle", "freewill"
+        "built", "canundo", "canredo", "idle", "freewill", "winter-clothes", "everyday-clothes"
     };
 
     private static readonly HashSet<string> AllowedHoldKeys = new(StringComparer.Ordinal)
@@ -928,6 +928,8 @@ internal sealed class InputScript
             case "canredo": return live.Ui.Gameplay.State?.CanRedo == true;
             case "idle": return live.ScriptSimIdle;
             case "freewill": return live.ScriptFreeWill == true;
+            case "winter-clothes": return live.ScriptSimWinterClothes == true;
+            case "everyday-clothes": return live.ScriptSimWinterClothes == false;
             case "quiet":
                 // Startup letters queue minutes apart; game clock must advance between them.
                 if (live.Ui.GameDialog is not null || _frame - _lastDialogFrame < 30) return false;

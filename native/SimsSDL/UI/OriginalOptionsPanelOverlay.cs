@@ -172,6 +172,7 @@ public sealed class OriginalOptionsPanelOverlay
     private readonly OriginalGameplayOverlay.Image _universal;
     private readonly OriginalGameplayOverlay.Image _patch;
     private readonly Dictionary<Button, OriginalGameplayOverlay.Image> _buttons = new();
+    private readonly Dictionary<Button, OriginalGameplayOverlay.Image> _vectorButtons = new();
     private readonly Dictionary<Button, CGPoint> _positions = new();
 
     private PlayOptionsState _playOptions = new();
@@ -260,6 +261,10 @@ public sealed class OriginalOptionsPanelOverlay
         {
             var image = Bitmap(button.Asset());
             _buttons[button] = image;
+            int bw = Math.Max(1, (int)Math.Round(image.Size.Width / 4.0));
+            int bh = Math.Max(1, (int)Math.Round(image.Size.Height));
+            if (SimsVectorUiKit.TryRenderOptionsButtonStrip(button, bw, bh, scale: 4) is { } vecOpt)
+                _vectorButtons[button] = SimsVectorUiKit.ToOverlayImage(vecOpt);
             var pos = button == Button.ResetTutorial
                 ? null
                 : OriginalUIStrings.Point(strings.OptionString(button.StringIndex(), string.Empty));
@@ -908,7 +913,10 @@ public sealed class OriginalOptionsPanelOverlay
         foreach (var button in AllButtons)
         {
             if (button == Button.ResetTutorial || !IsShown(button)) continue;
-            if (!_buttons.TryGetValue(button, out var image)) continue;
+            if (!_buttons.TryGetValue(button, out var baseImage)) continue;
+            var image = SimsBitmapFont.SharpTextEnabled && _vectorButtons.TryGetValue(button, out var vecImage)
+                ? vecImage
+                : baseImage;
             var selected = (button == Button.Sound && CurrentPage == Page.Sound) ||
                 (button == Button.Graphics && CurrentPage == Page.Graphics) ||
                 (button == Button.Play && CurrentPage == Page.Play);

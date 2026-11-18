@@ -373,11 +373,46 @@ public sealed class ObjectRegistry
             }
         }
 
-        void Walk(ObjectScan scan, string folder)
+        HashSet<string>? disabledDownloads = null;
+        string disabledMarkerPath = Path.Combine(game, ".disabled-downloads.txt");
+        if (File.Exists(disabledMarkerPath))
+        {
+            try
+            {
+                disabledDownloads = new HashSet<string>(
+                    File.ReadAllLines(disabledMarkerPath)
+                        .Select(static s => s.Trim())
+                        .Where(static s => s.Length > 0),
+                    StringComparer.OrdinalIgnoreCase);
+            }
+            catch
+            {
+            }
+        }
+        if (Environment.GetEnvironmentVariable("SIMS_DISABLED_DOWNLOADS") is { Length: > 0 } envDisabled)
+        {
+            disabledDownloads ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string token in envDisabled.Split([';', '\n', '\r'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                disabledDownloads.Add(token);
+        }
+
+        void Walk(ObjectScan scan, string folder, string? downloadsTopRoot = null)
         {
             foreach (var path in Directory.EnumerateFileSystemEntries(folder).Order(StringComparer.OrdinalIgnoreCase))
             {
-                if (Directory.Exists(path)) { Walk(scan, path); continue; }
+                if (Directory.Exists(path))
+                {
+                    if (scan == ObjectScan.Downloads
+                        && downloadsTopRoot is not null
+                        && string.Equals(folder, downloadsTopRoot, StringComparison.OrdinalIgnoreCase)
+                        && disabledDownloads is not null
+                        && disabledDownloads.Contains(Path.GetFileName(path)))
+                    {
+                        continue;
+                    }
+                    Walk(scan, path, downloadsTopRoot);
+                    continue;
+                }
                 if (path.EndsWith(".iff", StringComparison.OrdinalIgnoreCase)) Register(scan, path, File.ReadAllBytes(path));
                 else if (path.EndsWith(".far", StringComparison.OrdinalIgnoreCase))
                 {
@@ -451,7 +486,7 @@ public sealed class ObjectRegistry
             if (Resolve(game, "Downloads") is { } downloadFolder)
             {
                 folders.Add((ObjectScan.Downloads, downloadFolder));
-                Walk(ObjectScan.Downloads, downloadFolder);
+                Walk(ObjectScan.Downloads, downloadFolder, downloadFolder);
             }
             else if (File.Exists(Path.Combine(game, "Downloads.far")))
             {

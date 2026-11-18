@@ -57,6 +57,17 @@ public interface ISimsPlugin
     /// </summary>
     bool AllowInteraction(short simId, PluginObject target, PluginInteraction interaction) => true;
 
+    /// <summary>
+    /// API version 4: extra pie menu entries when clicking terrain/ground while a household Sim is selected.
+    /// Return at most 8 entries. A "/" in a name opens a submenu.
+    /// </summary>
+    IEnumerable<PluginMenuEntry> GetGroundMenuEntries(short simId, PluginGroundPoint point) => [];
+
+    /// <summary>
+    /// API version 4: the player chose one of this plugin's ground pie menu entries.
+    /// </summary>
+    void OnGroundMenuEntry(short simId, PluginGroundPoint point, string entryId) { }
+
     /// <summary>Returns opaque plugin state to store under the pack's namespace in a native save, or null for none.</summary>
     byte[]? SaveState() => null;
 
@@ -129,6 +140,18 @@ public interface IPluginContext
     /// <summary>API3: stops a loop started with the same cue on the same object.</summary>
     void StopSoundResource(short ownerObjectId, string cue) => throw new NotSupportedException("Pack sound resources need API 3");
 
+    /// <summary>API4: attempts to place a pack-owned object near the specified tile, returning its lead ObjectId or null if obstructed.</summary>
+    short? TryPlaceOwnedObject(uint guid, int tileX, int tileY, int level = 1, short direction = 0, short? clearForSimId = null) =>
+        throw new NotSupportedException("Pack object placement needs API 4");
+
+    /// <summary>API4: removes a pack-owned object previously placed on the lot if idle.</summary>
+    bool TryRemoveOwnedObject(short objectId) =>
+        throw new NotSupportedException("Pack object removal needs API 4");
+
+    /// <summary>API4: sets or clears a transient per-Sim outdoor suit override (e.g. winterwear 17, or null to restore automatic).</summary>
+    void SetSimSuitOverride(short simId, int? suitCategory) =>
+        throw new NotSupportedException("Suit overrides need API 4");
+
     /// <summary>Writes a diagnostic line to the simulation log.</summary>
     void Log(string message);
 }
@@ -138,7 +161,12 @@ public sealed record PluginSim(short ObjectId, short NeighborId, string Name, bo
 {
     /// <summary>The Sim's currently playing clip name when the host can report it.</summary>
     public string? Animation { get; init; }
+    /// <summary>True while the Sim is wearing transient outdoor clothing (such as winter outerwear).</summary>
+    public bool WearingOutdoorSuit { get; init; }
 }
+
+/// <summary>World tile descriptor passed to plugin ground pie-menu hooks.</summary>
+public sealed record PluginGroundPoint(int TileX, int TileY, int Level, bool BareTerrain, bool Outside, bool Sheltered);
 
 /// <summary>
 /// An object on the lot (API version 2). <paramref name="X"/> and <paramref name="Y"/> are tile coordinates; a
@@ -291,7 +319,11 @@ public sealed record PluginActor(int Id, float X, float Y, int Level, bool Pet, 
     public bool Outside { get; init; }
     /// <summary>True beneath a solid upper floor or generated roof, regardless of camera visibility. Older hosts report false.</summary>
     public bool Sheltered { get; init; }
+    /// <summary>True while the Sim is wearing transient outdoor clothing.</summary>
+    public bool WearingOutdoorSuit { get; init; }
 }
+/// <summary>Looping lot-wide ambient sound bed requested by an environment provider.</summary>
+public sealed record PluginAmbientSound(string Cue, string Resource, float Gain);
 /// <summary>Simulation clock and actor snapshot passed to <see cref="IPluginEnvironmentProvider.GetEnvironment"/>.</summary>
 public sealed record PluginEnvironmentClock(int House, int MapMode, int Month, int DayOfMonth, int Minutes, PluginActor[] Actors);
 /// <summary>A single rendered footprint marker produced by an environment provider.</summary>
@@ -338,4 +370,6 @@ public sealed record PluginEnvironment
     public Dictionary<string, string> Shaders { get; init; } = [];
     /// <summary>Scalar uniform overrides passed to environment shaders.</summary>
     public Dictionary<string, float> Parameters { get; init; } = [];
+    /// <summary>Looping lot-wide environmental ambient sound beds managed by the pack.</summary>
+    public PluginAmbientSound[] AmbientSounds { get; init; } = [];
 }

@@ -785,36 +785,65 @@ public sealed class SimsBitmapFont
 
         bool TryMeasureVerticalInk(Glyph g, out float span, out float bottom)
         {
-            float rowSum = 0f;
-            float weightedY = 0f;
-            for (int ry = 0; ry < g.Height; ry++)
-            {
-                float rowMax = 0f;
-                int rowBase = (g.Y + ry) * Width + g.X;
-                for (int rx = 0; rx < g.Width; rx++)
-                {
-                    float cov = Coverage[rowBase + rx] * (1f / 255f);
-                    if (cov > rowMax)
-                        rowMax = cov;
-                }
-                if (rowMax > 0.02f)
-                {
-                    rowSum += rowMax;
-                    weightedY += (g.OffsetY + ry + 0.5f) * rowMax;
-                }
-            }
-
-            if (rowSum <= 0.25f)
+            if (g.Height <= 0 || g.Width <= 0)
             {
                 span = 0f;
                 bottom = 0f;
                 return false;
             }
 
-            float centroidY = weightedY / rowSum;
-            span = rowSum;
-            bottom = centroidY + 0.5f * span;
-            return span > 0f;
+            float[] rowMax = new float[g.Height];
+            float peak = 0f;
+            for (int ry = 0; ry < g.Height; ry++)
+            {
+                float rm = 0f;
+                int rowBase = (g.Y + ry) * Width + g.X;
+                for (int rx = 0; rx < g.Width; rx++)
+                {
+                    float cov = Coverage[rowBase + rx] * (1f / 255f);
+                    if (cov > rm)
+                        rm = cov;
+                }
+                rowMax[ry] = rm;
+                if (rm > peak)
+                    peak = rm;
+            }
+
+            if (peak <= 0.10f)
+            {
+                span = 0f;
+                bottom = 0f;
+                return false;
+            }
+
+            // Measure true sub-pixel 50%-of-peak optical cap span (avoids nibble-peak < 1.0 shrinkage on 7pt/8pt
+            // while matching exact 1x cap stroke bounds without overshooting LineHeight).
+            float halfPeak = 0.50f * peak;
+            int first = -1, last = -1;
+            for (int ry = 0; ry < g.Height; ry++)
+            {
+                if (rowMax[ry] >= halfPeak)
+                {
+                    if (first < 0)
+                        first = ry;
+                    last = ry;
+                }
+            }
+
+            if (first < 0)
+            {
+                span = 0f;
+                bottom = 0f;
+                return false;
+            }
+
+            float prevCov = first > 0 ? rowMax[first - 1] : 0f;
+            float yTop = g.OffsetY + first + (rowMax[first] > prevCov + 1e-4f ? (halfPeak - rowMax[first]) / (rowMax[first] - prevCov) : 0f);
+            float nextCov = last + 1 < g.Height ? rowMax[last + 1] : 0f;
+            float yBot = g.OffsetY + last + 1f - (rowMax[last] > nextCov + 1e-4f ? (halfPeak - rowMax[last]) / (rowMax[last] - nextCov) : 0f);
+            span = MathF.Max(2f, yBot - yTop);
+            bottom = yBot;
+            return true;
         }
 
         float capSpanSum = 0f;
@@ -830,7 +859,10 @@ public sealed class SimsBitmapFont
             }
         }
         _capInkSpanPx = capCount > 0 ? Math.Max(3f, capSpanSum / capCount) : Math.Max(3f, LineHeight * 0.50f);
-        _capBottomPx = capCount > 0 ? Math.Max(3f, capBottomSum / capCount) : Math.Max(3f, LineHeight * 0.76f);
+        float rawCapBottom = capCount > 0 ? Math.Max(3f, capBottomSum / capCount) : Math.Max(3f, LineHeight * 0.74f);
+        // Guarantee full vertical room below baseline inside LineHeight so 'g', 'y', 'p', 'q', 'j' descenders never clip at logicalMargin=0!
+        float maxSafeCapBottom = MathF.Max(3f, LineHeight - MathF.Max(2.2f, _capInkSpanPx * 0.34f));
+        _capBottomPx = MathF.Min(rawCapBottom, maxSafeCapBottom);
 
         float stemWidth = 0f;
         if (normalized.TryGetValue((ushort)'L', out Glyph lGlyph) && lGlyph.Width > 0 && lGlyph.Height > 0)
@@ -959,13 +991,72 @@ public sealed class SimsBitmapFont
         return ResolveGlyph(character)?.Advance ?? SpaceAdvance;
     }
 
-    public int TextWidth(string text)
+    private TrueTypeFont? ActiveTrueTypeFont =>
+        _bold ? TrueTypeFont.DefaultBold : TrueTypeFont.DefaultRegular;
+
+    private int BitmapTextWidth(string text)
     {
-        ArgumentNullException.ThrowIfNull(text);
         int total = 0;
         foreach (char ch in text)
             total += Advance(ch);
         return total;
+    }
+
+    private (float TotalPx, float LeadPadPx) MeasureTrueTypePixels(string text, TrueTypeFont ttf)
+    {
+        if (text.Length == 0)
+            return (0f, 0f);
+
+        float pxPerUnit = (_capInkSpanPx * HiDpiScale) / Math.Max(1f, ttf.CapInkSpanUnits);
+        float leadPadPx = 0f;
+        if (text[0] != ' ' && ttf.HorizontalInkBounds(text[0]) is var (firstLeftU, _) && firstLeftU < 0f)
+            leadPadPx = -firstLeftU * pxPerUnit;
+
+        float cursorPx = leadPadPx;
+        float maxRightPx = 0f;
+        uint prevCode = 0;
+        foreach (char ch in text)
+        {
+            uint code = ch;
+            if (prevCode != 0 && ttf.HasGlyph(prevCode) && ttf.HasGlyph(code))
+                cursorPx += ttf.GetKerningUnits(prevCode, code) * pxPerUnit;
+
+            if (ch == ' ')
+            {
+                cursorPx += ttf.AdvanceWidthUnits(' ') * pxPerUnit;
+                maxRightPx = MathF.Max(maxRightPx, cursorPx);
+            }
+            else if (ttf.HorizontalInkBounds(code) is var (_, rightU))
+            {
+                maxRightPx = MathF.Max(maxRightPx, cursorPx + rightU * pxPerUnit);
+                cursorPx += ttf.AdvanceWidthUnits(code) * pxPerUnit;
+                maxRightPx = MathF.Max(maxRightPx, cursorPx);
+            }
+            else
+            {
+                cursorPx += Advance((ushort)ch) * HiDpiScale;
+                maxRightPx = MathF.Max(maxRightPx, cursorPx);
+            }
+
+            prevCode = code;
+        }
+
+        return (MathF.Max(cursorPx, maxRightPx), leadPadPx);
+    }
+
+    public int TextWidth(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        if (text.Length == 0)
+            return 0;
+
+        if (SharpTextEnabled && ActiveTrueTypeFont is { } ttf)
+        {
+            var (totalPx, _) = MeasureTrueTypePixels(text, ttf);
+            return Math.Max(1, (int)MathF.Ceiling(totalPx / HiDpiScale));
+        }
+
+        return BitmapTextWidth(text);
     }
 
     private static readonly char[] WordSeparators = [' ', '\t'];
@@ -1030,7 +1121,7 @@ public sealed class SimsBitmapFont
             throw new ContentError("Invalid bitmap font label");
         ArgumentOutOfRangeException.ThrowIfNegative(margin);
 
-        int width = Math.Max(1, TextWidth(text) + 2 * margin);
+        int width = Math.Max(1, BitmapTextWidth(text) + 2 * margin);
         int height = LineHeight + 2 * margin;
         if (width > 8192 || height <= 0 || height > 1024)
             throw new ContentError("Bitmap font label exceeds size limits");
@@ -1085,7 +1176,11 @@ public sealed class SimsBitmapFont
             return new HiDpiRaster(classic.Width, classic.Height, classic.Width, classic.Height, classic.Rgba);
         }
 
-        int logicalW = Math.Max(1, TextWidth(text) + 2 * logicalMargin);
+        TrueTypeFont? ttf = ActiveTrueTypeFont;
+        int baseTextW = ttf is not null
+            ? (text.Length == 0 ? 0 : Math.Max(1, (int)MathF.Ceiling(MeasureTrueTypePixels(text, ttf).TotalPx / HiDpiScale)))
+            : BitmapTextWidth(text);
+        int logicalW = Math.Max(1, baseTextW + 2 * logicalMargin);
         int logicalH = Math.Max(1, LineHeight + 2 * logicalMargin);
         int pixelW = logicalW * HiDpiScale;
         int pixelH = logicalH * HiDpiScale;
@@ -1093,46 +1188,46 @@ public sealed class SimsBitmapFont
             throw new ContentError("Bitmap font label exceeds size limits");
 
         byte[] output = new byte[pixelW * pixelH * 4];
-        TrueTypeFont? ttf = _bold ? TrueTypeFont.DefaultBold : TrueTypeFont.DefaultRegular;
         if (ttf is not null)
         {
             float pxPerUnit = (_capInkSpanPx * HiDpiScale) / Math.Max(1f, ttf.CapInkSpanUnits);
             float baselineY = (logicalMargin + _capBottomPx) * HiDpiScale + ttf.CapBottomUnits * pxPerUnit;
-            float lum = (0.2126f * color.R + 0.7152f * color.G + 0.0722f * color.B) / 255f;
-            float ttfStemPx = ttf.StemWidthUnits * pxPerUnit;
-            float targetStemPx = _stemWidthPx * HiDpiScale - (lum > 0.5f ? 0.35f : 0f);
-            float maxSafeErode = Math.Max(0f, 0.5f * (ttfStemPx - 3.1f));
-            float erodePx = Math.Clamp(0.5f * (ttfStemPx - targetStemPx), 0f, Math.Min(0.85f, maxSafeErode));
+            var (_, leadPadPx) = MeasureTrueTypePixels(text, ttf);
+            float cursorPx = logicalMargin * HiDpiScale + leadPadPx;
+            uint prevCode = 0;
 
-            int cursor = logicalMargin;
             foreach (char ch in text)
             {
-                ushort code = ch;
-                if (ch != ' ')
+                uint code = ch;
+                if (prevCode != 0 && ttf.HasGlyph(prevCode) && ttf.HasGlyph(code))
+                    cursorPx += ttf.GetKerningUnits(prevCode, code) * pxPerUnit;
+
+                if (ch == ' ')
                 {
-                    if (ttf.HorizontalInkBounds(ch) is var (leftU, rightU))
-                    {
-                        float cellCenterLogical = TryResolveGlyph(code, out ushort resolvedCode, out _)
-                            && _glyphInkCenterX.TryGetValue(resolvedCode, out float icx)
-                            ? cursor + icx
-                            : cursor + Advance(code) * 0.5f;
-                        float originX = cellCenterLogical * HiDpiScale - 0.5f * (leftU + rightU) * pxPerUnit;
-                        ttf.RenderGlyph(ch, originX, baselineY, pxPerUnit, color, output, pixelW, pixelH, erodePx);
-                    }
-                    else if (ResolveGlyph(code) is Glyph fallbackGlyph)
-                    {
-                        BlitUpsampledBitmapGlyph(
-                            fallbackGlyph,
-                            (cursor + fallbackGlyph.OffsetX) * HiDpiScale,
-                            (logicalMargin + fallbackGlyph.OffsetY) * HiDpiScale,
-                            color,
-                            output,
-                            pixelW,
-                            pixelH);
-                    }
+                    cursorPx += ttf.AdvanceWidthUnits(' ') * pxPerUnit;
+                }
+                else if (ttf.HasGlyph(code))
+                {
+                    cursorPx += ttf.RenderGlyph(ch, cursorPx, baselineY, pxPerUnit, color, output, pixelW, pixelH, erodePx: 0f);
+                }
+                else if (ResolveGlyph((ushort)ch) is Glyph fallbackGlyph)
+                {
+                    BlitUpsampledBitmapGlyph(
+                        fallbackGlyph,
+                        (int)MathF.Round(cursorPx) + fallbackGlyph.OffsetX * HiDpiScale,
+                        (logicalMargin + fallbackGlyph.OffsetY) * HiDpiScale,
+                        color,
+                        output,
+                        pixelW,
+                        pixelH);
+                    cursorPx += Advance((ushort)ch) * HiDpiScale;
+                }
+                else
+                {
+                    cursorPx += Advance((ushort)ch) * HiDpiScale;
                 }
 
-                cursor += Advance(code);
+                prevCode = code;
             }
         }
         else

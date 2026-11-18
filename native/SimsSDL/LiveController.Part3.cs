@@ -121,6 +121,12 @@ internal sealed partial class LiveController
             return;
         }
 
+        if (!HasBlockingDialog && Ui.ModsOverlay is { } modsWheelOverlay)
+        {
+            modsWheelOverlay.ScrollWheel(notches);
+            return;
+        }
+
         if (!HasBlockingDialog && Ui.FamilyPicker is { } familyPicker)
         {
             familyPicker.Scroll(notches > 0f ? -1 : notches < 0f ? 1 : 0);
@@ -954,6 +960,12 @@ internal sealed partial class LiveController
             return;
         }
 
+        if (Ui.GameDialog is null && Ui.ModsOverlay is { EditingOrderNumber: true } modsTextOverlay)
+        {
+            modsTextOverlay.TextInput(text);
+            return;
+        }
+
         if (Ui.GameDialog is null && Ui.HouseholdCreation is { } creation)
         {
             var weakSelf = new WeakReference<LiveController>(this);
@@ -992,6 +1004,7 @@ internal sealed partial class LiveController
 
     public bool AcceptsText =>
         (Ui.Album.Visible && Ui.Album.EditingCaption)
+        || (Ui.ModsOverlay?.EditingOrderNumber == true)
         || Ui.HouseholdCreation is not null
         || (Ui.GameDialog?.AcceptsTextInput == true
             && !string.Equals(_localDialogToken, Ui.GameDialog?.Dialog.Token, StringComparison.Ordinal));

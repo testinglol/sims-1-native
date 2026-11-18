@@ -23,7 +23,8 @@ public enum BannerAction
     Rezone,
     StudioTown,
     MagicTown,
-    ReturnHome
+    ReturnHome,
+    Mods
 }
 
 public static class BannerActionExtensions
@@ -40,6 +41,7 @@ public static class BannerActionExtensions
         var list = new List<BannerAction>
         {
             BannerAction.ReturnHome,
+            BannerAction.Mods,
             BannerAction.Internet,
             BannerAction.SimsLogo,
             BannerAction.ImportFamily,
@@ -50,12 +52,64 @@ public static class BannerActionExtensions
         return list;
     }
 
+    public static string? VectorSvgStem(this BannerAction action) => action switch
+    {
+        BannerAction.SelectFamily => "movein",
+        BannerAction.Bulldoze => "bulldoze",
+        BannerAction.Quit => "exit",
+        BannerAction.Internet => "inetbtn",
+        BannerAction.Mods => "mods",
+        BannerAction.Previous => "previous",
+        BannerAction.Next => "next",
+        BannerAction.ImportFamily => "import",
+        BannerAction.Downtown => "downtown",
+        BannerAction.SimsLogo => "thesimslogo",
+        BannerAction.Vacation => "vacation",
+        BannerAction.Rezone => "rezone",
+        BannerAction.StudioTown => "studiotown",
+        BannerAction.MagicTown => "magicland",
+        BannerAction.ReturnHome => "return",
+        _ => null
+    };
+
+    public static VectorBannerRenderer.ButtonKind VectorButtonKind(this BannerAction action) => action switch
+    {
+        BannerAction.Previous or BannerAction.Next => VectorBannerRenderer.ButtonKind.SmallArrow26,
+        BannerAction.Internet or BannerAction.Mods => VectorBannerRenderer.ButtonKind.InsetRing39,
+        _ => VectorBannerRenderer.ButtonKind.Medallion53
+    };
+
+    public static float RingCenterX1x(this BannerAction action) => action switch
+    {
+        BannerAction.Previous => 12.94f,
+        BannerAction.Next => 13.19f,
+        BannerAction.Internet or BannerAction.Mods => 19.97f,
+        BannerAction.SelectFamily => 24.32f,
+        BannerAction.ImportFamily => 24.56f,
+        BannerAction.Downtown => 24.87f,
+        BannerAction.ReturnHome => 27.14f,
+        BannerAction.Quit => 25.59f,
+        _ => 25.22f
+    };
+
+    public static bool HasLowerCollarBulge(this BannerAction action) =>
+        action is BannerAction.SelectFamily
+            or BannerAction.ImportFamily
+            or BannerAction.Bulldoze
+            or BannerAction.Rezone
+            or BannerAction.Downtown
+            or BannerAction.Vacation
+            or BannerAction.StudioTown
+            or BannerAction.MagicTown
+            or BannerAction.Quit
+            or BannerAction.ReturnHome;
+
     public static string Resource(this BannerAction action, int mapMode) => action switch
     {
         BannerAction.SelectFamily => "UIGraphics/NghUI/MoveIn.bmp",
         BannerAction.Bulldoze => mapMode == 1 ? "UIGraphics/NghUI/Bulldoze.bmp" : "UIGraphics/Downtown/Bulldoze.bmp",
         BannerAction.Quit => "UIGraphics/NghUI/Exit.bmp",
-        BannerAction.Internet => "UIGraphics/NghUI/InetBtn.bmp",
+        BannerAction.Internet or BannerAction.Mods => "UIGraphics/NghUI/InetBtn.bmp",
         BannerAction.Credits => "UIGraphics/Nbhd/CreditBtn.BMP",
         BannerAction.Previous => "UIGraphics/NghUI/Previous.bmp",
         BannerAction.Next => "UIGraphics/NghUI/Next.bmp",
@@ -82,6 +136,7 @@ public static class BannerActionExtensions
         BannerAction.SelectFamily => new CGPoint(200, 0),
         BannerAction.Bulldoze => new CGPoint(mapMode == 1 ? 300 : 373, 0),
         BannerAction.Quit => new CGPoint(600, 0),
+        BannerAction.Mods => new CGPoint(724, 1.15),
         BannerAction.Internet => new CGPoint(762, 1.15),
         BannerAction.Credits => new CGPoint(195, 540),
         BannerAction.Previous => new CGPoint(106, 1.85),
@@ -135,10 +190,12 @@ public static class BannerActionExtensions
         "Switch to Magic Town View"
     ];
 
-    public static string FallbackTooltip(this BannerAction action) =>
-        action == BannerAction.ReturnHome
-            ? "Return to Neighborhood View"
-            : FallbackTooltips[action.TooltipIndex()];
+    public static string FallbackTooltip(this BannerAction action) => action switch
+    {
+        BannerAction.ReturnHome => "Return to Neighborhood View",
+        BannerAction.Mods => "Mods & Custom Content",
+        _ => FallbackTooltips[action.TooltipIndex()]
+    };
 
     public static int? MapMode(this BannerAction action) => action switch
     {
@@ -508,6 +565,7 @@ public sealed class OriginalNeighborhoodOverlay
     public OriginalGameplayOverlay.Image Background { get; }
     private readonly OriginalGameplayOverlay.Image _outerFill;
     private readonly OriginalGameplayOverlay.Image? _largeBackground;
+    private readonly ExtendedNeighborhoodBackdrop.Result? _extendedBackground;
     private readonly OriginalGameplayOverlay.Image _frameShadow;
     private readonly OriginalGameplayOverlay.Image _frameHighlight;
     public int Mode { get; }
@@ -536,18 +594,20 @@ public sealed class OriginalNeighborhoodOverlay
     private readonly double _frameDuration;
     private readonly Animation[] _animations;
     private readonly double _startedAt = MonotonicNowSeconds();
+    private readonly GameContent _content;
     private readonly OriginalUIStrings _strings;
     private readonly SimsBitmapFont? _font;
     private readonly SimsBitmapFont? _tooltipFont;
-    private readonly OriginalGameplayOverlay.Image? _neighborhoodNumberImage;
+    private OriginalGameplayOverlay.Image? _neighborhoodNumberImage;
     private readonly OriginalGameplayOverlay.Image? _rolloverBackground;
-    private readonly OriginalGameplayOverlay.Image? _banner;
+    private OriginalGameplayOverlay.Image? _banner;
+    private bool _builtVectorBanner;
     private NeighborhoodLotFilter? _travelFilter;
     private int? _hoveredTravelFilter;
     private readonly OriginalGameplayOverlay.Image? _filterToolbar;
     private readonly List<OriginalGameplayOverlay.Image> _filterButtons = [];
     private readonly Dictionary<int, OriginalGameplayOverlay.Image> _filterMarkers = [];
-    private readonly Dictionary<BannerAction, OriginalGameplayOverlay.Image> _bannerButtons;
+    private Dictionary<BannerAction, OriginalGameplayOverlay.Image> _bannerButtons = [];
     private readonly Dictionary<BannerAction, string> _bannerTooltips;
     private readonly HashSet<BannerAction> _installedBannerActions;
     public BannerAction? HoveredBanner { get; private set; }
@@ -573,6 +633,7 @@ public sealed class OriginalNeighborhoodOverlay
         ArgumentNullException.ThrowIfNull(manifestPath);
         ArgumentNullException.ThrowIfNull(sessionPath);
 
+        _content = content;
         _strings = new OriginalUIStrings(content);
         _font = font;
         SimsBitmapFont? tipFont = font;
@@ -613,38 +674,9 @@ public sealed class OriginalNeighborhoodOverlay
         var manifest = JsonSerializer.Deserialize<Manifest>(manifestData)
             ?? throw new ContentError("Neighborhood manifest decoded to null");
 
-        string? hdUiRoot = SimsBitmapFont.SharpTextEnabled ? SimsAssetPaths.FindHdUiDirectory() : null;
-
-        OriginalGameplayOverlay.Image BannerImage(string path)
+        OriginalGameplayOverlay.Image ClassicBitmapImage(string path)
         {
             var bitmap = new SimsBitmap(content.Read(path));
-            if (hdUiRoot is not null)
-            {
-                string fileStem = Path.GetFileNameWithoutExtension(path).ToLowerInvariant();
-                string hdPath = Path.Combine(hdUiRoot, "NghUI", fileStem + ".png");
-                if (File.Exists(hdPath))
-                {
-                    try
-                    {
-                        byte[] hdBytes = File.ReadAllBytes(hdPath);
-                        var decoded = StbImageSharp.ImageResult.FromMemory(
-                            hdBytes,
-                            StbImageSharp.ColorComponents.RedGreenBlueAlpha);
-                        if (decoded.Width > 0 && decoded.Height > 0 && decoded.Data is not null)
-                        {
-                            return OriginalGameplayOverlay.CreateImage(
-                                device,
-                                decoded.Width,
-                                decoded.Height,
-                                decoded.Data,
-                                new CGSize(bitmap.Width, bitmap.Height));
-                        }
-                    }
-                    catch
-                    {
-                    }
-                }
-            }
             return OriginalGameplayOverlay.CreateImage(device, bitmap.Width, bitmap.Height, bitmap.Rgba, magenta: true);
         }
 
@@ -652,7 +684,7 @@ public sealed class OriginalNeighborhoodOverlay
         {
             try
             {
-                return BannerImage(path);
+                return ClassicBitmapImage(path);
             }
             catch
             {
@@ -687,21 +719,17 @@ public sealed class OriginalNeighborhoodOverlay
             }
         }
 
-        bool baseMap = manifest.Mode == 1;
-        _banner = BannerImage(baseMap ? "UIGraphics/NghUI/banner_neighborhood.bmp" : "UIGraphics/NghUI/banner_downtown.bmp");
         _vacationMark = TryBannerImage(manifest.Mode == 3
             ? "UIGraphics/VIsland/no_vacancy.bmp"
             : "UIGraphics/VIsland/vacationlogosmall.bmp");
 
         var uiStrings = new OriginalUIStrings(content);
         var actions = BannerActionExtensions.ActionsForMapMode(manifest.Mode);
-        var sheets = new Dictionary<BannerAction, OriginalGameplayOverlay.Image>();
         var tips = new Dictionary<BannerAction, string>();
         var installed = new HashSet<BannerAction>();
 
         foreach (var action in actions)
         {
-            sheets[action] = BannerImage(action.Resource(manifest.Mode));
             bool present = true;
             if (action.RequiredPackFolder() is { } packFolder)
             {
@@ -711,7 +739,11 @@ public sealed class OriginalNeighborhoodOverlay
             if (present)
                 installed.Add(action);
 
-            if (!present && action.MissingPackTooltipIndex() is int missingIdx)
+            if (action == BannerAction.Mods)
+            {
+                tips[action] = action.FallbackTooltip();
+            }
+            else if (!present && action.MissingPackTooltipIndex() is int missingIdx)
             {
                 tips[action] = uiStrings.MissingPackTip(missingIdx, "Please purchase the expansion pack to use this");
             }
@@ -723,9 +755,9 @@ public sealed class OriginalNeighborhoodOverlay
             }
         }
 
-        _bannerButtons = sheets;
         _bannerTooltips = tips;
         _installedBannerActions = installed;
+        RebuildBannerChrome(manifest.Mode);
 
         if (manifest.SchemaVersion != 2 || manifest.Mode <= 0 || manifest.CanvasWidth != 800 || manifest.CanvasHeight != 600
             || !float.IsFinite(manifest.Scale) || manifest.Scale <= 0 || manifest.Scale > 4
@@ -756,6 +788,7 @@ public sealed class OriginalNeighborhoodOverlay
             throw new ContentError("Neighborhood background dimensions differ from its manifest");
 
         byte[] backgroundPixels = (byte[])backgroundBitmap.Rgba.Clone();
+        bool supportsExtendedBackdrop = ExtendedNeighborhoodBackdrop.Supports(content, manifest.BackgroundResource);
         var animations = new Animation[manifest.AnimationLayers.Count];
         for (int layerIdx = 0; layerIdx < manifest.AnimationLayers.Count; layerIdx++)
         {
@@ -769,6 +802,7 @@ public sealed class OriginalNeighborhoodOverlay
             int ox = (int)Math.Round(layer.PositionX, MidpointRounding.AwayFromZero);
             int oy = (int)Math.Round(layer.PositionY, MidpointRounding.AwayFromZero);
             bool firstFrameComposited = false;
+            bool featherEdges = supportsExtendedBackdrop;
             var frames = new OriginalGameplayOverlay.Image[layer.FrameResources.Count];
             for (int frameIdx = 0; frameIdx < layer.FrameResources.Count; frameIdx++)
             {
@@ -802,12 +836,31 @@ public sealed class OriginalNeighborhoodOverlay
                     }
                 }
 
-                frames[frameIdx] = OriginalGameplayOverlay.CreateImage(device, bitmap.Width, bitmap.Height, bitmap.Rgba, magenta: true);
+                frames[frameIdx] = featherEdges
+                    ? ExtendedNeighborhoodBackdrop.CreateFeatheredAnimationFrame(
+                        device,
+                        bitmap,
+                        ox,
+                        oy,
+                        backgroundBitmap.Width,
+                        backgroundBitmap.Height)
+                    : OriginalGameplayOverlay.CreateImage(device, bitmap.Width, bitmap.Height, bitmap.Rgba, magenta: true);
             }
 
             animations[layerIdx] = new Animation(new CGPoint(layer.PositionX, layer.PositionY), frames);
         }
         _animations = animations;
+        _extendedBackground = supportsExtendedBackdrop
+            ? ExtendedNeighborhoodBackdrop.TryCreate(
+                content,
+                device,
+                manifest.BackgroundResource,
+                manifest.BackgroundImagePath is not null,
+                backgroundPixels,
+                backgroundBitmap.Width,
+                backgroundBitmap.Height,
+                manifest.AnimationLayers)
+            : null;
 
         _outerFill = OriginalGameplayOverlay.CreateImage(device, 1, 1, [0, 50, 0, 255]);
         // Loads a wide background backdrop behind the centered 800x600 neighborhood map when the display
@@ -1022,12 +1075,17 @@ public sealed class OriginalNeighborhoodOverlay
         return bitmap;
     }
 
+    private double TopChromeY(double top) => _extendedBackground is not null ? 0.0 : top;
+
     private (double Left, double Top, double Factor) Transform(CGSize canvas, float uiScale = 1f)
     {
+        _ = uiScale;
         double w = _canvasWidth;
         double h = _canvasHeight;
         double fit = Math.Max(0.001, Math.Min(canvas.Width / w, canvas.Height / h));
-        double factor = uiScale > 0f ? Math.Min(fit, Math.Max(0.25, uiScale * 1.15)) : fit;
+        double factor = _extendedBackground is { } ext
+            ? Math.Max(fit, Math.Max(canvas.Width / ext.Width, canvas.Height / ext.Height))
+            : fit;
         double left = (canvas.Width - w * factor) / 2.0;
         double top = (canvas.Height - h * factor) / 2.0;
         return (left, top, factor);
@@ -1095,7 +1153,9 @@ public sealed class OriginalNeighborhoodOverlay
         if (_travelFilter is null)
             return null;
 
-        var logical = Logical(point, canvas, uiScale);
+        var (left, top, factor) = Transform(canvas, uiScale);
+        double chromeTop = TopChromeY(top);
+        var logical = new CGPoint((point.X - left) / factor, (point.Y - chromeTop) / factor);
         var positions = NeighborhoodLotFilter.Positions;
         for (int i = 0; i < positions.Count; i++)
         {
@@ -1153,10 +1213,97 @@ public sealed class OriginalNeighborhoodOverlay
         _rolloverCache = null;
     }
 
+    private void RebuildBannerChrome(int mode)
+    {
+        bool vectorEnabled = SimsBitmapFont.SharpTextEnabled;
+        _builtVectorBanner = vectorEnabled;
+        int vectorScale = vectorEnabled ? 4 : 1;
+
+        var actions = BannerActionExtensions.ActionsForMapMode(mode);
+        string bannerResPath = mode == 1 ? "UIGraphics/NghUI/banner_neighborhood.bmp" : "UIGraphics/NghUI/banner_downtown.bmp";
+        bool bannerOverriddenByMod = _content.Packs.Assets.ContainsKey(PackContentPaths.ResourceKey(bannerResPath));
+
+        if (vectorEnabled && !bannerOverriddenByMod)
+        {
+            float[] collarCenters = actions
+                .Where(static a => a.HasLowerCollarBulge())
+                .Select(a => (float)a.Position(mode).X + a.RingCenterX1x())
+                .OrderBy(static x => x)
+                .ToArray();
+            var renderedBar = VectorBannerRenderer.RenderBannerBar(collarCenters, vectorScale);
+            _banner = OriginalGameplayOverlay.CreateImage(
+                _device,
+                renderedBar.PixelWidth,
+                renderedBar.PixelHeight,
+                renderedBar.Rgba,
+                renderedBar.LogicalSize);
+        }
+        else
+        {
+            var barBmp = new SimsBitmap(_content.Read(bannerResPath));
+            _banner = OriginalGameplayOverlay.CreateImage(_device, barBmp.Width, barBmp.Height, barBmp.Rgba, magenta: true);
+        }
+
+        var sheets = new Dictionary<BannerAction, OriginalGameplayOverlay.Image>();
+        foreach (var action in actions)
+        {
+            string resPath = action.Resource(mode);
+            bool modOverridden = action != BannerAction.Mods
+                && _content.Packs.Assets.ContainsKey(PackContentPaths.ResourceKey(resPath));
+            string? stem = action.VectorSvgStem();
+
+            if (!modOverridden && stem is not null && (vectorEnabled || action == BannerAction.Mods) && VectorBannerRenderer.HasEmbeddedSvg(stem))
+            {
+                var raster = action == BannerAction.SimsLogo
+                    ? VectorBannerRenderer.RenderSimsLogo(vectorScale)
+                    : VectorBannerRenderer.RenderButtonStrip(stem, action.VectorButtonKind(), action.RingCenterX1x(), vectorScale);
+                sheets[action] = OriginalGameplayOverlay.CreateImage(
+                    _device,
+                    raster.PixelWidth,
+                    raster.PixelHeight,
+                    raster.Rgba,
+                    raster.LogicalSize);
+            }
+            else
+            {
+                var bmp = new SimsBitmap(_content.Read(resPath));
+                sheets[action] = OriginalGameplayOverlay.CreateImage(_device, bmp.Width, bmp.Height, bmp.Rgba, magenta: true);
+            }
+        }
+
+        _bannerButtons = sheets;
+
+        if (mode == 1 && Neighborhood > 0)
+        {
+            OriginalGameplayOverlay.Image? numImg = null;
+            foreach (string fontPath in new[] { "UIGraphics/Fonts/variablesans_12.ffn", "UIGraphics/Fonts/variablesans_11.ffn", "UIGraphics/Fonts/variablesans_10.ffn" })
+            {
+                try
+                {
+                    var numberFont = new SimsBitmapFont(_content.Read(fontPath));
+                    numImg = OriginalGameplayOverlay.Text(
+                        Neighborhood.ToString(CultureInfo.InvariantCulture),
+                        numberFont,
+                        _device,
+                        (255, 255, 255));
+                    break;
+                }
+                catch
+                {
+                }
+            }
+            _neighborhoodNumberImage = numImg;
+        }
+    }
+
     public void ClearTextCaches()
     {
         _rolloverCache = null;
         _bannerTip = null;
+        if (_builtVectorBanner != SimsBitmapFont.SharpTextEnabled || Mode == 1)
+        {
+            RebuildBannerChrome(Mode);
+        }
     }
 
     /// <summary>Indicates whether a lot is completely bulldozed, which is required before the lot can be
@@ -1505,7 +1652,7 @@ public sealed class OriginalNeighborhoodOverlay
 
     public bool IsEnabled(BannerAction action) => action switch
     {
-        BannerAction.Quit or BannerAction.Bulldoze or BannerAction.ReturnHome or BannerAction.SimsLogo => true,
+        BannerAction.Quit or BannerAction.Bulldoze or BannerAction.ReturnHome or BannerAction.SimsLogo or BannerAction.Mods => true,
         BannerAction.ImportFamily => _importEnabled,
         BannerAction.SelectFamily => Mode == 1 || Mode == 7,
         BannerAction.Credits => Mode == 1,
@@ -1524,9 +1671,10 @@ public sealed class OriginalNeighborhoodOverlay
             return CGRect.Zero;
 
         var position = action.Position(Mode);
+        double baseY = action == BannerAction.Credits ? top : TopChromeY(top);
         return new CGRect(
             left + position.X * factor,
-            top + position.Y * factor,
+            baseY + position.Y * factor,
             sheet.Size.Width / action.FrameCount() * factor,
             sheet.Size.Height * factor);
     }
@@ -1642,28 +1790,41 @@ public sealed class OriginalNeighborhoodOverlay
         var backgroundRect = new CGRect(left, top, _canvasWidth * factor, _canvasHeight * factor);
         var items = new List<DrawItem>();
 
-        if (left > 0 || top > 0)
+        if (_extendedBackground is { } extendedBackground)
         {
-            if (_largeBackground is { } largeBackground)
-            {
-                items.AddRange(NineSlice(
-                    largeBackground,
-                    new CGRect(0, 0, canvas.Width, canvas.Height),
-                    requestedEdge: 16 * factor,
-                    sourceEdge: 16));
-                double border = Math.Max(1.0, factor);
-                items.Add(new DrawItem(_frameShadow, new CGRect(backgroundRect.MinX - border, backgroundRect.MinY - border, backgroundRect.Width + border * 2, border)));
-                items.Add(new DrawItem(_frameShadow, new CGRect(backgroundRect.MinX - border, backgroundRect.MinY, border, backgroundRect.Height)));
-                items.Add(new DrawItem(_frameHighlight, new CGRect(backgroundRect.MinX - border, backgroundRect.MaxY, backgroundRect.Width + border * 2, border)));
-                items.Add(new DrawItem(_frameHighlight, new CGRect(backgroundRect.MaxX, backgroundRect.MinY, border, backgroundRect.Height)));
-            }
-            else
-            {
-                items.Add(new DrawItem(_outerFill, new CGRect(0, 0, canvas.Width, canvas.Height)));
-            }
+            items.Add(new DrawItem(
+                extendedBackground.Image,
+                new CGRect(
+                    left + extendedBackground.OffsetX * factor,
+                    top + extendedBackground.OffsetY * factor,
+                    extendedBackground.Width * factor,
+                    extendedBackground.Height * factor)));
         }
+        else
+        {
+            if (left > 0 || top > 0)
+            {
+                if (_largeBackground is { } largeBackground)
+                {
+                    items.AddRange(NineSlice(
+                        largeBackground,
+                        new CGRect(0, 0, canvas.Width, canvas.Height),
+                        requestedEdge: 16 * factor,
+                        sourceEdge: 16));
+                    double border = Math.Max(1.0, factor);
+                    items.Add(new DrawItem(_frameShadow, new CGRect(backgroundRect.MinX - border, backgroundRect.MinY - border, backgroundRect.Width + border * 2, border)));
+                    items.Add(new DrawItem(_frameShadow, new CGRect(backgroundRect.MinX - border, backgroundRect.MinY, border, backgroundRect.Height)));
+                    items.Add(new DrawItem(_frameHighlight, new CGRect(backgroundRect.MinX - border, backgroundRect.MaxY, backgroundRect.Width + border * 2, border)));
+                    items.Add(new DrawItem(_frameHighlight, new CGRect(backgroundRect.MaxX, backgroundRect.MinY, border, backgroundRect.Height)));
+                }
+                else
+                {
+                    items.Add(new DrawItem(_outerFill, new CGRect(0, 0, canvas.Width, canvas.Height)));
+                }
+            }
 
-        items.Add(new DrawItem(Background, backgroundRect));
+            items.Add(new DrawItem(Background, backgroundRect));
+        }
 
         void AppendAnimations(bool multiFrame)
         {
@@ -1697,9 +1858,12 @@ public sealed class OriginalNeighborhoodOverlay
             double scale = factor / _houseScale;
             double x = left + entry.X * factor + (entry.XOff / 2.0 - entry.ClosedImageWidth / 2.0) * scale;
             double y = top + entry.Y * factor + (entry.BaseYOff / 2.0 - entry.ClosedImageHeight / 2.0) * scale;
-            items.Add(new DrawItem(
-                house.Closed,
-                new CGRect(x, y, entry.ClosedImageWidth * scale, entry.ClosedImageHeight * scale)));
+            if (_extendedBackground is null || entry.LotHasHouse != false)
+            {
+                items.Add(new DrawItem(
+                    house.Closed,
+                    new CGRect(x, y, entry.ClosedImageWidth * scale, entry.ClosedImageHeight * scale)));
+            }
 
             if (HoveredHouse == entry.House)
             {
@@ -1742,13 +1906,14 @@ public sealed class OriginalNeighborhoodOverlay
             }
         }
 
+        double chromeTop = TopChromeY(top);
         if (_travelFilter is null && _banner is { } banner)
         {
             items.Add(new DrawItem(
                 banner,
                 new CGRect(
                     backgroundRect.MinX,
-                    backgroundRect.MinY,
+                    chromeTop,
                     banner.Size.Width * factor,
                     banner.Size.Height * factor)));
         }
@@ -1775,7 +1940,7 @@ public sealed class OriginalNeighborhoodOverlay
             double w = numberImage.Size.Width * factor;
             double h = numberImage.Size.Height * factor;
             double x = left + 136.5 * factor - w / 2.0;
-            double y = top + 20.70 * factor - h / 2.0;
+            double y = chromeTop + 20.70 * factor - h / 2.0;
             items.Add(new DrawItem(numberImage, new CGRect(x, y, w, h)));
         }
 
@@ -1783,7 +1948,7 @@ public sealed class OriginalNeighborhoodOverlay
         {
             items.Add(new DrawItem(
                 toolbar,
-                new CGRect(left, top, toolbar.Size.Width * factor, toolbar.Size.Height * factor)));
+                new CGRect(left, chromeTop, toolbar.Size.Width * factor, toolbar.Size.Height * factor)));
 
             var masks = NeighborhoodLotFilter.Masks;
             var positions = NeighborhoodLotFilter.Positions;
@@ -1797,7 +1962,7 @@ public sealed class OriginalNeighborhoodOverlay
                     sheet,
                     new CGRect(
                         left + positions[index] * factor,
-                        top + 20 * factor,
+                        chromeTop + 20 * factor,
                         sheet.Size.Width * factor / 4.0,
                         sheet.Size.Height * factor),
                     uv: new Vector4(frame / 4f, 0f, 0.25f, 1f)));
@@ -1863,17 +2028,19 @@ public sealed class OriginalNeighborhoodOverlay
 
         var (left, top, factor) = Transform(canvas, uiScale);
         double tipScale = uiScale > 0f ? Math.Min(factor, Math.Max(0.25, uiScale)) : factor;
-        double panelRight = left + _canvasWidth * factor;
-        double panelBottom = top + _canvasHeight * factor;
+        double boundLeft = _extendedBackground is not null ? 0.0 : left;
+        double boundTop = _extendedBackground is not null ? 0.0 : top;
+        double panelRight = _extendedBackground is not null ? canvas.Width : left + _canvasWidth * factor;
+        double panelBottom = _extendedBackground is not null ? canvas.Height : top + _canvasHeight * factor;
         var button = BannerRect(tip.Action, canvas, uiScale);
         double width = tip.Image.Size.Width * tipScale;
         double height = tip.Image.Size.Height * tipScale;
-        double minX = left + 4 * factor;
+        double minX = boundLeft + 4 * factor;
         double maxX = Math.Max(minX, panelRight - width - 4 * factor);
         double x = Math.Min(Math.Max(minX, button.MidX - width / 2.0), maxX);
         double y = button.MaxY + 4 * factor;
         if (y + height > panelBottom - 4 * factor)
-            y = Math.Max(top + 4 * factor, button.MinY - height - 4 * factor);
+            y = Math.Max(boundTop + 4 * factor, button.MinY - height - 4 * factor);
 
         var rect = new CGRect(x, y, width, height);
         if (progress >= 1.0)

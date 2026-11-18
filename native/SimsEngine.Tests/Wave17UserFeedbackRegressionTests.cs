@@ -800,6 +800,228 @@ public sealed class Wave17UserFeedbackRegressionTests
         Assert.Equal(0u, SimsEngine.Simulation.SavedLotObjectLoader.SavedTreeFingerprint(scope, 4105));
     }
 
+    [Fact]
+    public void VectorBannerRenderer_RasterizesAll15EmbeddedSvgsAndDynamicBannerWithZeroPngs()
+    {
+        string[] stems =
+        [
+            "thesimslogo", "movein", "import", "bulldoze", "rezone",
+            "downtown", "vacation", "studiotown", "magicland", "exit",
+            "return", "previous", "next", "inetbtn", "mods",
+        ];
+
+        foreach (string stem in stems)
+        {
+            Assert.True(SimsSDL.UI.VectorBannerRenderer.HasEmbeddedSvg(stem), $"Missing embedded SVG: {stem}");
+        }
+
+        var logo = SimsSDL.UI.VectorBannerRenderer.RenderSimsLogo(scale: 4);
+        Assert.Equal(280, logo.PixelWidth);
+        Assert.Equal(208, logo.PixelHeight);
+        Assert.Equal(70, logo.LogicalSize.Width);
+        Assert.Equal(52, logo.LogicalSize.Height);
+        Assert.Contains(logo.Rgba.Where((_, idx) => idx % 4 == 3), static a => a > 240);
+
+        var modsBtn = SimsSDL.UI.VectorBannerRenderer.RenderButtonStrip(
+            "mods",
+            SimsSDL.UI.VectorBannerRenderer.ButtonKind.InsetRing39,
+            19.25f,
+            scale: 4);
+        Assert.Equal(39 * 4 * 4, modsBtn.PixelWidth);
+        Assert.Equal(52 * 4, modsBtn.PixelHeight);
+        Assert.Equal(156, modsBtn.LogicalSize.Width);
+        Assert.Equal(52, modsBtn.LogicalSize.Height);
+
+        var rezoneBtn = SimsSDL.UI.VectorBannerRenderer.RenderButtonStrip(
+            "rezone",
+            SimsSDL.UI.VectorBannerRenderer.ButtonKind.Medallion53,
+            25.0f,
+            scale: 4);
+        Assert.Equal(53 * 4 * 4, rezoneBtn.PixelWidth);
+        Assert.Equal(52 * 4, rezoneBtn.PixelHeight);
+
+        var banner = SimsSDL.UI.VectorBannerRenderer.RenderBannerBar([225f, 275f, 325f, 375f, 425f, 475f, 525f, 575f, 625f], scale: 4);
+        Assert.Equal(3200, banner.PixelWidth);
+        Assert.Equal(208, banner.PixelHeight);
+        Assert.Equal(800, banner.LogicalSize.Width);
+        Assert.Equal(52, banner.LogicalSize.Height);
+
+        Assert.Contains(SimsSDL.UI.BannerAction.Mods, SimsSDL.UI.BannerActionExtensions.ActionsForMapMode(1));
+        Assert.Contains(SimsSDL.UI.BannerAction.Mods, SimsSDL.UI.BannerActionExtensions.ActionsForMapMode(2));
+        Assert.Equal(724, SimsSDL.UI.BannerAction.Mods.Position(1).X);
+        Assert.Equal(762, SimsSDL.UI.BannerAction.Internet.Position(1).X);
+    }
+
+    [Fact]
+    public void ModManager_SupportsPriorityOverrides_AndPersistsSettings()
+    {
+        var gameDir = LocateGameDirectory();
+        if (gameDir is null || !File.Exists(Path.Combine(gameDir, "UIGraphics", "UIGraphics.far")))
+        {
+            return;
+        }
+
+        string tempRoot = Path.Combine(Path.GetTempPath(), "sims-modmgr-" + Guid.NewGuid().ToString("N"));
+        string dataRoot = Path.Combine(tempRoot, "Data");
+        string packsDir = Path.Combine(dataRoot, "Packs");
+        Directory.CreateDirectory(packsDir);
+
+        try
+        {
+            string packADir = Path.Combine(packsDir, "pack_a");
+            string packBDir = Path.Combine(packsDir, "pack_b");
+            Directory.CreateDirectory(Path.Combine(packADir, "files", "UIGraphics", "NghUI"));
+            Directory.CreateDirectory(Path.Combine(packBDir, "files", "UIGraphics", "NghUI"));
+
+            File.WriteAllText(Path.Combine(packADir, "pack.json"), """
+                {
+                  "schemaVersion": 1,
+                  "baseGameVersion": "1.90",
+                  "id": "test.pack.a",
+                  "name": "Alpha UI Overhaul",
+                  "version": "1.0.0",
+                  "dependencies": [],
+                  "overrides": []
+                }
+                """);
+            File.WriteAllBytes(Path.Combine(packADir, "files", "UIGraphics", "NghUI", "custom_shared.bmp"), [1, 2, 3]);
+
+            File.WriteAllText(Path.Combine(packBDir, "pack.json"), """
+                {
+                  "schemaVersion": 1,
+                  "baseGameVersion": "1.90",
+                  "id": "test.pack.b",
+                  "name": "Beta UI Patch",
+                  "version": "1.0.0",
+                  "dependencies": [],
+                  "overrides": []
+                }
+                """);
+            File.WriteAllBytes(Path.Combine(packBDir, "files", "UIGraphics", "NghUI", "custom_shared.bmp"), [9, 9, 9]);
+
+            string userDlDir = Path.Combine(dataRoot, "Downloads", "CustomRetroSofa");
+            Directory.CreateDirectory(userDlDir);
+            File.WriteAllBytes(Path.Combine(userDlDir, "retro_sofa.iff"), BuildSingleOrMultiChunkIff(("STR#", 1, [0, 0])));
+
+            string repoWorkspace = Path.GetFullPath(Path.Combine(gameDir, ".."));
+            if (!Directory.Exists(Path.Combine(repoWorkspace, "packs")))
+                repoWorkspace = Path.GetFullPath(Path.Combine(gameDir, "..", ".."));
+
+            var discovered = SimsSDL.ModManager.DiscoverAll(gameDir, workspace: repoWorkspace, dataRoot: dataRoot, cliPacks: null);
+            Assert.DoesNotContain(discovered, static m => m.DisplayName == "My first expansion");
+            Assert.Contains(discovered, static m => m.DisplayName == "Alpha UI Overhaul");
+            Assert.Contains(discovered, static m => m.DisplayName == "Beta UI Patch");
+            // All 70 shipped Complete Collection Downloads/<Item>/<Item>.far bonus sets have Maxis .ndx + .stx manifests
+            // and are excluded automatically without hardcoded names; only the user's CustomRetroSofa folder appears!
+            var dlDiscovered = Assert.Single(discovered, static m => m.Kind == SimsSDL.ModManager.ModEntryKind.DownloadsSubfolder);
+            Assert.Equal("CustomRetroSofa", dlDiscovered.DisplayName);
+
+            var (ordered, enabled) = SimsSDL.ModManager.BuildInitialState(discovered, new SimsSDL.ModManager.ModSettingsFile());
+            var report = SimsSDL.ModManager.Evaluate(gameDir, dataRoot, ordered, enabled);
+            Assert.True(report.CanApply);
+
+            var betaStatus = Assert.Single(report.Entries, static e => e.Mod.DisplayName == "Beta UI Patch");
+            Assert.Contains(betaStatus.SoftOverlapNotes, static n => n.Contains("Overrides 1 file from Alpha UI Overhaul", StringComparison.Ordinal));
+
+            // Reverse priority order (Beta first, Alpha second -> Alpha wins!)
+            ordered.Reverse();
+            var reversedSettings = SimsSDL.ModManager.BuildSettingsFromState(ordered, enabled);
+            SimsSDL.ModManager.SaveSettings(dataRoot, reversedSettings);
+
+            var mountedContent = SimsSDL.ModManager.LoadConfiguredContent(gameDir, workspace: "", dataRoot: dataRoot, cliPacks: null);
+            Assert.Equal(new byte[] { 1, 2, 3 }, mountedContent.Read("UIGraphics/NghUI/custom_shared.bmp"));
+        }
+        finally
+        {
+            DeleteTempTree(tempRoot);
+        }
+    }
+
+    [Fact]
+    public void ExtendedCoastalNeighborhood4K_CoversWidescreenAndUltrawideWithoutBlueBorders()
+    {
+        var gameDir = LocateGameDirectory();
+        if (gameDir is null
+            || !Directory.Exists(Path.Combine(gameDir, "ExpansionPack5"))
+            || !File.Exists(Path.Combine(gameDir, "UserData", "Neighborhood.iff"))
+            || !File.Exists(Path.Combine(gameDir, "UserData", "Houses", "House05.iff")))
+        {
+            return;
+        }
+
+        var previousNeighborhood = Neighborhoods.Current;
+        var (tempRoot, profile, session) = CreateIsolatedProfile(gameDir, 5);
+        try
+        {
+            Neighborhoods.Current = 1;
+            using var outputStream = new MemoryStream();
+            using var writer = new StreamWriter(outputStream, new UTF8Encoding(false)) { AutoFlush = true };
+            var server = SimulationServer.Load(gameDir, session, profile, 0, writer);
+            DrainEvents(outputStream, writer);
+
+            Assert.True(server.Handle("""{"id":"ngh","op":"neighborhood","mode":1}"""));
+            var nghResp = ResponseFor(DrainEvents(outputStream, writer), "ngh");
+            Assert.True(nghResp.GetProperty("ok").GetBoolean());
+
+            var manifestPath = Path.Combine(session, "neighborhood.json");
+            var content = new GameContent(gameDir, LocatePackDirectories(gameDir));
+            var font = new SimsBitmapFont(content.Read("UIGraphics/Fonts/variablesans_10.ffn"));
+            var device = new UIDevice();
+
+            CGSize[] viewports =
+            [
+                new(3840, 2160), // 16:9 4K
+                new(3024, 1964), // 16:10 Retina
+                new(3440, 1440), // 21:9 Ultrawide
+                new(5120, 1440), // 32:9 Super-Ultrawide
+                new(1200, 1200), // 1:1 Square
+            ];
+
+            int[] mapModes = [1, 2, 3, 5, 7];
+            foreach (int mode in mapModes)
+            {
+                Assert.True(server.Handle($$"""{"id":"ngh-{{mode}}","op":"neighborhood","mode":{{mode}}}"""));
+                var modeResp = ResponseFor(DrainEvents(outputStream, writer), $"ngh-{mode}");
+                Assert.True(modeResp.GetProperty("ok").GetBoolean(), $"Failed switching to map mode {mode}");
+
+                var overlay = new OriginalNeighborhoodOverlay(content, device, manifestPath, session, font);
+                foreach (var vp in viewports)
+                {
+                    var items = overlay.DrawItems(vp, uiScale: 2f, time: 0.0);
+                    Assert.NotEmpty(items);
+
+                    var backdrop = items[0];
+                    Assert.Equal(3840, backdrop.Image.Texture.Width);
+                    Assert.Equal(2160, backdrop.Image.Texture.Height);
+                    Assert.True(backdrop.Rect.MinX <= 0.01, $"Mode {mode} MinX={backdrop.Rect.MinX} on {vp.Width}x{vp.Height}");
+                    Assert.True(backdrop.Rect.MinY <= 0.01, $"Mode {mode} MinY={backdrop.Rect.MinY} on {vp.Width}x{vp.Height}");
+                    Assert.True(backdrop.Rect.MaxX >= vp.Width - 0.01, $"Mode {mode} MaxX={backdrop.Rect.MaxX} on {vp.Width}x{vp.Height}");
+                    Assert.True(backdrop.Rect.MaxY >= vp.Height - 0.01, $"Mode {mode} MaxY={backdrop.Rect.MaxY} on {vp.Width}x{vp.Height}");
+
+                    // No 64x64 largeback.bmp 9-slice or 1x1 bevel frame items
+                    Assert.DoesNotContain(items, static i => i.Image.Texture.Width == 64 && i.Image.Texture.Height == 64);
+                    Assert.DoesNotContain(items, static i => i.Image.Texture.Width == 1 && i.Image.Texture.Height == 1);
+
+                    if (mode == 1)
+                    {
+                        // Lot hit-testing stays locked to house controls
+                        var house5 = overlay.Controls(vp, uiScale: 2f).Single(static c => c.Label.EndsWith(" 5", StringComparison.Ordinal));
+                        Assert.Equal(5, overlay.HouseAt(new CGPoint(house5.Rect.MidX, house5.Rect.MidY), vp, uiScale: 2f));
+                    }
+                    else
+                    {
+                        Assert.NotEmpty(overlay.Controls(vp, uiScale: 2f));
+                    }
+                }
+            }
+        }
+        finally
+        {
+            Neighborhoods.Current = previousNeighborhood;
+            DeleteTempTree(tempRoot);
+        }
+    }
+
     private static byte[] BuildSingleOrMultiChunkIff(params (string Type, ushort Id, byte[] Data)[] chunks)
     {
         using var ms = new MemoryStream();

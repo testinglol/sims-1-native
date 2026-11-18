@@ -51,6 +51,18 @@ public sealed record PluginEnvironment
             public string Overlay { get; init; } = string.Empty;
         }
 
+        public sealed record AmbientSoundData
+        {
+            [JsonPropertyName("cue")]
+            public string Cue { get; init; } = string.Empty;
+
+            [JsonPropertyName("resource")]
+            public string Resource { get; init; } = string.Empty;
+
+            [JsonPropertyName("gain")]
+            public float Gain { get; init; }
+        }
+
         [JsonPropertyName("surfaceMode")]
         public int SurfaceMode { get; init; }
 
@@ -92,6 +104,9 @@ public sealed record PluginEnvironment
 
         [JsonPropertyName("shaders")]
         public Dictionary<string, string> Shaders { get; init; } = new(StringComparer.Ordinal);
+
+        [JsonPropertyName("ambientSounds")]
+        public List<AmbientSoundData> AmbientSounds { get; init; } = [];
     }
 
     [JsonPropertyName("packId")]

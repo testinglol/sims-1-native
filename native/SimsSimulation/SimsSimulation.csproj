@@ -22,6 +22,7 @@
     <Compile Include="BitmapCodec.cs" />
     <Compile Include="SimCareerCatalog.cs" />
     <Compile Include="SceneDepth.cs" />
+    <Compile Include="SeasonalOutfitService.cs" />
     <Compile Include="SimOutfits.cs" />
     <Compile Include="PluginWorld.cs" />
     <Compile Include="EntityTransform.cs" />

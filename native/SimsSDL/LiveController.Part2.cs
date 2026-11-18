@@ -411,6 +411,11 @@ internal sealed partial class LiveController
                 return credits.Controls(_canvas, Renderer.UIScale);
             }
 
+            if (Ui.ModsOverlay is { } modsOverlay)
+            {
+                return modsOverlay.Controls(_canvas, Renderer.UIScale);
+            }
+
             if (Ui.FamilyPicker is { } familyPicker)
             {
                 return familyPicker.Controls(_canvas, Renderer.UIScale);
@@ -553,6 +558,7 @@ internal sealed partial class LiveController
             if (Ui.HelpVisible) return "help";
             if (Ui.Album.Visible) return "album";
             if (Ui.Credits is not null) return "credits";
+            if (Ui.ModsOverlay is not null) return "mods";
             if (Ui.FamilyPicker is not null) return "picker";
             if (Ui.GenericSimsCallPicker is not null) return "picker";
             if (Ui.OutfitPicker is not null) return "picker";
@@ -666,6 +672,20 @@ internal sealed partial class LiveController
                 }
             }
 
+            if (!HasBlockingDialog && Ui.ModsOverlay is { } modsPressOverlay)
+            {
+                if (modsPressOverlay.PointerDown(point, _canvas, Renderer.UIScale))
+                {
+                    _modsOverlayGesture = true;
+                    PrimaryGesture = true;
+                    return;
+                }
+
+                Click(point);
+                PrimaryGesture = false;
+                return;
+            }
+
             if (!HasBlockingDialog && Ui.OutfitPicker is null
                 && Ui.GenericSimsCallPicker is { } callPicker
                 && callPicker.BeginOKPress(Local(point), LogicalCanvas))
@@ -767,6 +787,12 @@ internal sealed partial class LiveController
     public void Drag(CGPoint point)
     {
         Pointer = point;
+        if (_modsOverlayGesture)
+        {
+            Ui.ModsOverlay?.PointerDragged(point, _canvas, Renderer.UIScale);
+            return;
+        }
+
         if (_dialogButtonTracking)
         {
             Ui.GameDialog?.Hover(point, OverlayScale);
@@ -841,6 +867,14 @@ internal sealed partial class LiveController
                 WarpPointer?.Invoke(warp);
                 Hover(warp, _canvas);
             }
+        }
+
+        if (_modsOverlayGesture)
+        {
+            _modsOverlayGesture = false;
+            PrimaryGesture = false;
+            Ui.ModsOverlay?.PointerReleased(point, _canvas, Renderer.UIScale);
+            return;
         }
 
         if (_dialogButtonTracking)
@@ -1942,6 +1976,10 @@ internal sealed partial class LiveController
                 if (Ui.Credits is { } credits)
                 {
                     credits.Hover(point, _canvas, Renderer.UIScale);
+                }
+                else if (Ui.ModsOverlay is { } modsOverlay)
+                {
+                    modsOverlay.Hover(point, _canvas, Renderer.UIScale);
                 }
                 else if (Ui.FamilyPicker is { } familyPicker)
                 {

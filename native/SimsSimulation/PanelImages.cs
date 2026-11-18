@@ -460,8 +460,8 @@ internal sealed class PanelImages(string directory, ObjectRegistry registry)
         }
     }
 
-    /// <summary>Renders an object preview centered inside a 120x120 white frame bordered by a 1-pixel dark
-    /// outline.</summary>
+    /// <summary>Renders an object preview centered inside a 133x103 transparent (magenta-colorkeyed) picture
+    /// dialog slot matching Sims.exe cTSObjectPictureDialog (00523606 / kPictureDialogStub bounds).</summary>
     private object? StoreObjectDialogBox(byte[] bmpData, int frameIndex, int frameCount)
     {
         try
@@ -473,20 +473,16 @@ internal sealed class PanelImages(string directory, ObjectRegistry registry)
             var startX = clampedIndex * frameWidth;
             if (startX + frameWidth > width) frameWidth = width - startX;
 
-            const int BoxW = 120;
-            const int BoxH = 120;
+            const int BoxW = 133;
+            const int BoxH = 103;
             var boxRgba = new byte[BoxW * BoxH * 4];
-            for (var y = 0; y < BoxH; y++)
+            for (var i = 0; i < BoxW * BoxH; i++)
             {
-                for (var x = 0; x < BoxW; x++)
-                {
-                    var border = x == 0 || y == 0 || x == BoxW - 1 || y == BoxH - 1;
-                    var idx = (y * BoxW + x) * 4;
-                    boxRgba[idx] = border ? (byte)0 : (byte)255;
-                    boxRgba[idx + 1] = border ? (byte)0 : (byte)255;
-                    boxRgba[idx + 2] = border ? (byte)52 : (byte)255;
-                    boxRgba[idx + 3] = 255;
-                }
+                var idx = i * 4;
+                boxRgba[idx] = 255;
+                boxRgba[idx + 1] = 0;
+                boxRgba[idx + 2] = 255;
+                boxRgba[idx + 3] = 255;
             }
 
             var offsetX = (BoxW - frameWidth) / 2;
@@ -494,12 +490,13 @@ internal sealed class PanelImages(string directory, ObjectRegistry registry)
             for (var y = 0; y < height; y++)
             {
                 var dstY = offsetY + y;
-                if (dstY <= 0 || dstY >= BoxH - 1) continue;
+                if ((uint)dstY >= (uint)BoxH) continue;
                 for (var x = 0; x < frameWidth; x++)
                 {
                     var dstX = offsetX + x;
-                    if (dstX <= 0 || dstX >= BoxW - 1) continue;
+                    if ((uint)dstX >= (uint)BoxW) continue;
                     var srcIdx = (y * width + startX + x) * 4;
+                    if (rgba[srcIdx + 3] == 0) continue;
                     var r = rgba[srcIdx];
                     var g = rgba[srcIdx + 1];
                     var b = rgba[srcIdx + 2];

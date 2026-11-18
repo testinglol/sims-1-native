@@ -35,6 +35,10 @@ internal sealed class Options
 
     public string? Script { get; set; }
 
+    public string? LogFile { get; set; }
+
+    public string? GpuDriver { get; set; }
+
     public bool HelpRequested { get; set; }
 
     public Options()
@@ -129,6 +133,12 @@ internal sealed class Options
                     break;
                 case "--script":
                     Script = Path.GetFullPath(ReadValue(argument));
+                    break;
+                case "--log":
+                    LogFile = Path.GetFullPath(ReadValue(argument));
+                    break;
+                case "--gpu-driver":
+                    GpuDriver = ReadValue(argument);
                     break;
                 case "--packs":
                     Packs = Path.TrimEndingDirectorySeparator(Path.GetFullPath(ReadValue(argument)));
@@ -268,6 +278,22 @@ internal static unsafe partial class Program
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool AttachConsole(uint dwProcessId);
 
+    [LibraryImport("user32.dll", StringMarshalling = StringMarshalling.Utf16)]
+    private static partial int MessageBoxW(nint hWnd, string text, string caption, uint type);
+
+    private static nint _defaultSdlLogFunction;
+    private static volatile bool _interactiveCrashDialogEnabled;
+    private static int _crashDialogShown;
+    private static int _exceptionHandlersInstalled;
+
+    private readonly record struct StartupPreScan(
+        bool HelpRequested,
+        bool HasPackCommand,
+        bool IsAutomated,
+        string? Workspace,
+        string? DataRoot,
+        string? LogFile);
+
     private sealed class FolderPickerResult
     {
         private readonly object _lock = new();
@@ -300,6 +326,7 @@ internal static unsafe partial class Program
                     [--scale 2] [--no-lighting] [--no-ambient]
             SimsSDL [--house <1-100>] [--game <game dir>] [--workspace <repo>] [--data-root <dir>] [--profile player]
                     [--neighborhood 1] [--speed 0|1|3|10] [--answer-dialogs] [--no-audio] [--packs <dir>] [--script <file>]
+                    [--log <file>] [--gpu-driver <direct3d12|vulkan|metal>]
             SimsSDL [--packs <dir>] --pack-report | --validate-packs | --list-plugins | --trust-plugin <pack> | --revoke-plugin <pack>
                     | --allocate-object-guid <name> --pack-id <pack> | --reserve-object-guid <name> --pack-id <pack> | --mount <dir>
 
@@ -320,6 +347,26 @@ internal static unsafe partial class Program
 
         MainThreadDispatcher.InitializeMainThread();
 
+        StartupPreScan preScan = PreScanStartupFlags(args);
+        bool enableFileLog = !preScan.HelpRequested && (!preScan.HasPackCommand || preScan.LogFile is not null);
+        _interactiveCrashDialogEnabled = !preScan.HelpRequested
+            && !preScan.IsAutomated
+            && !string.Equals(Environment.GetEnvironmentVariable("SIMS_NO_CRASH_DIALOG"), "1", StringComparison.Ordinal);
+
+        if (enableFileLog)
+        {
+            string earlyWorkspace = preScan.Workspace ?? DefaultWorkspace();
+            string earlyDataRoot = preScan.DataRoot ?? InstallLocator.DefaultDataRoot(earlyWorkspace);
+            AppLog.Initialize(
+                earlyDataRoot,
+                preScan.LogFile,
+                attachConsoleError: true,
+                enableWatchdog: !preScan.IsAutomated);
+            AppLog.WriteStartupHeader(earlyWorkspace, earlyDataRoot, args);
+            InstallProcessExceptionHandlers();
+        }
+
+        bool sdlLogHooked = false;
         try
         {
             var options = new Options(args);
@@ -328,6 +375,11 @@ internal static unsafe partial class Program
                 Console.WriteLine(UsageText);
                 return 0;
             }
+
+            _interactiveCrashDialogEnabled = options.Script is null
+                && options.Png is null
+                && options.PackCommand is null
+                && !string.Equals(Environment.GetEnvironmentVariable("SIMS_NO_CRASH_DIALOG"), "1", StringComparison.Ordinal);
 
             string workspace = options.Workspace ?? DefaultWorkspace();
             string dataRoot = options.DataRoot ?? InstallLocator.DefaultDataRoot(workspace);
@@ -359,18 +411,23 @@ internal static unsafe partial class Program
                 }
             });
 
+            sdlLogHooked = TryInstallSdlLogHook();
+            AppLog.SetStage("Initializing SDL video subsystem");
             if (!SDL_Init(SDL_INIT_VIDEO))
             {
                 throw new SDLError("SDL_Init");
             }
+            LogSdlVideoDiagnostics();
 
             try
             {
                 bool needsGameInstall = options.House is not null || (options.Scene is null && options.Png is null);
                 if (needsGameInstall && options.Game is null)
                 {
+                    AppLog.SetStage("Locating The Sims 1 installation");
                     if (InstallLocator.ResolveGameDirectory(explicitPath: null, workspace: workspace, dataRoot: dataRoot) is { } discovered)
                     {
+                        AppLog.Info($"Resolved game directory automatically: {discovered}");
                         options.Game = discovered;
                     }
                     else if (options.Script is not null)
@@ -379,16 +436,33 @@ internal static unsafe partial class Program
                     }
                     else
                     {
+                        AppLog.Info("No saved or auto-detected game folder; prompting user to select game folder.");
                         if (ChooseGameDirectoryWithDialog(dataRoot) is not { } picked)
                         {
+                            AppLog.Info("Game folder picker cancelled; exiting.");
                             return 0;
                         }
 
                         options.Game = picked;
                     }
                 }
+                else if (needsGameInstall && options.Game is { } explicitGame)
+                {
+                    AppLog.Info($"Using explicit --game directory: {explicitGame}");
+                }
 
-                using var gpu = new GPUContext();
+                if (needsGameInstall)
+                {
+                    AppLog.WriteGameDirectorySummary(options.Game);
+                }
+
+                AppLog.WriteShaderDirectorySummary(GPUContext.ResolvedShaderDirectory);
+                AppLog.SetStage("Creating SDL GPU device");
+                using var gpu = new GPUContext(options.GpuDriver);
+                AppLog.Info(FormattableString.Invariant(
+                    $"SDL GPU device initialized (driver: {gpu.DriverName}, shaderFormats: 0x{SDL_GetGPUShaderFormats(gpu.Device):X}, preferredMsaa: {gpu.PreferredSampleCount})"));
+
+                AppLog.SetStage("Creating LotRenderer");
                 using var renderer = new LotRenderer(gpu)
                 {
                     UIScale = options.Scale ?? 2f,
@@ -396,18 +470,22 @@ internal static unsafe partial class Program
                     LightingEnabled = options.Lighting,
                     AmbientEnabled = options.Ambient,
                 };
+                AppLog.Info("LotRenderer initialized.");
 
                 ApplyEnvironmentTuning(renderer, options);
 
                 if (options.Scene is { } scene)
                 {
+                    AppLog.SetStage($"Loading scene: {scene}");
                     renderer.LoadScene(scene);
                     ApplyScenePluginEnvironment(renderer, scene);
                 }
 
                 if (options.House is not null || (options.Scene is null && options.Png is null))
                 {
+                    AppLog.SetStage($"Initializing LiveController (house={options.House?.ToString(CultureInfo.InvariantCulture) ?? "neighborhood"}, audio={options.Audio}, profile={options.Profile}, neighborhood={options.Neighborhood})");
                     var live = new LiveController(options, options.House, renderer);
+                    AppLog.Info("LiveController constructed; entering window loop.");
                     bool stopped = false;
                     try
                     {
@@ -444,17 +522,40 @@ internal static unsafe partial class Program
                     RunWindow(options, renderer);
                 }
 
+                AppLog.Info("SimsSDL exiting normally (code 0).");
                 return 0;
             }
             finally
             {
+                if (sdlLogHooked)
+                {
+                    RestoreSdlLogHook();
+                    sdlLogHooked = false;
+                }
+
                 SDL_Quit();
             }
         }
         catch (Exception ex)
         {
+            if (sdlLogHooked)
+            {
+                RestoreSdlLogHook();
+            }
+
+            AppLog.Fatal("Unhandled startup/runtime exception", ex);
             Log(ex.Message);
+            if (AppLog.CurrentLogPath is { Length: > 0 } logFile)
+            {
+                Log($"log written to {logFile}");
+            }
+
+            ShowFatalCrashDialogIfInteractive(ex);
             return 1;
+        }
+        finally
+        {
+            AppLog.Shutdown();
         }
     }
 
@@ -515,75 +616,187 @@ internal static unsafe partial class Program
     {
         while (true)
         {
-            _ = SDL_ShowSimpleMessageBox(
-                SDL_MESSAGEBOX_INFORMATION,
-                "Select The Sims 1 Folder",
-                "Please select your installed The Sims 1 game folder (containing GameData and UIGraphics).",
-                nint.Zero);
+            AppLog.BeginModalWait("Select The Sims 1 Folder prompt");
+            try
+            {
+                _ = SDL_ShowSimpleMessageBox(
+                    SDL_MESSAGEBOX_INFORMATION,
+                    "Select The Sims 1 Folder",
+                    "Please select your installed The Sims 1 game folder (containing GameData and UIGraphics).",
+                    nint.Zero);
+            }
+            finally
+            {
+                AppLog.EndModalWait();
+            }
 
             var box = new FolderPickerResult();
             GCHandle handle = GCHandle.Alloc(box, GCHandleType.Normal);
             bool handedToCallback = false;
+            AppLog.BeginModalWait("SDL_ShowOpenFolderDialog (game directory)");
+            string? pickedPath;
             try
             {
-                SDL_ShowOpenFolderDialog(
-                    &FolderDialogCallback,
-                    GCHandle.ToIntPtr(handle),
-                    nint.Zero,
-                    default_location: null,
-                    allow_many: false);
-                handedToCallback = true;
+                try
+                {
+                    SDL_ShowOpenFolderDialog(
+                        &FolderDialogCallback,
+                        GCHandle.ToIntPtr(handle),
+                        nint.Zero,
+                        default_location: null,
+                        allow_many: false);
+                    handedToCallback = true;
+                }
+                finally
+                {
+                    if (!handedToCallback && handle.IsAllocated)
+                    {
+                        handle.Free();
+                    }
+                }
+
+                while (true)
+                {
+                    (bool done, pickedPath) = box.Snapshot();
+                    if (done)
+                    {
+                        break;
+                    }
+
+                    SDL_PumpEvents();
+                    while (SDL_PollEvent(out _))
+                    {
+                    }
+
+                    MainThreadDispatcher.Drain();
+                    SDL_Delay(16u);
+                }
             }
             finally
             {
-                if (!handedToCallback && handle.IsAllocated)
-                {
-                    handle.Free();
-                }
-            }
-
-            string? pickedPath;
-            while (true)
-            {
-                (bool done, pickedPath) = box.Snapshot();
-                if (done)
-                {
-                    break;
-                }
-
-                SDL_PumpEvents();
-                while (SDL_PollEvent(out _))
-                {
-                }
-
-                MainThreadDispatcher.Drain();
-                SDL_Delay(16u);
+                AppLog.EndModalWait();
             }
 
             if (string.IsNullOrEmpty(pickedPath))
             {
+                AppLog.Info("Folder picker returned empty/null selection (cancelled).");
                 return null;
             }
 
             string chosen = Path.TrimEndingDirectorySeparator(Path.GetFullPath(pickedPath));
-            if (InstallLocator.IsValidGameDirectory(chosen))
+            AppLog.Info($"User selected folder in picker: {chosen}");
+            if (ResolvePickedGameDirectory(chosen) is { } validChosen)
             {
+                if (!string.Equals(validChosen, chosen, StringComparison.Ordinal))
+                {
+                    AppLog.Info($"Auto-resolved nested game directory inside selected folder: {validChosen}");
+                }
+
                 try
                 {
-                    InstallLocator.SaveInstallRoot(chosen, dataRoot);
+                    InstallLocator.SaveInstallRoot(validChosen, dataRoot);
+                    AppLog.Info($"Saved install root to Settings/install.json: {validChosen}");
                 }
-                catch
+                catch (Exception ex)
                 {
+                    AppLog.Warn($"Failed to save install root: {ex.Message}");
                 }
 
-                return chosen;
+                return validChosen;
             }
 
-            _ = SDL_ShowSimpleMessageBox(
-                SDL_MESSAGEBOX_ERROR,
-                "Invalid Game Folder",
-                "The selected folder does not contain GameData and UIGraphics. Please try again or cancel to quit.",
-                nint.Zero);
+            LogInvalidPickedDirectory(chosen);
+            AppLog.BeginModalWait("Invalid Game Folder error dialog");
+            try
+            {
+                _ = SDL_ShowSimpleMessageBox(
+                    SDL_MESSAGEBOX_ERROR,
+                    "Invalid Game Folder",
+                    "The selected folder does not contain GameData and UIGraphics. Please try again or cancel to quit.",
+                    nint.Zero);
+            }
+            finally
+            {
+                AppLog.EndModalWait();
+            }
+        }
+    }
+
+    private static string? ResolvePickedGameDirectory(string chosen)
+    {
+        if (InstallLocator.IsValidGameDirectory(chosen))
+        {
+            return chosen;
+        }
+
+        if (!Directory.Exists(chosen))
+        {
+            return null;
+        }
+
+        try
+        {
+            var validChildren = Directory.EnumerateDirectories(chosen)
+                .Where(InstallLocator.IsValidGameDirectory)
+                .ToList();
+            if (validChildren.Count == 1)
+            {
+                return Path.TrimEndingDirectorySeparator(Path.GetFullPath(validChildren[0]));
+            }
+        }
+        catch
+        {
+        }
+
+        return null;
+    }
+
+    private static void LogInvalidPickedDirectory(string chosen)
+    {
+        try
+        {
+            if (!Directory.Exists(chosen))
+            {
+                AppLog.Warn($"Selected game directory does not exist: {chosen}");
+                return;
+            }
+
+            var topEntries = Directory.EnumerateFileSystemEntries(chosen)
+                .Select(Path.GetFileName)
+                .Where(static n => !string.IsNullOrEmpty(n))
+                .Take(20)
+                .ToArray();
+            AppLog.Warn($"Selected folder failed GameData+UIGraphics validation: {chosen}; topEntries=[{string.Join(", ", topEntries)}]");
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn($"Selected folder failed validation ({chosen}): {ex.Message}");
+        }
+    }
+
+    private static void LogSdlVideoDiagnostics()
+    {
+        try
+        {
+            int numDrivers = SDL_GetNumVideoDrivers();
+            var drivers = new List<string>(Math.Max(0, numDrivers));
+            for (int i = 0; i < numDrivers; i++)
+            {
+                string d = SDL_GetVideoDriver(i);
+                if (!string.IsNullOrEmpty(d))
+                {
+                    drivers.Add(d);
+                }
+            }
+
+            uint primaryDisplay = SDL_GetPrimaryDisplay();
+            float displayScale = primaryDisplay != 0 ? SDL_GetDisplayContentScale(primaryDisplay) : 1f;
+            AppLog.Info(FormattableString.Invariant(
+                $"SDL video initialized (activeDriver: {SDL_GetCurrentVideoDriver()}, availableDrivers: [{string.Join(", ", drivers)}], primaryDisplay: {primaryDisplay}, displayScale: {displayScale:0.##})"));
+        }
+        catch (Exception ex)
+        {
+            AppLog.Info($"SDL video initialized (driver: {SDL_GetCurrentVideoDriver()}, diagWarn: {ex.Message})");
         }
     }
 
@@ -613,6 +826,8 @@ internal static unsafe partial class Program
                 throw new SDLError("SDL_ClaimWindowForGPUDevice");
             }
             claimed = true;
+            AppLog.Info(FormattableString.Invariant(
+                $"Window created and claimed for GPU ({options.Width}x{options.Height}, pixelDensity: {SDL_GetWindowPixelDensity(window):0.##})"));
 
             if (SDL_WindowSupportsGPUSwapchainComposition(device, window, SDL_GPU_SWAPCHAINCOMPOSITION_SDR_LINEAR))
             {
@@ -682,7 +897,10 @@ internal static unsafe partial class Program
             };
 
             bool windowCloseRequested = false;
+            bool firstFrameLogged = false;
+            bool swapchainInactiveLogged = false;
             long lastLoopStamp = System.Diagnostics.Stopwatch.GetTimestamp();
+            AppLog.SetWindowLoopActive(true);
             while (running && live?.QuitRequested != true)
             {
                 profiler.Begin();
@@ -710,8 +928,66 @@ internal static unsafe partial class Program
                     {
                         commandSubmitted = true;
                         _ = SDL_SubmitGPUCommandBuffer(command);
+                        if (!swapchainInactiveLogged)
+                        {
+                            swapchainInactiveLogged = true;
+                            AppLog.Info(FormattableString.Invariant(
+                                $"Window swapchain inactive/minimized (swapchain=0x{swapchain:X}, size={width}x{height}); pumping events while paused."));
+                        }
+
+                        while (SDL_PollEvent(out SDL_Event inactiveEv))
+                        {
+                            switch (inactiveEv.type)
+                            {
+                                case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
+                                    AppLog.Info("Window close requested while swapchain inactive.");
+                                    if (live is not null)
+                                    {
+                                        windowCloseRequested = true;
+                                        live.ConfirmQuit();
+                                    }
+                                    else
+                                    {
+                                        running = false;
+                                    }
+                                    break;
+                                case SDL_EVENT_QUIT:
+                                    AppLog.Info("SDL_EVENT_QUIT received while swapchain inactive.");
+                                    if (windowCloseRequested)
+                                    {
+                                        windowCloseRequested = false;
+                                    }
+                                    else
+                                    {
+                                        running = false;
+                                    }
+                                    break;
+                                case SDL_EVENT_WINDOW_FOCUS_LOST:
+                                    middleDragging = false;
+                                    live?.SetWindowActive(false);
+                                    break;
+                                case SDL_EVENT_WINDOW_FOCUS_GAINED:
+                                    live?.SetWindowActive(true);
+                                    break;
+                                case SDL_EVENT_KEY_DOWN:
+                                    if (IsRevealLogsShortcut(inactiveEv.key_key, SDL_GetModState()))
+                                    {
+                                        RevealLogsFromShortcut();
+                                    }
+                                    break;
+                            }
+                        }
+
                         MainThreadDispatcher.Drain();
+                        AppLog.RecordMainThreadFrame();
+                        SDL_Delay(16u);
                         continue;
+                    }
+
+                    if (swapchainInactiveLogged)
+                    {
+                        swapchainInactiveLogged = false;
+                        AppLog.Info(FormattableString.Invariant($"Window swapchain restored ({width}x{height})."));
                     }
 
                     if (options.Scale is null)
@@ -721,9 +997,15 @@ internal static unsafe partial class Program
 
                     if (targets is null || targets.Color.Width != (int)width || targets.Color.Height != (int)height)
                     {
+                        bool wasInitialTarget = targets is null;
                         targets?.Dispose();
                         targets = null;
                         targets = new RenderTargets(renderer.GPU, (int)width, (int)height);
+                        if (!wasInitialTarget)
+                        {
+                            AppLog.Info(FormattableString.Invariant(
+                                $"Window render targets resized to {width}x{height} (pixelDensity={SDL_GetWindowPixelDensity(window):0.##}, uiScale={renderer.UIScale:0.##})."));
+                        }
                     }
 
                     CGPoint? pendingMotionLocation = null;
@@ -826,6 +1108,11 @@ internal static unsafe partial class Program
                             case SDL_EVENT_KEY_DOWN:
                             {
                                 ushort mods = SDL_GetModState();
+                                if (IsRevealLogsShortcut(ev.key_key, mods))
+                                {
+                                    RevealLogsFromShortcut();
+                                    break;
+                                }
                                 if ((mods & (SDL_KMOD_GUI | SDL_KMOD_CTRL)) != 0)
                                 {
                                     if (ev.key_key is 0x2Du or SDLK_KP_MINUS)
@@ -1107,6 +1394,7 @@ internal static unsafe partial class Program
                     }
                     catch (Exception ex)
                     {
+                        AppLog.WriteExceptionOnce("ApplyPendingAnimation", ex);
                         Log(ex.Message);
                     }
 
@@ -1150,6 +1438,7 @@ internal static unsafe partial class Program
                         }
                         catch (Exception ex)
                         {
+                            AppLog.WriteExceptionOnce("UiDraws", ex);
                             Log(ex.Message);
                         }
 
@@ -1251,6 +1540,13 @@ internal static unsafe partial class Program
 
                     profiler.Mark("gpu wait");
                     profiler.EndFrame();
+                    AppLog.RecordMainThreadFrame();
+                    if (!firstFrameLogged)
+                    {
+                        firstFrameLogged = true;
+                        AppLog.Info(FormattableString.Invariant(
+                            $"First frame presented ({width}x{height}, pixelDensity={SDL_GetWindowPixelDensity(window):0.##}, uiScale={renderer.UIScale:0.##})."));
+                    }
                 }
                 catch
                 {
@@ -1265,6 +1561,7 @@ internal static unsafe partial class Program
         }
         finally
         {
+            AppLog.SetWindowLoopActive(false);
             if (live is not null)
             {
                 live.WarpPointer = null;
@@ -1458,6 +1755,293 @@ internal static unsafe partial class Program
         stdout.Write(payload);
         stdout.WriteByte(10);
         stdout.Flush();
+    }
+
+    private static StartupPreScan PreScanStartupFlags(string[]? args)
+    {
+        bool help = false;
+        bool packCommand = false;
+        bool automated = false;
+        string? workspace = null;
+        string? dataRoot = null;
+        string? logFile = Environment.GetEnvironmentVariable("SIMS_LOG_FILE");
+        if (string.IsNullOrWhiteSpace(logFile))
+        {
+            logFile = null;
+        }
+
+        if (args is null)
+        {
+            return new StartupPreScan(help, packCommand, automated, workspace, dataRoot, logFile);
+        }
+
+        for (int i = 0; i < args.Length; i++)
+        {
+            switch (args[i])
+            {
+                case "--help":
+                case "-h":
+                    help = true;
+                    break;
+                case "--script":
+                case "--png":
+                    automated = true;
+                    i++;
+                    break;
+                case "--pack-report":
+                case "--validate-packs":
+                case "--list-plugins":
+                    packCommand = true;
+                    automated = true;
+                    break;
+                case "--mount":
+                case "--trust-plugin":
+                case "--revoke-plugin":
+                case "--allocate-object-guid":
+                case "--reserve-object-guid":
+                    packCommand = true;
+                    automated = true;
+                    i++;
+                    break;
+                case "--workspace":
+                    if (i + 1 < args.Length)
+                    {
+                        try
+                        {
+                            workspace = Path.TrimEndingDirectorySeparator(Path.GetFullPath(args[++i]));
+                        }
+                        catch
+                        {
+                        }
+                    }
+                    break;
+                case "--data-root":
+                    if (i + 1 < args.Length)
+                    {
+                        try
+                        {
+                            dataRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(args[++i]));
+                        }
+                        catch
+                        {
+                        }
+                    }
+                    break;
+                case "--log":
+                    if (i + 1 < args.Length)
+                    {
+                        try
+                        {
+                            logFile = Path.GetFullPath(args[++i]);
+                        }
+                        catch
+                        {
+                        }
+                    }
+                    break;
+                case "--scene":
+                case "--width":
+                case "--height":
+                case "--scale":
+                case "--house":
+                case "--game":
+                case "--profile":
+                case "--neighborhood":
+                case "--speed":
+                case "--packs":
+                case "--pack-id":
+                case "--zoom":
+                case "--gpu-driver":
+                    i++;
+                    break;
+            }
+        }
+
+        return new StartupPreScan(help, packCommand, automated, workspace, dataRoot, logFile);
+    }
+
+    private static bool IsRevealLogsShortcut(uint key, ushort mods) =>
+        (key is 'l' or 'L')
+        && (mods & (SDL_KMOD_CTRL | SDL_KMOD_GUI)) != 0
+        && (mods & SDL_KMOD_SHIFT) != 0;
+
+    private static void RevealLogsFromShortcut()
+    {
+        AppLog.Info("User triggered Reveal Logs hotkey (Ctrl/Cmd+Shift+L).");
+        AppLog.Flush();
+        AppLog.RevealLogInFileManager(AppLog.CurrentLogPath, AppLog.CurrentLogsDirectory);
+    }
+
+    private static void InstallProcessExceptionHandlers()
+    {
+        if (Interlocked.Exchange(ref _exceptionHandlersInstalled, 1) != 0)
+        {
+            return;
+        }
+
+        AppDomain.CurrentDomain.UnhandledException += static (_, eventArgs) =>
+        {
+            if (eventArgs.ExceptionObject is Exception ex)
+            {
+                AppLog.Fatal($"AppDomain.UnhandledException (isTerminating={eventArgs.IsTerminating})", ex);
+                ShowFatalCrashDialogIfInteractive(ex);
+            }
+            else
+            {
+                AppLog.Error($"AppDomain.UnhandledException (isTerminating={eventArgs.IsTerminating}): {eventArgs.ExceptionObject}");
+                AppLog.Flush();
+            }
+        };
+
+        TaskScheduler.UnobservedTaskException += static (_, eventArgs) =>
+        {
+            AppLog.Warn($"UnobservedTaskException: {eventArgs.Exception}");
+        };
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void SdlLogCallback(nint userdata, int category, int priority, byte* message)
+    {
+        if (message == null)
+        {
+            return;
+        }
+
+        try
+        {
+            string? text = Marshal.PtrToStringUTF8((nint)message);
+            if (!string.IsNullOrWhiteSpace(text))
+            {
+                AppLog.WriteSdl(category, priority, text);
+            }
+        }
+        catch
+        {
+        }
+    }
+
+    private static bool TryInstallSdlLogHook()
+    {
+        try
+        {
+            _defaultSdlLogFunction = SDL_GetDefaultLogOutputFunction();
+            SDL_SetLogOutputFunction(&SdlLogCallback, nint.Zero);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn($"Could not install SDL log callback: {ex.Message}");
+            return false;
+        }
+    }
+
+    private static void RestoreSdlLogHook()
+    {
+        try
+        {
+            SDL_SetLogOutputFunction(_defaultSdlLogFunction, nint.Zero);
+        }
+        catch
+        {
+        }
+    }
+
+    private static void ShowFatalCrashDialogIfInteractive(Exception ex)
+    {
+        if (!_interactiveCrashDialogEnabled)
+        {
+            return;
+        }
+
+        if (Interlocked.Exchange(ref _crashDialogShown, 1) != 0)
+        {
+            return;
+        }
+
+        AppLog.Flush();
+        string? logPath = AppLog.CurrentLogPath;
+        string? logsDir = AppLog.CurrentLogsDirectory;
+        const string title = "The Sims Native — Crash Report";
+        string logSection = !string.IsNullOrEmpty(logPath)
+            ? $"\n\nLog file saved to:\n{logPath}"
+            : string.Empty;
+        string message = $"The Sims Native encountered an unexpected error and had to close.\n\n{ex.GetType().Name}: {ex.Message}{logSection}";
+
+        try
+        {
+            if (!string.IsNullOrEmpty(logsDir) && Directory.Exists(logsDir))
+            {
+                if (ShowCrashMessageBoxWithLogsButton(title, message))
+                {
+                    AppLog.RevealLogInFileManager(logPath, logsDir);
+                }
+
+                return;
+            }
+
+            _ = SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, title, message, nint.Zero);
+            return;
+        }
+        catch
+        {
+        }
+
+        if (OperatingSystem.IsWindows())
+        {
+            try
+            {
+                _ = MessageBoxW(nint.Zero, message, title, 0x00000010u);
+            }
+            catch
+            {
+            }
+        }
+    }
+
+    private static bool ShowCrashMessageBoxWithLogsButton(string title, string message)
+    {
+        nint titlePtr = Marshal.StringToCoTaskMemUTF8(title);
+        nint messagePtr = Marshal.StringToCoTaskMemUTF8(message);
+        nint closePtr = Marshal.StringToCoTaskMemUTF8("Close");
+        nint openLogsPtr = Marshal.StringToCoTaskMemUTF8("Open Logs Folder");
+        try
+        {
+            var buttons = new SDL_MessageBoxButtonData[2];
+            buttons[0] = new SDL_MessageBoxButtonData
+            {
+                flags = SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT,
+                buttonID = 0,
+                text = closePtr,
+            };
+            buttons[1] = new SDL_MessageBoxButtonData
+            {
+                flags = SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT,
+                buttonID = 1,
+                text = openLogsPtr,
+            };
+
+            fixed (SDL_MessageBoxButtonData* buttonsPtr = buttons)
+            {
+                var data = new SDL_MessageBoxData
+                {
+                    flags = SDL_MESSAGEBOX_ERROR,
+                    window = nint.Zero,
+                    title = titlePtr,
+                    message = messagePtr,
+                    numbuttons = buttons.Length,
+                    buttons = (nint)buttonsPtr,
+                    colorScheme = nint.Zero,
+                };
+                return SDL_ShowMessageBox(in data, out int choice) && choice == 1;
+            }
+        }
+        finally
+        {
+            Marshal.FreeCoTaskMem(titlePtr);
+            Marshal.FreeCoTaskMem(messagePtr);
+            Marshal.FreeCoTaskMem(closePtr);
+            Marshal.FreeCoTaskMem(openLogsPtr);
+        }
     }
 
     private static void Log(string message) => Console.Error.WriteLine($"SimsSDL: {message}");

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 110">
+  <path data-role="well" fill="#000050" fill-rule="evenodd" d="M 0 0 L 120 0 L 120 110 L 0 110 Z"/>
+  <path data-role="shadow" fill="#000028" fill-rule="evenodd" d="M 0 0 L 120 0 L 120 12 L 12 12 L 12 110 L 0 110 Z"/>
+  <path data-role="moat" fill="#181870" fill-rule="evenodd" d="M 12 98 L 108 98 L 108 12 L 120 12 L 120 110 L 12 110 Z"/>
+  <path data-role="fg" fill="#C8D0DC" fill-rule="evenodd" d="M 25.71 55.21 L 94.07 55.21 L 94.07 67.70 L 25.71 67.70 Z"/>
+</svg>

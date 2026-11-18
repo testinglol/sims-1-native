@@ -40,9 +40,6 @@ if [[ ! -d "$publish_dir/Shaders" ]]; then
   exit 1
 fi
 cp -R "$publish_dir/Shaders" "$app/Contents/Resources/Shaders"
-if [[ -d "$root/runtime/ui-hd-pack" ]]; then
-  cp -R "$root/runtime/ui-hd-pack" "$app/Contents/Resources/HdUi"
-fi
 if [[ -f "$root/dist/sims1-icon.icns" ]]; then
   cp "$root/dist/sims1-icon.icns" "$app/Contents/Resources/AppIcon.icns"
 fi

@@ -87,15 +87,26 @@ public sealed class OriginalGameplayOverlay
     private readonly Image _patch;
     private readonly Image _universal;
     private readonly Image _gadget;
+    private readonly Image _vectorGadget;
     private readonly Image _people;
+    private readonly Image _vectorPeople;
     private readonly Image _unknown;
+
+    private Image ActiveGadget => SimsBitmapFont.SharpTextEnabled ? _vectorGadget : _gadget;
+    private Image ActivePeople => SimsBitmapFont.SharpTextEnabled ? _vectorPeople : _people;
     private readonly Image _iconFrame;
     private readonly Image _thumbTemplate;
     private readonly Image _catalogUnknown;
     private readonly Image _cancel;
     private readonly Image _greenBars;
+    private readonly Image _vectorGreenBars;
     private readonly Image _redBars;
+    private readonly Image _vectorRedBars;
     private readonly Image[] _buttons;
+    private readonly Image?[] _vectorButtons;
+
+    private Image ActiveGreenBars => SimsBitmapFont.SharpTextEnabled ? _vectorGreenBars : _greenBars;
+    private Image ActiveRedBars => SimsBitmapFont.SharpTextEnabled ? _vectorRedBars : _redBars;
     private Image[] _labels = [];
     private Image[] _petLabels = [];
     private Image[] _traitLabels = [];
@@ -126,13 +137,22 @@ public sealed class OriginalGameplayOverlay
     private readonly Image _skillBarsOff;
     private readonly Image _skillHighlight;
     private readonly Image _jobIcons;
+    private readonly Image _vectorJobIcons;
     private readonly Image _salaryButton;
+    private readonly Image _vectorSalaryButton;
     private readonly Image _performanceButton;
     private readonly Image _jobFriendSmiley;
+    private readonly Image _vectorJobFriendSmiley;
     private readonly Image _fameBars;
     private readonly Image _fameBarsOff;
     private readonly Image _fameIcons;
+    private readonly Image _vectorFameIcons;
     private readonly Image _fameFriendSmiley;
+    private readonly Image _vectorFameFriendSmiley;
+    private Image ActiveJobIcons => SimsBitmapFont.SharpTextEnabled ? _vectorJobIcons : _jobIcons;
+    private Image ActiveSalaryButton => SimsBitmapFont.SharpTextEnabled ? _vectorSalaryButton : _salaryButton;
+    private Image ActiveJobFriendSmiley => SimsBitmapFont.SharpTextEnabled ? _vectorJobFriendSmiley : _jobFriendSmiley;
+    private Image ActiveFameFriendSmiley => SimsBitmapFont.SharpTextEnabled ? _vectorFameFriendSmiley : _fameFriendSmiley;
     private readonly Image[] _interestIcons;
     private readonly Image _interestBars;
     private readonly Image _interestBackground;
@@ -140,7 +160,9 @@ public sealed class OriginalGameplayOverlay
     private readonly Image _relationshipUnknown;
     private readonly Image[] _relationshipIcons;
     private readonly Image[] _relationshipFilters;
+    private readonly Image[] _vectorRelationshipFilters;
     private readonly Image[] _inventorySorts;
+    private readonly Image[] _vectorInventorySorts;
     private readonly Image _missingInventoryIcon;
     private readonly bool _asianInventoryLayout;
     private int? _hoveredInventoryTile;
@@ -189,7 +211,7 @@ public sealed class OriginalGameplayOverlay
 
     private readonly CGPoint[] _buttonPositions =
     [
-        new(422, 81),
+        new(421, 81),
         new(489, 54),
         new(489, 85),
         new(489, 116),
@@ -366,7 +388,9 @@ public sealed class OriginalGameplayOverlay
         var baseTarga = new SimsTarga(content.Read("UIGraphics/cpanel/Backgrounds/UniversalBack.tga"));
         _universal = CreateImage(device, baseTarga.Width, baseTarga.Height, baseTarga.Rgba);
         _gadget = Bitmap("Backgrounds/LiveGadget.bmp");
+        _vectorGadget = SimsVectorUiKit.ToOverlayImage(SimsVectorUiKit.RenderLiveGadget(scale: 8));
         _people = Bitmap("People/PeopleTemplate.bmp");
+        _vectorPeople = SimsVectorUiKit.ToOverlayImage(SimsVectorUiKit.RenderPeopleTemplateStrip(45, scale: 4));
         _unknown = Bitmap("Buttons/UnknownFace.bmp");
 
         var iconFrameBitmap = new SimsBitmap(content.Read("UIGraphics/cpanel/Buttons/IconFrame.bmp"));
@@ -392,13 +416,29 @@ public sealed class OriginalGameplayOverlay
         _cancel = CreateImage(device, cancelBitmap.Width, cancelBitmap.Height, cancelBitmap.Rgba, magenta: true);
 
         _greenBars = Bitmap("Greenbars.bmp");
+        _vectorGreenBars = SimsVectorUiKit.ToOverlayImage(SimsVectorUiKit.RenderLiveGadgetMoodBars(isGreen: true, scale: 8));
         _redBars = Bitmap("Redbars.bmp");
+        _vectorRedBars = SimsVectorUiKit.ToOverlayImage(SimsVectorUiKit.RenderLiveGadgetMoodBars(isGreen: false, scale: 8));
 
         string[] buttonAssets = ["Mood", "Relationship", "Job", "House", "Personality", "Interest", "Gift"];
         _buttons = new Image[buttonAssets.Length];
+        _vectorButtons = new Image?[buttonAssets.Length];
         for (int i = 0; i < buttonAssets.Length; i++)
         {
-            _buttons[i] = Bitmap("Buttons/" + buttonAssets[i] + ".bmp");
+            var rawBmp = new SimsBitmap(content.Read("UIGraphics/cpanel/Buttons/" + buttonAssets[i] + ".bmp"));
+            _buttons[i] = CreateImage(device, rawBmp.Width, rawBmp.Height, rawBmp.Rgba, magenta: true);
+            int bw = Math.Max(1, rawBmp.Width / 4);
+            int bh = Math.Max(1, rawBmp.Height);
+            if (SimsVectorUiKit.TryRenderSubpanelTabStrip(buttonAssets[i], bw, bh, scale: 4) is { } vecTab)
+            {
+                _vectorButtons[i] = SimsVectorUiKit.ToOverlayImage(vecTab);
+            }
+            else
+            {
+                // Strip baked-in 1x LiveGadget.bmp grey outer frame fringe so 1x fallback buttons never leave a square halo on vector LiveGadget
+                byte[] trimmed = MaskSubpanelOuterFringe(rawBmp.Rgba, rawBmp.Width, rawBmp.Height, columns: 4);
+                _vectorButtons[i] = CreateImage(device, rawBmp.Width, rawBmp.Height, trimmed, magenta: false);
+            }
         }
 
         _careerFont = new SimsBitmapFont(content.Read("UIGraphics/Fonts/variablesans_07.ffn"));
@@ -418,13 +458,18 @@ public sealed class OriginalGameplayOverlay
         _skillBarsOff = Bitmap("Backgrounds/JobSubBarsOff.bmp");
         _skillHighlight = CreateImage(device, 1, 1, [0xc3, 0xcd, 0xcd, 0xff]);
         _jobIcons = Bitmap("Buttons/JobIconMultiButton.BMP");
+        _vectorJobIcons = SimsVectorUiKit.ToOverlayImage(SimsVectorUiKit.RenderJobIconMultiButton(scale: 4));
         _salaryButton = Bitmap("Buttons/SalaryButton.bmp");
+        _vectorSalaryButton = SimsVectorUiKit.ToOverlayImage(SimsVectorUiKit.RenderSalaryButtonStrip(scale: 4));
         _performanceButton = Bitmap("Buttons/PerformanceButton.bmp");
         _jobFriendSmiley = Bitmap("Buttons/JobFriendSmiley.bmp");
+        _vectorJobFriendSmiley = SimsVectorUiKit.ToOverlayImage(SimsVectorUiKit.RenderFriendSmileyStrip(10, 11, scale: 4));
         _fameBars = Bitmap("FameSubBars.bmp");
         _fameBarsOff = Bitmap("Backgrounds/FameSubBarsOff.bmp");
         _fameIcons = Bitmap("Buttons/FameIconMultiButton.BMP");
+        _vectorFameIcons = SimsVectorUiKit.ToOverlayImage(SimsVectorUiKit.RenderFameIconMultiButton(scale: 4));
         _fameFriendSmiley = Bitmap("Buttons/FameFriendSmiley.bmp");
+        _vectorFameFriendSmiley = SimsVectorUiKit.ToOverlayImage(SimsVectorUiKit.RenderFriendSmileyStrip(22, 20, scale: 4));
 
         _interestIcons = new Image[OriginalGameplayLayout.Interests.Count];
         for (int i = 0; i < OriginalGameplayLayout.Interests.Count; i++)
@@ -443,12 +488,25 @@ public sealed class OriginalGameplayOverlay
             Bitmap("Buttons/InventoryOtherSort.bmp"),
             Bitmap("Buttons/InventoryGiftSort.bmp")
         ];
+        _vectorInventorySorts =
+        [
+            SimsVectorUiKit.ToOverlayImage(SimsVectorUiKit.RenderInventorySortStrip(0, scale: 4)),
+            SimsVectorUiKit.ToOverlayImage(SimsVectorUiKit.RenderInventorySortStrip(1, scale: 4)),
+            SimsVectorUiKit.ToOverlayImage(SimsVectorUiKit.RenderInventorySortStrip(2, scale: 4)),
+        ];
         _relationshipFilters =
         [
             Bitmap("Buttons/RelFamilySort.bmp"),
             Bitmap("Buttons/RelFriendSort.bmp"),
             Bitmap("Buttons/RelStarSort.bmp"),
             Bitmap("Buttons/RelAllSort.bmp")
+        ];
+        _vectorRelationshipFilters =
+        [
+            SimsVectorUiKit.ToOverlayImage(SimsVectorUiKit.RenderRelationshipFilterStrip(0, scale: 4)),
+            SimsVectorUiKit.ToOverlayImage(SimsVectorUiKit.RenderRelationshipFilterStrip(1, scale: 4)),
+            SimsVectorUiKit.ToOverlayImage(SimsVectorUiKit.RenderRelationshipFilterStrip(2, scale: 4)),
+            SimsVectorUiKit.ToOverlayImage(SimsVectorUiKit.RenderRelationshipFilterStrip(3, scale: 4)),
         ];
         _missingInventoryIcon = Bitmap("Catalog/BackButtons/BackCTwo.bmp");
     }
@@ -550,6 +608,47 @@ public sealed class OriginalGameplayOverlay
 
         var rgba = SpritePixels.PremultipliedSRGB(pixels, removeMagenta: magenta, removeBlue: blue);
         return new Image(new UITexture(width, height, rgba), logicalSize);
+    }
+
+    /// <summary>
+    /// Removes the static 1x LiveGadget.bmp lavender-grey perimeter pixels baked around the rounded border
+    /// of 4-state subpanel buttons (e.g. Mood.bmp 32x39, Job/House/Interest/Gift 27x30) by detecting outer-2px
+    /// pixels whose Cyan-minus-Red delta does not change between State 0 (Silver) and State 1 (Selected Cyan).
+    /// </summary>
+    private static byte[] MaskSubpanelOuterFringe(byte[] pixels, int width, int height, int columns)
+    {
+        var masked = (byte[])pixels.Clone();
+        int cols = Math.Max(1, columns);
+        if (cols < 2)
+            return masked;
+
+        int cellW = width / cols;
+        for (int cy = 0; cy < height; cy++)
+        {
+            for (int cx = 0; cx < cellW; cx++)
+            {
+                if (cx > 1 && cx < cellW - 2 && cy > 1 && cy < height - 2)
+                    continue;
+
+                int i0 = (cy * width + cx) * 4;
+                int i1 = (cy * width + cellW + cx) * 4;
+                int cyanDelta0 = masked[i0 + 1] - masked[i0];
+                int cyanDelta1 = masked[i1 + 1] - masked[i1];
+                if (Math.Abs(cyanDelta1 - cyanDelta0) <= 10)
+                {
+                    for (int col = 0; col < cols; col++)
+                    {
+                        int off = (cy * width + col * cellW + cx) * 4;
+                        masked[off] = 0;
+                        masked[off + 1] = 0;
+                        masked[off + 2] = 0;
+                        masked[off + 3] = 0;
+                    }
+                }
+            }
+        }
+
+        return masked;
     }
 
     /// <summary>Masks square icon corners by blitting the icon frame using blue transparency over a
@@ -726,7 +825,7 @@ public sealed class OriginalGameplayOverlay
         {
             new(_universal, new CGRect(0, -33, 220, 183)),
             new(_patch, new CGRect(7, -3, _patch.Size.Width, _patch.Size.Height)),
-            new(_gadget, new CGRect(413, 50, 108, 100))
+            new(ActiveGadget, new CGRect(413, 50, 108, 100))
         };
 
         bool selectedIsPet = ((next.Selected?.Gender ?? 0) & 6) != 0;
@@ -737,7 +836,7 @@ public sealed class OriginalGameplayOverlay
                 continue;
             }
 
-            var image = _buttons[index];
+            var image = SimsBitmapFont.SharpTextEnabled && _vectorButtons[index] is { } vBtn ? vBtn : _buttons[index];
             bool enabled = false;
             foreach (var panel in MainTabSubpanels)
             {
@@ -757,7 +856,7 @@ public sealed class OriginalGameplayOverlay
         {
             var sim = next.Household[index];
             var portraitRect = OriginalGameplayLayout.Portrait(index);
-            parts.Add(new Part(_people, portraitRect, new Vector4(sim.Id == next.SelectedSim ? 0.25f : 0f, 0f, 0.25f, 1f)));
+            parts.Add(new Part(ActivePeople, portraitRect, new Vector4(sim.Id == next.SelectedSim ? 0.25f : 0f, 0f, 0.25f, 1f)));
             if (sim.Portrait is { } reference && LoadResource(reference) is { } portraitImage)
             {
                 var faceSize = new CGSize(portraitImage.Size.Width / reference.Columns, portraitImage.Size.Height / reference.Rows);
@@ -786,20 +885,26 @@ public sealed class OriginalGameplayOverlay
         if (next.Selected is { } selected)
         {
             int mood = Math.Min(5, Math.Max(-5, (int)((selected.Mood + 100) * 0.05472637f - 5f)));
+            bool vecBars = SimsBitmapFont.SharpTextEnabled;
+            double barTexH = vecBars ? 26.0 : 25.0;
             if (mood > 0)
             {
-                double height = mood * 5.0;
-                parts.Add(new Part(_greenBars, new CGRect(425, 53 + 25 - height, 27, height), new Vector4(0f, (float)(25.0 - height) / 25f, 1f, (float)height / 25f)));
+                double topOff = (5 - mood) * 5.0;
+                double drawH = barTexH - topOff;
+                parts.Add(new Part(ActiveGreenBars, new CGRect(425, 53 + topOff, 27, drawH), new Vector4(0f, (float)(topOff / barTexH), 1f, (float)(drawH / barTexH))));
             }
             else if (mood < 0)
             {
-                double height = -mood * 5.0;
-                parts.Add(new Part(_redBars, new CGRect(425, 123, 27, height), new Vector4(0f, 0f, 1f, (float)height / 25f)));
+                double extraTop = vecBars ? 1.0 : 0.0;
+                double drawH = -mood * 5.0 + extraTop;
+                parts.Add(new Part(ActiveRedBars, new CGRect(425, 123 - extraTop, 27, drawH), new Vector4(0f, 0f, 1f, (float)(drawH / barTexH))));
             }
             else
             {
-                parts.Add(new Part(_greenBars, new CGRect(425, 76, 27, 2), new Vector4(0f, 23f / 25f, 1f, 2f / 25f)));
-                parts.Add(new Part(_redBars, new CGRect(425, 123, 27, 2), new Vector4(0f, 0f, 1f, 2f / 25f)));
+                double gH = vecBars ? 3.0 : 2.0;
+                double rH = vecBars ? 3.0 : 2.0;
+                parts.Add(new Part(ActiveGreenBars, new CGRect(425, 76, 27, gH), new Vector4(0f, (float)((barTexH - gH) / barTexH), 1f, (float)(gH / barTexH))));
+                parts.Add(new Part(ActiveRedBars, new CGRect(425, 123 - (vecBars ? 1.0 : 0.0), 27, rH), new Vector4(0f, 0f, 1f, (float)(rH / barTexH))));
             }
 
             if (CurrentSubpanel == Subpanel.Needs)
@@ -840,10 +945,11 @@ public sealed class OriginalGameplayOverlay
                 RelationshipPage = Math.Min(RelationshipPage, _grid.PageCount(relationships.Count, capacity) - 1);
 
                 var allFilters = Enum.GetValues<OriginalGameplayLayout.RelationshipFilter>();
+                var activeRelFilters = SimsBitmapFont.SharpTextEnabled ? _vectorRelationshipFilters : _relationshipFilters;
                 for (int index = 0; index < allFilters.Length; index++)
                 {
                     parts.Add(new Part(
-                        _relationshipFilters[index],
+                        activeRelFilters[index],
                         RelationshipFilterRect(index),
                         new Vector4(allFilters[index] == RelationshipFilter ? 0.25f : 0f, 0f, 0.25f, 1f)));
                 }
@@ -928,10 +1034,11 @@ public sealed class OriginalGameplayOverlay
                 parts.Add(new Part(title, new CGRect(titlePoint.X, titlePoint.Y, title.Size.Width, title.Size.Height)));
 
                 var allSorts = Enum.GetValues<OriginalGameplayLayout.InventorySort>();
+                var activeInvSorts = SimsBitmapFont.SharpTextEnabled ? _vectorInventorySorts : _inventorySorts;
                 for (int index = 0; index < allSorts.Length; index++)
                 {
                     parts.Add(new Part(
-                        _inventorySorts[index],
+                        activeInvSorts[index],
                         InventorySortRect(index),
                         new Vector4(allSorts[index] == InventorySort ? 0.25f : 0f, 0f, 0.25f, 1f)));
                 }
@@ -1102,10 +1209,11 @@ public sealed class OriginalGameplayOverlay
                 double sx = layout.JobIconOrigin.X;
                 double summaryW = layout.JobSummaryRect.Width;
                 int jobIconRow = career.HasJob && !career.IsSchool ? Math.Min(21, Math.Max(0, career.Type)) : 0;
-                double jobIconHeight = _jobIcons.Size.Height / 22.0;
-                double jobIconWidth = _jobIcons.Size.Width / 4.0;
+                var activeJobIcons = ActiveJobIcons;
+                double jobIconHeight = activeJobIcons.Size.Height / 22.0;
+                double jobIconWidth = activeJobIcons.Size.Width / 4.0;
                 parts.Add(new Part(
-                    _jobIcons,
+                    activeJobIcons,
                     new CGRect(sx, layout.JobIconOrigin.Y, jobIconWidth, jobIconHeight),
                     new Vector4(0f, jobIconRow / 22f, 0.25f, 1f / 22f)));
 
@@ -1136,10 +1244,11 @@ public sealed class OriginalGameplayOverlay
                     parts.Add(new Part(lineImage, new CGRect(sx, titleTop + index * _careerFont.LineHeight, lineImage.Size.Width, lineImage.Size.Height)));
                 }
 
-                double salaryIconW = _salaryButton.Size.Width / 4.0;
-                double salaryIconH = _salaryButton.Size.Height;
+                var activeSalaryBtn = ActiveSalaryButton;
+                double salaryIconW = activeSalaryBtn.Size.Width / 4.0;
+                double salaryIconH = activeSalaryBtn.Size.Height;
                 parts.Add(new Part(
-                    _salaryButton,
+                    activeSalaryBtn,
                     new CGRect(sx, layout.SalaryRect.Y + Math.Floor((15.0 - salaryIconH) / 2.0), salaryIconW, salaryIconH),
                     new Vector4(0f, 0f, 0.25f, 1f)));
 
@@ -1174,10 +1283,11 @@ public sealed class OriginalGameplayOverlay
                 {
                     var friendsImage = Text(_strings.CareerNeedFriends(requiredFriends), _careerFont, Device);
                     parts.Add(new Part(friendsImage, new CGRect(sx, layout.FriendsRect.Y, friendsImage.Size.Width, friendsImage.Size.Height)));
-                    double friendIconW = _jobFriendSmiley.Size.Width / 4.0;
-                    double friendIconH = _jobFriendSmiley.Size.Height;
+                    var activeJobSmiley = ActiveJobFriendSmiley;
+                    double friendIconW = activeJobSmiley.Size.Width / 4.0;
+                    double friendIconH = activeJobSmiley.Size.Height;
                     parts.Add(new Part(
-                        _jobFriendSmiley,
+                        activeJobSmiley,
                         new CGRect(sx + friendsImage.Size.Width + 3.0, layout.FriendsRect.Y + 2.0, friendIconW, friendIconH),
                         new Vector4(0f, 0f, 0.25f, 1f)));
                 }
@@ -1245,9 +1355,10 @@ public sealed class OriginalGameplayOverlay
                 }
 
                 var friendBounds = layout.FriendsRect;
-                double friendIconW = _fameFriendSmiley.Size.Width / 4.0;
-                double friendIconH = _fameFriendSmiley.Size.Height;
-                parts.Add(new Part(_fameFriendSmiley, new CGRect(friendBounds.X, friendBounds.Y, friendIconW, friendIconH), new Vector4(0f, 0f, 0.25f, 1f)));
+                var activeFameSmiley = ActiveFameFriendSmiley;
+                double friendIconW = activeFameSmiley.Size.Width / 4.0;
+                double friendIconH = activeFameSmiley.Size.Height;
+                parts.Add(new Part(activeFameSmiley, new CGRect(friendBounds.X, friendBounds.Y, friendIconW, friendIconH), new Vector4(0f, 0f, 0.25f, 1f)));
 
                 string starPowerString = (fame.FriendStarPower * 0.5).ToString("0.0", CultureInfo.InvariantCulture);
                 string friendLabel = fame.FriendStarPower < fame.FriendsNeeded * 2
@@ -2465,18 +2576,30 @@ public sealed class OriginalGameplayOverlay
             hoverTextures = new HashSet<UITexture>(ReferenceEqualityComparer.Instance)
             {
                 _people.Texture,
+                _vectorPeople.Texture,
                 _salaryButton.Texture,
+                _vectorSalaryButton.Texture,
                 _performanceButton.Texture,
                 _jobFriendSmiley.Texture,
+                _vectorJobFriendSmiley.Texture,
                 _fameFriendSmiley.Texture,
+                _vectorFameFriendSmiley.Texture,
                 _jobIcons.Texture,
-                _fameIcons.Texture
+                _vectorJobIcons.Texture,
+                _fameIcons.Texture,
+                _vectorFameIcons.Texture
             };
             foreach (var img in ScrollArrows) hoverTextures.Add(img.Texture);
             foreach (var img in _interestArrows) hoverTextures.Add(img.Texture);
             foreach (var img in _buttons) hoverTextures.Add(img.Texture);
+            foreach (var img in _vectorButtons)
+            {
+                if (img is { } vBtn) hoverTextures.Add(vBtn.Texture);
+            }
             foreach (var img in _relationshipFilters) hoverTextures.Add(img.Texture);
+            foreach (var img in _vectorRelationshipFilters) hoverTextures.Add(img.Texture);
             foreach (var img in _inventorySorts) hoverTextures.Add(img.Texture);
+            foreach (var img in _vectorInventorySorts) hoverTextures.Add(img.Texture);
             _hoverTextures = hoverTextures;
         }
 
@@ -2538,7 +2661,7 @@ public sealed class OriginalGameplayOverlay
                                       (int)Math.Round(height, MidpointRounding.AwayFromZero) == 41);
                 if (isSimPortrait)
                 {
-                    parts.Add(new Part(_people, actionRect, new Vector4(0f, 0f, 0.25f, 1f)));
+                    parts.Add(new Part(ActivePeople, actionRect, new Vector4(0f, 0f, 0.25f, 1f)));
                 }
                 else if (width * scale < 45.0 || height * scale < 45.0)
                 {
@@ -2586,26 +2709,37 @@ public sealed class OriginalGameplayOverlay
                 canvas.Width,
                 PersonalityPopup.Width);
             var rect = new CGRect(popupX, canvas.Height - bottomOffset - height, PersonalityPopup.Width, height);
-            const double edge = 12.0;
-            double[] xs = [rect.X, rect.X + edge, rect.X + rect.Width - edge, rect.X + rect.Width];
-            double[] ys = [rect.Y, rect.Y + edge, rect.Y + rect.Height - edge, rect.Y + rect.Height];
-            float[] uv = [0f, 1f / 3f, 2f / 3f, 1f];
-
-            for (int row = 0; row < 3; row++)
+            if (SimsBitmapFont.SharpTextEnabled)
             {
-                for (int column = 0; column < 3; column++)
+                var vecPopup = SimsVectorUiKit.ToOverlayImage(SimsVectorUiKit.RenderPopupInfoFrame(
+                    Math.Max(32, (int)Math.Round(rect.Width)),
+                    Math.Max(32, (int)Math.Round(rect.Height)),
+                    scale: 4));
+                parts.Add(new Part(vecPopup, rect));
+            }
+            else
+            {
+                const double edge = 12.0;
+                double[] xs = [rect.X, rect.X + edge, rect.X + rect.Width - edge, rect.X + rect.Width];
+                double[] ys = [rect.Y, rect.Y + edge, rect.Y + rect.Height - edge, rect.Y + rect.Height];
+                float[] uv = [0f, 1f / 3f, 2f / 3f, 1f];
+
+                for (int row = 0; row < 3; row++)
                 {
-                    parts.Add(new Part(
-                        _livePopupBackground,
-                        new CGRect(xs[column], ys[row], xs[column + 1] - xs[column], ys[row + 1] - ys[row]),
-                        new Vector4(uv[column], uv[row], uv[column + 1] - uv[column], uv[row + 1] - uv[row])));
+                    for (int column = 0; column < 3; column++)
+                    {
+                        parts.Add(new Part(
+                            _livePopupBackground,
+                            new CGRect(xs[column], ys[row], xs[column + 1] - xs[column], ys[row + 1] - ys[row]),
+                            new Vector4(uv[column], uv[row], uv[column + 1] - uv[column], uv[row + 1] - uv[row])));
+                    }
                 }
             }
 
             if (_personalityPopupPortrait is (var portrait, var reference))
             {
                 var frameRect = new CGRect(Math.Floor(rect.X + (168.0 - 45.0) / 2.0), Math.Floor(MidY(rect) - 22.5), 45, 45);
-                parts.Add(new Part(_people, frameRect, new Vector4(0f, 0f, 0.25f, 1f)));
+                parts.Add(new Part(ActivePeople, frameRect, new Vector4(0f, 0f, 0.25f, 1f)));
                 var faceSize = new CGSize(portrait.Size.Width / reference.Columns, portrait.Size.Height / reference.Rows);
                 int mood = State?.Selected?.Mood ?? 0;
                 int expression = reference.Columns >= 3 ? (mood > 30 ? 1 : mood < -30 ? 2 : 0) : 0;

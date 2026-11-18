@@ -757,11 +757,24 @@ public sealed class OriginalFamilyPickerOverlay
             new(left + r.MinX * factor, top + r.MinY * factor, r.Width * factor, r.Height * factor);
 
         var whole = new Vector4(0f, 0f, 1f, 1f);
+        bool sharp = SimsBitmapFont.SharpTextEnabled;
+        var bgImg = sharp
+            ? SimsVectorUiKit.ToOverlayImage(SimsVectorUiKit.RenderFamilyPickerBackground(IsMagicTown, scale: 3))
+            : _background;
+        var rowImg = sharp
+            ? SimsVectorUiKit.ToOverlayImage(SimsVectorUiKit.RenderListRowStrip(
+                Math.Max(64, (int)Math.Round(RowSize.Width)),
+                Math.Max(24, (int)Math.Round(RowSize.Height)),
+                scale: 3))
+            : _row;
+        var peopleImg = sharp
+            ? SimsVectorUiKit.ToOverlayImage(SimsVectorUiKit.RenderPeopleTemplateStrip(45, scale: 4))
+            : _peopleTemplate;
 
         var items = new List<DrawItem>
         {
             new(_outerFill, new CGRect(0.0, 0.0, canvas.Width, canvas.Height), whole),
-            new(_background, Screen(new CGRect(0.0, 0.0, 800.0, 600.0)), whole)
+            new(bgImg, Screen(new CGRect(0.0, 0.0, 800.0, 600.0)), whole)
         };
 
         // Centers the dialog title horizontally across the 800-pixel frame at y=6, compensating for the
@@ -777,14 +790,14 @@ public sealed class OriginalFamilyPickerOverlay
             int index = _scroll + slot;
             if (index >= Families.Count)
             {
-                items.Add(new DrawItem(_row, Screen(rect), new Vector4(0f, 0f, 1f, 1f / 3f)));
+                items.Add(new DrawItem(rowImg, Screen(rect), new Vector4(0f, 0f, 1f, 1f / 3f)));
                 continue;
             }
 
             bool isRowSelected = Selected == index;
             bool isRowHovered = HoveredRow == index;
             float frame = isRowSelected ? 2f : isRowHovered ? 1f : 0f;
-            items.Add(new DrawItem(_row, Screen(rect), new Vector4(0f, frame / 3f, 1f, 1f / 3f)));
+            items.Add(new DrawItem(rowImg, Screen(rect), new Vector4(0f, frame / 3f, 1f, 1f / 3f)));
 
             var textState = isRowSelected ? TextState.Selected : isRowHovered ? TextState.Hover : TextState.Normal;
             var assets = _rowAssets[index];
@@ -807,7 +820,7 @@ public sealed class OriginalFamilyPickerOverlay
                 bool isMemberHovered = _hoveredMember?.Row == index && _hoveredMember?.Member == member;
                 float templateFrame = isMemberHovered ? 2f : isRowSelected ? 1f : 0f;
                 items.Add(new DrawItem(
-                    _peopleTemplate,
+                    peopleImg,
                     Screen(frameRect),
                     new Vector4(templateFrame * 0.25f, 0f, 0.25f, 1f)));
 
@@ -854,7 +867,25 @@ public sealed class OriginalFamilyPickerOverlay
             }
         }
 
-        if (HasScrollbar && _scrollBar is { } scrollBar)
+        if (HasScrollbar && sharp)
+        {
+            int sw = Math.Max(16, (int)Math.Round(ScrollbarRect.Width));
+            int sh = Math.Max(20, (int)Math.Round(ScrollArrowHeight));
+            var upImg = SimsVectorUiKit.ToOverlayImage(SimsVectorUiKit.RenderScrollbarCap(sw, sh, kind: 1, hovered: _hoveredScrollArrow == -1, scale: 4));
+            var trackImg = SimsVectorUiKit.ToOverlayImage(SimsVectorUiKit.RenderScrollbarCap(sw, sh, kind: 3, scale: 4));
+            var downImg = SimsVectorUiKit.ToOverlayImage(SimsVectorUiKit.RenderScrollbarCap(sw, sh, kind: 2, hovered: _hoveredScrollArrow == 1, scale: 4));
+            var thumbRect = ThumbRect;
+            int th = Math.Max(20, (int)Math.Round(thumbRect.Height));
+            var thumbImg = SimsVectorUiKit.ToOverlayImage(SimsVectorUiKit.RenderScrollbarCap(sw, th, kind: 0, scale: 4));
+
+            items.Add(new DrawItem(upImg, Screen(UpArrowRect), whole));
+            double trackH = Math.Max(0.0, DownArrowRect.MinY - UpArrowRect.MaxY);
+            if (trackH > 0.0)
+                items.Add(new DrawItem(trackImg, Screen(new CGRect(ScrollbarRect.MinX, UpArrowRect.MaxY, ScrollbarRect.Width, trackH)), whole));
+            items.Add(new DrawItem(downImg, Screen(DownArrowRect), whole));
+            items.Add(new DrawItem(thumbImg, Screen(thumbRect), whole));
+        }
+        else if (HasScrollbar && _scrollBar is { } scrollBar)
         {
             const float tileU = 25f / 300f;
             float upFrame = _hoveredScrollArrow == -1 ? 1f : 0f;
@@ -898,26 +929,40 @@ public sealed class OriginalFamilyPickerOverlay
             var cRect = _cancelRect;
             bool isHovered = HoveredControl == Control.Cancel;
             float frame = isHovered ? 2f : 0f;
-            double cap = Math.Min(45.0, cRect.Width / 2.0);
-            float u = (float)(cap / _tileButton.Size.Width);
-            const float quarter = 0.25f;
-            (double X, double Width, float U0, float Du)[] slices =
-            [
-                (cRect.MinX, cap, frame * quarter, u),
-                (cRect.MinX + cap, cRect.Width - cap * 2.0, frame * quarter + u, quarter - u * 2f),
-                (cRect.MaxX - cap, cap, (frame + 1f) * quarter - u, u)
-            ];
-            foreach (var (x, width, u0, du) in slices)
+            if (sharp)
             {
-                if (width <= 0.0)
-                {
-                    continue;
-                }
-
+                var vecCancel = SimsVectorUiKit.ToOverlayImage(SimsVectorUiKit.RenderSlantedButtonStrip(
+                    Math.Max(32, (int)Math.Round(cRect.Width)),
+                    Math.Max(24, (int)Math.Round(cRect.Height)),
+                    scale: 4));
                 items.Add(new DrawItem(
-                    _tileButton,
-                    Screen(new CGRect(x, cRect.MinY, width, cRect.Height)),
-                    new Vector4(u0, 0f, du, 1f)));
+                    vecCancel,
+                    Screen(cRect),
+                    new Vector4(frame * 0.25f, 0f, 0.25f, 1f)));
+            }
+            else
+            {
+                double cap = Math.Min(45.0, cRect.Width / 2.0);
+                float u = (float)(cap / _tileButton.Size.Width);
+                const float quarter = 0.25f;
+                (double X, double Width, float U0, float Du)[] slices =
+                [
+                    (cRect.MinX, cap, frame * quarter, u),
+                    (cRect.MinX + cap, cRect.Width - cap * 2.0, frame * quarter + u, quarter - u * 2f),
+                    (cRect.MaxX - cap, cap, (frame + 1f) * quarter - u, u)
+                ];
+                foreach (var (x, width, u0, du) in slices)
+                {
+                    if (width <= 0.0)
+                    {
+                        continue;
+                    }
+
+                    items.Add(new DrawItem(
+                        _tileButton,
+                        Screen(new CGRect(x, cRect.MinY, width, cRect.Height)),
+                        new Vector4(u0, 0f, du, 1f)));
+                }
             }
 
             var caption = isHovered ? _cancelCaptionHover : _cancelCaptionNormal;

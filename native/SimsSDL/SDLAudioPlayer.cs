@@ -100,7 +100,7 @@ internal sealed class AudioMixer
             long? anyMin = null;
             foreach (var kv in _voices)
             {
-                if (kv.Key == protectedVoice)
+                if (kv.Key == protectedVoice || kv.Key < 0)
                     continue;
                 if (anyMin is null || kv.Key < anyMin.Value)
                     anyMin = kv.Key;
@@ -222,11 +222,14 @@ public sealed class SDLAudioPlayer : IDisposable
 {
     private const int Rate = 44_100;
     private const long LoadLoopVoice = long.MinValue + 1;
+    private const long AmbientVoiceBase = long.MinValue + 16;
     private const int MaxCacheEntries = 96;
 
     private readonly string _root;
     private readonly AudioMixer _mixer = new();
     private readonly Dictionary<long, AudioEvent> _events = new();
+    private readonly Dictionary<string, (long Id, string Path, float Gain)> _ambient = new(StringComparer.Ordinal);
+    private long _nextAmbientOffset;
     private readonly Dictionary<string, float[]> _cache = new(StringComparer.Ordinal);
     private readonly Queue<string> _cacheOrder = new();
     private GCHandle _mixerHandle;
@@ -242,12 +245,14 @@ public sealed class SDLAudioPlayer : IDisposable
         ArgumentException.ThrowIfNullOrEmpty(session);
         _root = ResolveRealPath(session);
 
+        AppLog.Info($"Initializing SDL audio subsystem (session: {_root})...");
         if (!SDL_InitSubSystem(SDL_INIT_AUDIO))
         {
             GC.SuppressFinalize(this);
             throw new SDLError("SDL_InitSubSystem(audio)");
         }
         _audioSubSystemInitialized = true;
+        string audioDriver = SDL_GetCurrentAudioDriver();
 
         var spec = new SDL_AudioSpec
         {
@@ -273,6 +278,7 @@ public sealed class SDLAudioPlayer : IDisposable
         }
 
         _ = SDL_ResumeAudioStreamDevice(_stream);
+        AppLog.Info(FormattableString.Invariant($"SDL audio playback stream opened (driver: {audioDriver}, {Rate} Hz stereo F32)."));
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
@@ -479,10 +485,75 @@ public sealed class SDLAudioPlayer : IDisposable
 
     public void StopLoadLoop() => _mixer.Set(LoadLoopVoice, null);
 
+    public void UpdateAmbientBeds(PluginEnvironment? environment, bool paused)
+    {
+        var desired = new Dictionary<string, (string Path, float Gain)>(StringComparer.Ordinal);
+        if (environment is { } env && env.Effect.AmbientSounds is { Count: > 0 } sounds && !paused)
+        {
+            foreach (var sound in sounds)
+            {
+                if (sound.Gain <= 0.002f || string.IsNullOrWhiteSpace(sound.Cue) || string.IsNullOrWhiteSpace(sound.Resource))
+                    continue;
+                string full = environment.Asset(sound.Resource);
+                desired[sound.Cue] = (full, Math.Clamp(sound.Gain, 0f, 1f));
+            }
+        }
+
+        foreach (var cue in _ambient.Keys.Where(k => !desired.ContainsKey(k)).ToArray())
+        {
+            var entry = _ambient[cue];
+            _mixer.Set(entry.Id, null);
+            _ambient.Remove(cue);
+        }
+
+        foreach (var (cue, (path, targetGain)) in desired)
+        {
+            if (_ambient.TryGetValue(cue, out var existing) && string.Equals(existing.Path, path, StringComparison.Ordinal))
+            {
+                float blended = existing.Gain + (targetGain - existing.Gain) * 0.25f;
+                if (MathF.Abs(targetGain - blended) < 0.005f) blended = targetGain;
+                if (MathF.Abs(blended - existing.Gain) > 0.001f)
+                {
+                    _ambient[cue] = (existing.Id, path, blended);
+                    _mixer.Update(existing.Id, (ref AudioMixer.Voice v) => { v.Left = blended; v.Right = blended; v.Paused = false; });
+                }
+                continue;
+            }
+
+            try
+            {
+                string real = ResolveRealPath(path);
+                if (!File.Exists(real))
+                    continue;
+                float[] samples = Decode(real);
+                if (samples.Length == 0)
+                    continue;
+                if (existing.Id != 0)
+                    _mixer.Set(existing.Id, null);
+                long id = AmbientVoiceBase + (_nextAmbientOffset++ & 0xFFFF);
+                float initial = Math.Min(targetGain, 0.2f * targetGain);
+                var voice = new AudioMixer.Voice(samples)
+                {
+                    Left = initial,
+                    Right = initial,
+                    Loop = true,
+                    Outdoors = true,
+                    Paused = false,
+                };
+                _mixer.Set(id, voice);
+                _ambient[cue] = (id, path, initial);
+            }
+            catch
+            {
+            }
+        }
+    }
+
     public void Stop()
     {
         _mixer.Clear();
         _events.Clear();
+        _ambient.Clear();
         nint stream = _stream;
         if (stream != nint.Zero)
             _ = SDL_ClearAudioStream(stream);

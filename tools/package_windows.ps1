@@ -76,11 +76,6 @@ if (Test-Path $UnusedRuntimes) {
 
 Copy-Item $SdlDll (Join-Path $Stage "SDL3.dll") -Force
 
-$HdUiSrc = Join-Path $Root "runtime\ui-hd-pack"
-if (Test-Path $HdUiSrc) {
-    Copy-Item $HdUiSrc (Join-Path $Stage "HdUi") -Recurse -Force
-}
-
 $IconPng = Join-Path $Root "dist\sims1-icon.png"
 if (Test-Path $IconPng) {
     Copy-Item $IconPng (Join-Path $Stage "sims1-icon.png") -Force

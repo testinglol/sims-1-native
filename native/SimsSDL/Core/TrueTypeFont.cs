@@ -26,6 +26,8 @@ public sealed class TrueTypeFont
     private readonly int _hmtxOffset;
     private readonly int _locaOffset;
     private readonly int _glyfOffset;
+    private readonly int _kernSubtableOffset;
+    private readonly ushort _kernPairCount;
     private readonly int _cmapSubtableOffset;
     private readonly ushort _cmapFormat;
     private readonly short _indexToLocFormat;
@@ -52,7 +54,7 @@ public sealed class TrueTypeFont
             throw new ContentError("Unsupported TrueType header");
 
         ushort numTables = U16(sfntOffset + 4);
-        int head = -1, hhea = -1, maxp = -1, hmtx = -1, loca = -1, glyf = -1, cmap = -1, os2 = -1;
+        int head = -1, hhea = -1, maxp = -1, hmtx = -1, loca = -1, glyf = -1, cmap = -1, os2 = -1, kern = -1;
         for (int i = 0; i < numTables; i++)
         {
             int rec = sfntOffset + 12 + i * 16;
@@ -74,6 +76,7 @@ public sealed class TrueTypeFont
                 case 0x676C7966: glyf = offset; break; // glyf
                 case 0x636D6170: cmap = offset; break; // cmap
                 case 0x4F532F32: os2 = offset; break;  // OS/2
+                case 0x6B65726E: kern = offset; break; // kern
             }
         }
 
@@ -100,9 +103,66 @@ public sealed class TrueTypeFont
         if (_cmapSubtableOffset < 0)
             throw new ContentError("TrueType font has no supported Unicode cmap subtable");
 
+        (_kernSubtableOffset, _kernPairCount) = SelectKernFormat0(kern);
         CapHeightUnits = MeasureCapHeight(os2);
         (CapInkSpanUnits, CapBottomUnits) = MeasureCapMetrics();
         StemWidthUnits = MeasureStemWidth();
+    }
+
+    private (int PairsOffset, ushort PairCount) SelectKernFormat0(int kernOffset)
+    {
+        if (kernOffset < 0 || kernOffset + 4 > _data.Length)
+            return (-1, 0);
+        ushort version = U16(kernOffset);
+        if (version != 0)
+            return (-1, 0);
+        ushort nTables = U16(kernOffset + 2);
+        int sub = kernOffset + 4;
+        for (int i = 0; i < nTables; i++)
+        {
+            if (sub + 14 > _data.Length)
+                break;
+            ushort subLen = U16(sub + 2);
+            ushort coverage = U16(sub + 4);
+            int format = coverage >> 8;
+            bool horizontal = (coverage & 1) != 0 && (coverage & 2) == 0 && (coverage & 4) == 0;
+            if (format == 0 && horizontal)
+            {
+                ushort nPairs = U16(sub + 6);
+                int pairsOff = sub + 14;
+                if (pairsOff + nPairs * 6 <= _data.Length)
+                    return (pairsOff, nPairs);
+            }
+            if (subLen < 6)
+                break;
+            sub += subLen;
+        }
+        return (-1, 0);
+    }
+
+    public float GetKerningUnits(uint leftCodePoint, uint rightCodePoint)
+    {
+        if (_kernSubtableOffset < 0 || _kernPairCount == 0)
+            return 0f;
+        ushort gLeft = GlyphIndex(leftCodePoint);
+        ushort gRight = GlyphIndex(rightCodePoint);
+        if (gLeft == 0 || gRight == 0)
+            return 0f;
+        uint key = ((uint)gLeft << 16) | gRight;
+        int lo = 0, hi = _kernPairCount - 1;
+        while (lo <= hi)
+        {
+            int mid = (lo + hi) >>> 1;
+            int off = _kernSubtableOffset + mid * 6;
+            uint midKey = U32(off);
+            if (midKey == key)
+                return S16(off + 4);
+            if (midKey < key)
+                lo = mid + 1;
+            else
+                hi = mid - 1;
+        }
+        return 0f;
     }
 
     public bool HasGlyph(uint codePoint) => GlyphIndex(codePoint) != 0;
@@ -878,7 +938,7 @@ public sealed class TrueTypeFont
         }
 
         float lum = (0.2126f * color.R + 0.7152f * color.G + 0.0722f * color.B) / 255f;
-        float gamma = lum > 0.5f ? 1.45f : 1.12f;
+        float gamma = lum > 0.5f ? 1.15f : 1.04f;
 
         for (int y = 0; y < boxH; y++)
         {

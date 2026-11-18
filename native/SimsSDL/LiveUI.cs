@@ -131,6 +131,7 @@ public sealed class LiveUI
 
     private readonly UITexture _pictureInPictureBorder = new(1, 1, [0, 0, 0, 255]);
     private readonly UITexture? _closeBoxTexture;
+    private readonly UITexture _vectorCloseBoxTexture;
     private (string Text, int Width, List<OriginalGameplayOverlay.Image> Lines)? _cachedPipCaption;
 
     public sealed class DisposePanelState
@@ -222,7 +223,9 @@ public sealed class LiveUI
 
     private CGSize? _lastLogicalCanvas;
     private readonly List<UITexture> _universalTextures = [];
+    private readonly List<UITexture?> _vectorUniversalTextures = [];
     private readonly List<UITexture> _speedTextures = [];
+    private readonly List<UITexture> _vectorSpeedTextures = [];
 
     public CGSize? HelpButtonSize
     {
@@ -324,6 +327,7 @@ public sealed class LiveUI
 
     public OriginalNeighborhoodOverlay? Neighborhood { get; set; }
     public OriginalFamilyPickerOverlay? FamilyPicker { get; set; }
+    public OriginalModsOverlay? ModsOverlay { get; set; }
 
     public OriginalCreditsOverlay? Credits { get; set; }
 
@@ -463,6 +467,7 @@ public sealed class LiveUI
             ? TryFont(splashData) ?? Font
             : Font;
         _closeBoxTexture = TryLoadTexture("UIGraphics/Shared/Sys/CloseBox.bmp", transparent: true);
+        _vectorCloseBoxTexture = SimsVectorUiKit.ToTexture(SimsVectorUiKit.RenderWindowSmallBoxStrip(isCloseX: true, scale: 4));
 
         byte[]? uiTextData = TryRead("GameData/UIText.iff") ?? TryRead("UIText.iff");
         _disposeStrings = uiTextData is not null
@@ -488,8 +493,23 @@ public sealed class LiveUI
 
         foreach (var control in OriginalUniversalControl.All)
             _universalTextures.Add(LoadTexture("UIGraphics/cpanel/Buttons/" + control.Asset, transparent: true));
+        foreach (var control in OriginalUniversalControl.All)
+        {
+            var sz = control.Kind == OriginalUniversalControl.Action.Help
+                ? (HelpButtonSize ?? new CGSize(10, 15))
+                : control.Size;
+            var vecRaster = SimsVectorUiKit.TryRenderUniversalGeometricControlStrip(
+                control.Kind,
+                Math.Max(1, (int)Math.Round(sz.Width)),
+                Math.Max(1, (int)Math.Round(sz.Height)),
+                scale: 4);
+            _vectorUniversalTextures.Add(vecRaster is { } vr ? SimsVectorUiKit.ToTexture(vr) : null);
+        }
         foreach (var control in OriginalSpeedControl.All)
+        {
             _speedTextures.Add(LoadTexture(control.Asset, transparent: true));
+            _vectorSpeedTextures.Add(SimsVectorUiKit.ToTexture(SimsVectorUiKit.RenderSpeedControlStrip(control.Speed, scale: 4)));
+        }
 
         _tutorialHighlightTexture = TryLoadTexture("UIGraphics/CPanel/TutHigh.bmp", transparent: true);
         _appliedSharpText = SimsBitmapFont.SharpTextEnabled;
@@ -544,6 +564,7 @@ public sealed class LiveUI
         Buy.ClearTextCaches();
         Build.ClearTextCaches();
         Neighborhood?.ClearTextCaches();
+        ModsOverlay?.ClearTextCaches();
         CatalogPopup.ClearTextCaches();
 
         bool cameraVisible = Camera.Visible;
@@ -1066,6 +1087,11 @@ public sealed class LiveUI
                 {
                     foreach (var item in Neighborhood.DrawItems(size, scale))
                         draws.Add(new UIDraw(item.Image.Texture, PixelRect(item.Rect), item.UV, item.Opacity));
+                    if (ModsOverlay is not null)
+                    {
+                        foreach (var item in ModsOverlay.DrawItems(size, scale))
+                            draws.Add(new UIDraw(item.Image.Texture, PixelRect(item.Rect), item.UV, item.Opacity));
+                    }
                 }
 
                 if (GameDialog is not null)
@@ -1091,34 +1117,47 @@ public sealed class LiveUI
             float panelOriginX = (float)OriginalUIScalingLayout.PanelBackLayout.PanelOriginX * scale;
             float panelTopY = top + 50f * scale;
             float panelHeight = 100f * scale;
-            float invPanelW = 1f / Math.Max(1, _panel.Width);
 
-            if (panelSlices.LeftBodyWidth > 0)
+            if (SimsBitmapFont.SharpTextEnabled)
             {
-                float leftCols = (float)panelSlices.LeftBodyWidth;
+                double totalCols = panelSlices.LeftBodyWidth + panelSlices.StretchBodyWidth + panelSlices.RightCapWidth;
+                int vecPanelW = Math.Max(64, (int)Math.Round(totalCols));
+                var vecPanelTex = SimsVectorUiKit.ToTexture(SimsVectorUiKit.RenderLivePanelBack(vecPanelW, 100, scale: 3));
+                draws.Add(new UIDraw(
+                    vecPanelTex,
+                    new Vector4(panelOriginX, panelTopY, (float)totalCols * scale, panelHeight)));
+            }
+            else
+            {
+                float invPanelW = 1f / Math.Max(1, _panel.Width);
+
+                if (panelSlices.LeftBodyWidth > 0)
+                {
+                    float leftCols = (float)panelSlices.LeftBodyWidth;
+                    draws.Add(new UIDraw(
+                        _panel,
+                        new Vector4(panelOriginX, panelTopY, leftCols * scale, panelHeight),
+                        new Vector4(0f, 0f, leftCols * invPanelW, 1f)));
+                }
+
+                if (panelSlices.StretchBodyWidth > 0)
+                {
+                    float stretchX = ((float)OriginalUIScalingLayout.PanelBackLayout.PanelOriginX + (float)panelSlices.LeftBodyWidth) * scale;
+                    float stretchW = (float)panelSlices.StretchBodyWidth * scale;
+                    float sampleCol = panelSlices.StretchSampleColumn;
+                    draws.Add(new UIDraw(
+                        _panel,
+                        new Vector4(stretchX, panelTopY, stretchW, panelHeight),
+                        new Vector4(sampleCol * invPanelW, 0f, invPanelW, 1f)));
+                }
+
+                float capCols = (float)panelSlices.RightCapWidth;
+                float capStartCol = panelSlices.RightCapStartColumn;
                 draws.Add(new UIDraw(
                     _panel,
-                    new Vector4(panelOriginX, panelTopY, leftCols * scale, panelHeight),
-                    new Vector4(0f, 0f, leftCols * invPanelW, 1f)));
+                    new Vector4((float)panelSlices.RightCapX * scale, panelTopY, capCols * scale, panelHeight),
+                    new Vector4(capStartCol * invPanelW, 0f, capCols * invPanelW, 1f)));
             }
-
-            if (panelSlices.StretchBodyWidth > 0)
-            {
-                float stretchX = ((float)OriginalUIScalingLayout.PanelBackLayout.PanelOriginX + (float)panelSlices.LeftBodyWidth) * scale;
-                float stretchW = (float)panelSlices.StretchBodyWidth * scale;
-                float sampleCol = panelSlices.StretchSampleColumn;
-                draws.Add(new UIDraw(
-                    _panel,
-                    new Vector4(stretchX, panelTopY, stretchW, panelHeight),
-                    new Vector4(sampleCol * invPanelW, 0f, invPanelW, 1f)));
-            }
-
-            float capCols = (float)panelSlices.RightCapWidth;
-            float capStartCol = panelSlices.RightCapStartColumn;
-            draws.Add(new UIDraw(
-                _panel,
-                new Vector4((float)panelSlices.RightCapX * scale, panelTopY, capCols * scale, panelHeight),
-                new Vector4(capStartCol * invPanelW, 0f, capCols * invPanelW, 1f)));
         }
 
         IReadOnlyList<OriginalGameplayOverlay.Part> rawModeParts = Camera.Visible
@@ -1204,8 +1243,11 @@ public sealed class LiveUI
             float buttonFrame = !enabled ? 3f
                 : IsSelected(control.Kind) ? 1f
                 : HoveredUniversalControl == control.Kind ? 2f : 0f;
+            var univTex = SimsBitmapFont.SharpTextEnabled && index < _vectorUniversalTextures.Count && _vectorUniversalTextures[index] is { } vTex
+                ? vTex
+                : _universalTextures[index];
             draws.Add(new UIDraw(
-                _universalTextures[index],
+                univTex,
                 ScaledRect(control.Rect(logical, HelpButtonSize)),
                 new Vector4(buttonFrame / 4f, 0f, 0.25f, 1f)));
         }
@@ -1264,8 +1306,11 @@ public sealed class LiveUI
                 canvas.Y - (float)OriginalSpeedControl.PanelHeight * scale + (float)control.Position.Y * scale,
                 (float)control.Size.Width * scale,
                 (float)control.Size.Height * scale);
+            var spdTex = SimsBitmapFont.SharpTextEnabled && index < _vectorSpeedTextures.Count
+                ? _vectorSpeedTextures[index]
+                : _speedTextures[index];
             draws.Add(new UIDraw(
-                _speedTextures[index],
+                spdTex,
                 bounds,
                 new Vector4(ctrlState / control.Columns, row / control.Rows, 1f / control.Columns, 1f / control.Rows)));
         }
@@ -1409,7 +1454,8 @@ public sealed class LiveUI
             if (_closeBoxTexture is not null && PictureInPictureCloseRect(logical, scale) is { } closeRect)
             {
                 float col = PictureInPictureClosePressed ? 1f : PictureInPictureCloseHovered ? 2f : 0f;
-                draws.Add(new UIDraw(_closeBoxTexture, ScaledRect(closeRect), new Vector4(col / 4f, 0f, 0.25f, 1f)));
+                var closeTex = SimsBitmapFont.SharpTextEnabled ? _vectorCloseBoxTexture : _closeBoxTexture;
+                draws.Add(new UIDraw(closeTex, ScaledRect(closeRect), new Vector4(col / 4f, 0f, 0.25f, 1f)));
             }
         }
 
@@ -1584,6 +1630,19 @@ public sealed class LiveUI
 
         void DrawNineSliceFrame(UITexture texture, double edge, CGRect rect)
         {
+            if (SimsBitmapFont.SharpTextEnabled)
+            {
+                int fw = Math.Max(32, (int)Math.Round(rect.Width));
+                int fh = Math.Max(32, (int)Math.Round(rect.Height));
+                bool isNeighborhoodSoft = ReferenceEquals(texture, dialog.NeighborhoodFrame.Texture);
+                var vecFrame = SimsVectorUiKit.ToTexture(
+                    isNeighborhoodSoft
+                        ? SimsVectorUiKit.RenderNeighborhoodDialogFrame(fw, fh, scale: 4)
+                        : SimsVectorUiKit.RenderPopupInfoFrame(fw, fh, scale: 4));
+                AddPart(vecFrame, rect);
+                return;
+            }
+
             double[] xs = [rect.MinX, rect.MinX + edge, rect.MaxX - edge, rect.MaxX];
             double[] ys = [rect.MinY, rect.MinY + edge, rect.MaxY - edge, rect.MaxY];
             for (int row = 0; row < 3; row++)
@@ -1600,6 +1659,15 @@ public sealed class LiveUI
 
         void DrawTileButton(CGRect bounds, int state)
         {
+            if (SimsBitmapFont.SharpTextEnabled)
+            {
+                int bw = Math.Max(24, (int)Math.Round(bounds.Width));
+                int bh = Math.Max(20, (int)Math.Round(bounds.Height));
+                var vecBtn = SimsVectorUiKit.ToTexture(SimsVectorUiKit.RenderSlantedButtonStrip(bw, bh, scale: 4));
+                AddPart(vecBtn, bounds, new Vector4(state * 0.25f, 0f, 0.25f, 1f));
+                return;
+            }
+
             float sheetW = dialog.ButtonSheetWidth;
             float framePx = sheetW / 4f;
             float basePx = state * framePx;
@@ -1771,10 +1839,34 @@ public sealed class LiveUI
 
             if (dialog.Illustration is { } image)
             {
-                if (dialog.FramesIllustrationInPeopleTemplate)
-                    DrawPeopleFramedPortrait(image, dialog.ImageRect, image.FrameUV);
+                if (dialog.UsesPictureDialogStub)
+                {
+                    if (dialog.PictureDialogStub is { } stub)
+                        AddPart(stub.Texture, dialog.ImageRect, stub.TopLeftUV);
+
+                    var portraitRect = new CGRect(
+                        dialog.ImageRect.MinX + Math.Floor((dialog.ImageRect.Width - 45.0) / 2.0),
+                        dialog.ImageRect.MinY + Math.Floor((dialog.ImageRect.Height - 45.0) / 2.0),
+                        45.0,
+                        45.0);
+
+                    if (dialog.IsPrecompositedPeoplePortrait && SimsBitmapFont.SharpTextEnabled && dialog.PeopleTemplate is { } hiDpiTpl)
+                    {
+                        AddPart(hiDpiTpl.Texture, portraitRect, hiDpiTpl.TopLeftUV);
+                        AddPart(
+                            image.Texture,
+                            new CGRect(portraitRect.MinX + 3.0, portraitRect.MinY + 2.0, 39.0, 41.0),
+                            new Vector4(3f / 45f, 2f / 45f, 39f / 45f, 41f / 45f));
+                    }
+                    else
+                    {
+                        DrawPeopleFramedPortrait(image, portraitRect, image.FrameUV);
+                    }
+                }
                 else
+                {
                     AddPart(image.Texture, dialog.ImageRect, image.FrameUV);
+                }
             }
 
             foreach (var line in dialog.VisibleLines)
@@ -1784,11 +1876,12 @@ public sealed class LiveUI
             {
                 var inputBox = dialog.InputRect;
                 var borderTex = dialog.InputFocused ? dialog.InputBorderFocused : dialog.InputBorderUnfocused;
+                double borderPx = SimsBitmapFont.SharpTextEnabled && scale > 1.01f ? Math.Max(0.5, 1.0 / scale) : 1.0;
                 AddPart(dialog.InputBackground, inputBox);
-                AddPart(borderTex, new CGRect(inputBox.MinX, inputBox.MinY, inputBox.Width, 1));
-                AddPart(borderTex, new CGRect(inputBox.MinX, inputBox.MaxY - 1, inputBox.Width, 1));
-                AddPart(borderTex, new CGRect(inputBox.MinX, inputBox.MinY + 1, 1, Math.Max(0, inputBox.Height - 2)));
-                AddPart(borderTex, new CGRect(inputBox.MaxX - 1, inputBox.MinY + 1, 1, Math.Max(0, inputBox.Height - 2)));
+                AddPart(borderTex, new CGRect(inputBox.MinX, inputBox.MinY, inputBox.Width, borderPx));
+                AddPart(borderTex, new CGRect(inputBox.MinX, inputBox.MaxY - borderPx, inputBox.Width, borderPx));
+                AddPart(borderTex, new CGRect(inputBox.MinX, inputBox.MinY + borderPx, borderPx, Math.Max(0, inputBox.Height - borderPx * 2.0)));
+                AddPart(borderTex, new CGRect(inputBox.MaxX - borderPx, inputBox.MinY + borderPx, borderPx, Math.Max(0, inputBox.Height - borderPx * 2.0)));
 
                 double maxInputW = Math.Max(0, inputBox.Width - 8);
                 double drawW = Math.Min(input.Size.Width, maxInputW);

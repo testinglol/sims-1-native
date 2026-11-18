@@ -143,6 +143,11 @@ public sealed partial class GameContent
             var packStackJson = BuildPackStackJson(report);
             File.WriteAllBytes(Path.Combine(staging, ".pack-stack.json"), packStackJson);
 
+            if (DisabledDownloadFolders.Count > 0)
+            {
+                File.WriteAllLines(Path.Combine(staging, ".disabled-downloads.txt"), DisabledDownloadFolders);
+            }
+
             if (cacheIdentity is not null)
             {
                 var fingerprint = usesLiveBase ? "live-base" : ComputeFingerprint(sourceEntries);
@@ -466,6 +471,10 @@ public sealed partial class GameContent
         try
         {
             File.Copy(source, output, overwrite: false);
+            if (!shares)
+            {
+                ClearReadOnlyIfPresent(output);
+            }
         }
         catch (Exception ex)
         {
@@ -538,11 +547,35 @@ public sealed partial class GameContent
 
         if (File.Exists(path))
         {
-            File.Delete(path);
+            try
+            {
+                File.Delete(path);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                ClearReadOnlyIfPresent(path);
+                File.Delete(path);
+            }
         }
         else if (Directory.Exists(path))
         {
             Directory.Delete(path, recursive: true);
+        }
+    }
+
+    private static void ClearReadOnlyIfPresent(string path)
+    {
+        try
+        {
+            var attrs = File.GetAttributes(path);
+            if ((attrs & FileAttributes.ReadOnly) != 0)
+            {
+                var cleared = attrs & ~FileAttributes.ReadOnly;
+                File.SetAttributes(path, cleared == 0 ? FileAttributes.Normal : cleared);
+            }
+        }
+        catch
+        {
         }
     }
 

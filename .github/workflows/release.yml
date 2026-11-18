@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Release version string (e.g. 0.2.0)
+        description: Release version string (e.g. 0.4.0)
         required: false
-        default: '0.2.0'
+        default: '0.4.0'
   push:
     tags:
       - 'v*'
@@ -189,6 +189,53 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract changelog notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - "${GITHUB_REF_NAME}" "${GITHUB_REPOSITORY}" <<'PY'
+          import pathlib, re, subprocess, sys
+
+          tag = sys.argv[1]
+          repo = sys.argv[2]
+          version = tag.lstrip("v")
+          body = ""
+          changelog = pathlib.Path("CHANGELOG.md")
+          if changelog.is_file():
+              text = changelog.read_text(encoding="utf-8")
+              pattern = re.compile(
+                  rf"^## \[v?{re.escape(version)}\][^\n]*\n(.*?)(?=^## \[|\Z)",
+                  re.MULTILINE | re.DOTALL,
+              )
+              m = pattern.search(text)
+              if m:
+                  body = m.group(1).strip()
+                  body = re.sub(r"\n---\s*\Z", "", body).strip()
+
+          tags = subprocess.check_output(
+              ["git", "tag", "--list", "v*", "--sort=-version:refname"],
+              text=True,
+          ).splitlines()
+          prev_tag = None
+          if tag in tags:
+              idx = tags.index(tag)
+              if idx + 1 < len(tags):
+                  prev_tag = tags[idx + 1]
+
+          parts = []
+          if body:
+              parts.append(body)
+          if prev_tag:
+              parts.append(f"**Full Changelog**: https://github.com/{repo}/compare/{prev_tag}...{tag}")
+          pathlib.Path("release-notes.md").write_text("\n\n".join(parts) + "\n", encoding="utf-8")
+          PY
+          cat release-notes.md
+
       - name: Download release artifacts
         uses: actions/download-artifact@v4
         with:
@@ -197,7 +244,8 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
+          body_path: release-notes.md
+          generate_release_notes: false
           files: |
             The-Sims-Native-macOS-arm64.zip
             The-Sims-Native-Windows-x64.zip

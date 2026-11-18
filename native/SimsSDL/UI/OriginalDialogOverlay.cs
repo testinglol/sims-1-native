@@ -82,6 +82,7 @@ public sealed class OriginalDialogOverlay
     public double ButtonCapWidth { get; }
     public UITexture ScrollbarTexture { get; }
     public Image? PeopleTemplate { get; }
+    public Image? PictureDialogStub { get; }
     public Image? UnknownFace { get; }
     public Image? TutorialCloseBox { get; }
     public UITexture BodyTexture { get; }
@@ -102,6 +103,8 @@ public sealed class OriginalDialogOverlay
     public Image? PhoneIcon { get; }
     public Image? Illustration { get; }
     public bool FramesIllustrationInPeopleTemplate { get; }
+    public bool IsPrecompositedPeoplePortrait { get; }
+    public bool UsesPictureDialogStub => FramesIllustrationInPeopleTemplate || IsPrecompositedPeoplePortrait;
     public CGRect ImageRect { get; private set; }
     public CGRect PhoneIconRect { get; private set; }
     public Image Title { get; }
@@ -225,13 +228,16 @@ public sealed class OriginalDialogOverlay
 
         // Bitmap font line heights exceed nominal point sizes (08 is 16px, 09 is 17px, 10 is 19px, 12 is
         // 23px, 14 is 27px), requiring a 12pt title font (13px cap) and 10pt body font (10px cap) to align
-        // with standard button heights.
+        // with standard button heights and Sims.exe 3-line / 5-line SimStub wrapping.
         var loaded12 = TryFont(content, "UIGraphics/Fonts/variablesans_12.ffn") ?? font;
-        var loaded09 = TryFont(content, "UIGraphics/Fonts/variablesans_09.ffn") ?? font;
+        var loaded10 = TryFont(content, "UIGraphics/Fonts/variablesans_10.ffn")
+            ?? TryFont(content, "UIGraphics/Fonts/variablesans_09.ffn")
+            ?? font;
+        var loaded09 = TryFont(content, "UIGraphics/Fonts/variablesans_09.ffn") ?? loaded10;
         TitleFont = loaded12;
         DialogTitleFont = loaded12;
-        MessageBodyFont = loaded09;
-        InputFont = loaded09;
+        MessageBodyFont = loaded10;
+        InputFont = loaded10;
         ButtonFont = loaded09;
         TooltipFont = TryFont(content, "UIGraphics/Fonts/variablesans_07.ffn")
             ?? TryFont(content, "UIGraphics/Fonts/variablesans_08.ffn")
@@ -264,24 +270,57 @@ public sealed class OriginalDialogOverlay
 
         if (illustrationBitmap is not null)
         {
+            byte[] illRgba = (byte[])illustrationBitmap.Rgba.Clone();
+            int iw = illustrationBitmap.Width;
+            int ih = illustrationBitmap.Height;
+            // Maxis RLEBMP dialog illustrations (MagicPool.bmp, TragedyMask.BMP, SocialInfoPopup.BMP, PopupOpt*.bmp)
+            // quantize dialog navy (0,0,81) to 16-bit 565 (0,0,82); normalize matching navy background pixels to
+            // exact (0,0,81) so zero 1/255 seam rectangle ever shows on PopupInfoTiles.bmp while preserving lighter
+            // card icons like Did You Know? ((0, 24, 107)).
+            static bool IsDialogNavy(byte[] buf, int pixelIdx)
+            {
+                int o = pixelIdx * 4;
+                return buf[o + 3] == 255 && buf[o] == 0 && buf[o + 1] == 0 && buf[o + 2] is >= 78 and <= 85;
+            }
+            if (iw >= 8 && ih >= 8 &&
+                IsDialogNavy(illRgba, 0) &&
+                IsDialogNavy(illRgba, iw - 1) &&
+                IsDialogNavy(illRgba, (ih - 1) * iw) &&
+                IsDialogNavy(illRgba, ih * iw - 1))
+            {
+                for (int i = 0; i < iw * ih; i++)
+                {
+                    if (IsDialogNavy(illRgba, i))
+                        illRgba[i * 4 + 2] = 81;
+                }
+            }
+
             var loadedIllustration = new Image(
-                Upload(illustrationBitmap, transparent: true),
-                new CGSize(illustrationBitmap.Width, illustrationBitmap.Height),
+                Texture(device, iw, ih, SpritePixels.PremultipliedSRGB(illRgba, removeMagenta: true)),
+                new CGSize(iw, ih),
                 dialog.Image?.Columns ?? 1,
                 dialog.Image?.Rows ?? 1);
             Illustration = loadedIllustration;
             double frameW = loadedIllustration.FrameSize.Width;
             double frameH = loadedIllustration.FrameSize.Height;
-            // Centers 35x41 Sim head portraits within the 45x45 frame of <c>PeopleTemplate.bmp</c>.
+            int rFrameW = (int)Math.Round(frameW, MidpointRounding.AwayFromZero);
+            int rFrameH = (int)Math.Round(frameH, MidpointRounding.AwayFromZero);
+            // Centers 35x41 Sim head portraits within the 45x45 frame of <c>PeopleTemplate.bmp</c>, and detects
+            // 45x45 pre-composited person/pet portraits so both expand onto the 133x103 SimStub radial blue glow
+            // (matching Sims.exe cTSPersonPictureDialog 00525e72 / 00526df4 / 00526e2d).
             FramesIllustrationInPeopleTemplate = frameW > 0 && frameW <= 41 && frameH > 0 && frameH <= 43
-                && (loadedIllustration.Columns == 3
-                    || ((int)Math.Round(frameW, MidpointRounding.AwayFromZero) == 35
-                        && (int)Math.Round(frameH, MidpointRounding.AwayFromZero) == 41));
+                && (loadedIllustration.Columns == 3 || (rFrameW == 35 && rFrameH == 41));
+            IsPrecompositedPeoplePortrait = !FramesIllustrationInPeopleTemplate
+                && loadedIllustration.Columns == 1
+                && loadedIllustration.Rows == 1
+                && rFrameW == 45
+                && rFrameH == 45;
         }
         else
         {
             Illustration = null;
             FramesIllustrationInPeopleTemplate = false;
+            IsPrecompositedPeoplePortrait = false;
         }
 
         var tiler = new SimsTarga(content.Read("UIGraphics/Nbhd/NScreenDialogTiler.tga"));
@@ -299,15 +338,36 @@ public sealed class OriginalDialogOverlay
 
         ScrollbarTexture = Upload(new SimsBitmap(content.Read("UIGraphics/Shared/Sys/WinScrol.bmp")), transparent: false);
 
-        PeopleTemplate = TryUploadSheet(content, "UIGraphics/cpanel/People/PeopleTemplate.bmp", columns: 4, rows: 1, transparent: true, Upload);
+        PeopleTemplate = SimsBitmapFont.SharpTextEnabled
+            ? new Image(
+                SimsVectorUiKit.ToTexture(SimsVectorUiKit.RenderPeopleTemplateStrip(45, scale: 4)),
+                new CGSize(180, 45),
+                Columns: 4,
+                Rows: 1)
+            : TryUploadSheet(content, "UIGraphics/cpanel/People/PeopleTemplate.bmp", columns: 4, rows: 1, transparent: true, Upload);
+        PictureDialogStub = SimsBitmapFont.SharpTextEnabled
+            ? new Image(
+                SimsVectorUiKit.ToTexture(SimsVectorUiKit.RenderPictureDialogStub(133, 103, scale: 4)),
+                new CGSize(133, 103))
+            : TryUploadSheet(content, "UIGraphics/CPanel/SimStub.BMP", columns: 1, rows: 1, transparent: false, Upload)
+              ?? TryUploadSheet(content, "UIGraphics/cpanel/SimStub.BMP", columns: 1, rows: 1, transparent: false, Upload);
         UnknownFace = TryUploadSheet(content, "UIGraphics/cpanel/Buttons/UnknownFace.bmp", columns: 3, rows: 1, transparent: true, Upload);
 
         if (!dialog.Blocking && (dialog.Tutorial == true || dialog.Buttons.Count == 0))
         {
-            var closeBitmap = new SimsBitmap(content.Read("UIGraphics/Shared/Sys/MinimizeBox.bmp"));
-            TutorialCloseBox = new Image(
-                Upload(closeBitmap, transparent: true),
-                new CGSize(closeBitmap.Width / 4.0, closeBitmap.Height));
+            if (SimsBitmapFont.SharpTextEnabled)
+            {
+                TutorialCloseBox = new Image(
+                    SimsVectorUiKit.ToTexture(SimsVectorUiKit.RenderWindowSmallBoxStrip(isCloseX: false, scale: 4)),
+                    new CGSize(12, 11));
+            }
+            else
+            {
+                var closeBitmap = new SimsBitmap(content.Read("UIGraphics/Shared/Sys/MinimizeBox.bmp"));
+                TutorialCloseBox = new Image(
+                    Upload(closeBitmap, transparent: true),
+                    new CGSize(closeBitmap.Width / 4.0, closeBitmap.Height));
+            }
         }
         else
         {
@@ -608,6 +668,24 @@ public sealed class OriginalDialogOverlay
         bool upActive = scroll > 0 && _lastHoverLocal is { } hoverUp && upRect.Contains(hoverUp);
         bool downActive = scroll < maxScroll && _lastHoverLocal is { } hoverDown && downRect.Contains(hoverDown);
 
+        if (SimsBitmapFont.SharpTextEnabled)
+        {
+            var whole = new Vector4(0f, 0f, 1f, 1f);
+            int sw = Math.Max(12, (int)Math.Round(bar.Width));
+            int sh = Math.Max(14, (int)Math.Round(btnH));
+            _scrollButtonDraws.Add((SimsVectorUiKit.ToTexture(SimsVectorUiKit.RenderScrollbarCap(sw, sh, kind: 1, hovered: upActive, scale: 4)), upRect, whole));
+            if (trackRect.Height > 0)
+                _scrollButtonDraws.Add((SimsVectorUiKit.ToTexture(SimsVectorUiKit.RenderScrollbarCap(sw, sh, kind: 3, scale: 4)), trackRect, whole));
+            _scrollButtonDraws.Add((SimsVectorUiKit.ToTexture(SimsVectorUiKit.RenderScrollbarCap(sw, sh, kind: 2, hovered: downActive, scale: 4)), downRect, whole));
+            if (maxScroll > 0 && trackRect.Height >= btnH)
+            {
+                var thumbRect = ScrollbarThumbRect(bar, scroll, maxScroll);
+                int th = Math.Max(14, (int)Math.Round(thumbRect.Height));
+                _scrollButtonDraws.Add((SimsVectorUiKit.ToTexture(SimsVectorUiKit.RenderScrollbarCap(sw, th, kind: 0, scale: 4)), thumbRect, whole));
+            }
+            return;
+        }
+
         // Maps scrollbar texture cells: cells 0 and 1 for up button states, cell 2 for the thumb, cell 3
         // for the track, and cells 4 and 5 for down button states.
         _scrollButtonDraws.Add((ScrollbarTexture, upRect, new Vector4((upActive ? 1f : 0f) * cellW, 0f, cellW, 1f)));
@@ -642,8 +720,8 @@ public sealed class OriginalDialogOverlay
         }
 
         CGSize rawImageFrame = Illustration?.FrameSize ?? CGSize.Zero;
-        CGSize imageFrame = FramesIllustrationInPeopleTemplate && PeopleTemplate is not null
-            ? new CGSize(45, 45)
+        CGSize imageFrame = UsesPictureDialogStub
+            ? (PictureDialogStub?.Size ?? new CGSize(133, 103))
             : rawImageFrame;
 
         OriginalMessageDialogLayout.Result layout;

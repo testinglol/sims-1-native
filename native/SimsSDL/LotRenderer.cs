@@ -134,6 +134,13 @@ public sealed class LotRenderer : IDisposable
         public float Tint;
         public int SurfaceMode;
         public float SurfaceAmount;
+        public float GrassQuality;
+        public float SpringBloom;
+        public float Snowfall;
+        public float Fireflies;
+        public float Hail;
+        public float Frost;
+        public float Thunder;
 
         public AmbientParameters()
         {
@@ -314,6 +321,7 @@ public sealed class LotRenderer : IDisposable
     private GPUTexture? _simMaskTexture;
     private GPUTexture? _emptySimMaskTexture;
     private GPUTexture? _surfaceSourceTexture;
+    private GPUTexture? _seasonDepthTexture;
 
     private readonly Queue<(ulong Frame, IDisposable Resource)> _retiredGpu = new();
     private ulong _frameCounter;
@@ -455,6 +463,7 @@ public sealed class LotRenderer : IDisposable
         Collect(all, _simMaskTexture);
         Collect(all, _emptySimMaskTexture);
         Collect(all, _surfaceSourceTexture);
+        Collect(all, _seasonDepthTexture);
 
         foreach (MeshSlice? slice in _meshSlices) Collect(all, slice?.Buffer);
         foreach (MeshSlice? slice in _staticMeshSlices) Collect(all, slice?.Buffer);
@@ -2482,6 +2491,13 @@ public sealed class LotRenderer : IDisposable
         Ambient.CloudCover = effect?.CloudCover ?? 0f;
         Ambient.Rain = effect?.Precipitation ?? 0f;
         Ambient.Wetness = effect?.Wetness ?? 0f;
+        Ambient.GrassQuality = Param("grassQuality", Param("grass"));
+        Ambient.SpringBloom = Param("springBloom");
+        Ambient.Snowfall = Param("snowfall");
+        Ambient.Fireflies = Param("fireflies");
+        Ambient.Hail = Param("hail");
+        Ambient.Frost = Param("frost");
+        Ambient.Thunder = Param("thunder");
 
         var nextShaders = new Dictionary<string, string>();
         if (value is not null && effect is not null)
@@ -2614,8 +2630,11 @@ public sealed class LotRenderer : IDisposable
         }
 
         List<(int Index, float Altitude)> altitudes = [];
+        HashSet<int> seenAltitudes = [];
         Dictionary<int, byte> halves = new();
         HashSet<int> whole = [];
+        Dictionary<int, byte> outdoorHalves = new();
+        HashSet<int> outdoorWhole = [];
 
         foreach (LotScene.Mesh mesh in scene.Meshes ?? [])
         {
@@ -2625,16 +2644,10 @@ public sealed class LotRenderer : IDisposable
             }
 
             // Tile centers sit 16*(x+y+1) px below frame, minus 40 px per altitude tile.
-            if (floor.Half == 0 && mesh.Vertices.Count > 0)
+            if (mesh.Vertices.Count > 0 && seenAltitudes.Add(at.Index + 2 * rows * columns))
             {
-                float sumY = 0f;
-                for (int i = 0; i < mesh.Vertices.Count; i++)
-                {
-                    sumY += mesh.Vertices[i].Y;
-                }
-
-                float y = sumY / mesh.Vertices.Count;
-                altitudes.Add((at.Index + 2 * rows * columns, (frame.Y + 16f * (at.X + at.Y + 1) - y) / 40f));
+                LotScene.MeshVertex v0 = mesh.Vertices[0];
+                altitudes.Add((at.Index + 2 * rows * columns, (frame.Y + 16f * (at.X + at.Y) + 32f * v0.V - v0.Y) / 40f));
             }
 
             if (mesh.Room is not int room || room < 0 || room >= lighting.Rooms.Count || lighting.Rooms[room].Outside)
@@ -2647,6 +2660,18 @@ public sealed class LotRenderer : IDisposable
                 if (floor.Pattern is >= 9 and <= 11)
                 {
                     mask[at.Index + 4 * rows * columns] |= 0x40;
+                }
+
+                if (floor.Pattern != 12 && floor.Pattern is not (>= 9 and <= 11))
+                {
+                    if (floor.Half == 0 || outdoorHalves.ContainsKey(at.Index))
+                    {
+                        outdoorWhole.Add(at.Index);
+                    }
+                    else if (floor.Half is >= 1 and <= 4)
+                    {
+                        outdoorHalves[at.Index] = (byte)floor.Half;
+                    }
                 }
 
                 continue;
@@ -2667,7 +2692,15 @@ public sealed class LotRenderer : IDisposable
         {
             if (!whole.Contains(index))
             {
-                mask[index + 4 * rows * columns] = half;
+                mask[index + 4 * rows * columns] |= (byte)(half & 7);
+            }
+        }
+
+        foreach (var (index, half) in outdoorHalves)
+        {
+            if (mask[index] < 2 && !outdoorWhole.Contains(index))
+            {
+                mask[index + 4 * rows * columns] |= (byte)(half & 7);
             }
         }
 
@@ -2806,6 +2839,23 @@ public sealed class LotRenderer : IDisposable
             SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER);
         Retire(_groundDepthTexture);
         _groundDepthTexture = texture;
+        return texture;
+    }
+
+    private GPUTexture SeasonDepthTexture(int width, int height)
+    {
+        if (_seasonDepthTexture is not null && _seasonDepthTexture.Width == width && _seasonDepthTexture.Height == height)
+        {
+            return _seasonDepthTexture;
+        }
+
+        GPUTexture texture = GPU.MakeTexture(
+            width,
+            height,
+            GPUContext.DepthFormat,
+            SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER);
+        Retire(_seasonDepthTexture);
+        _seasonDepthTexture = texture;
         return texture;
     }
 
@@ -3031,6 +3081,124 @@ public sealed class LotRenderer : IDisposable
         }
     }
 
+    private unsafe void EncodeSeasonDepth(
+        nint command,
+        GPUTexture color,
+        GPUTexture seasonDepth,
+        SimsSDL.Core.SceneViewport viewport,
+        Vector2 canvas,
+        bool displaced)
+    {
+        if (Scene is not { } scene || _drawItems.Count == 0)
+        {
+            return;
+        }
+
+        var colorTarget = new SDL_GPUColorTargetInfo
+        {
+            texture = color.Handle,
+            load_op = SDL_GPU_LOADOP_LOAD,
+            store_op = SDL_GPU_STOREOP_STORE,
+        };
+        var depthTarget = new SDL_GPUDepthStencilTargetInfo
+        {
+            texture = seasonDepth.Handle,
+            load_op = SDL_GPU_LOADOP_LOAD,
+            store_op = SDL_GPU_STOREOP_STORE,
+            stencil_load_op = SDL_GPU_LOADOP_DONT_CARE,
+            stencil_store_op = SDL_GPU_STOREOP_DONT_CARE,
+        };
+
+        nint pass = SDL_BeginGPURenderPass(command, &colorTarget, 1, &depthTarget);
+        if (pass == 0)
+        {
+            throw new SDLError("SDL_BeginGPURenderPass");
+        }
+
+        try
+        {
+            var scissor = new SDL_Rect { x = 0, y = 0, w = (int)canvas.X, h = (int)canvas.Y };
+            SDL_SetGPUScissor(pass, in scissor);
+            SDL_BindGPUGraphicsPipeline(pass, GPU.Pipeline(GPUContext.Program.SpriteDepth, GPUContext.DepthMode.MeshDepthPrepass));
+
+            float scale = viewport.Scale;
+            Vector2 origin = viewport.Origin;
+            LotZoom zoom = EffectiveVisualZoom;
+            bool settledIntegerUi = UIScale == MathF.Round(UIScale, MidpointRounding.AwayFromZero) && !IsZoomInterpolating;
+            nint artSampler = settledIntegerUi ? GPU.PixelSampler : GPU.Sampler;
+            nint spriteSampler = AntiAliasedSprites ? GPU.Sampler : artSampler;
+            bool spriteMinified = scale < zoom.Factor() * MathF.Max(UIScale, 0.01f) - 0.001f;
+            nint colorSpriteSampler = AntiAliasedSprites && spriteMinified ? GPU.AnisoSampler : spriteSampler;
+            float alphaCutoff = displaced ? 0.68f : 0.18f;
+            float modeFlag = AntiAliasedSprites ? 1f : 0f;
+            (nint T0, nint T1)? lastBound = null;
+            SDL_GPUTextureSamplerBinding* bindings = stackalloc SDL_GPUTextureSamplerBinding[2];
+
+            for (int i = 0; i < _drawItems.Count; i++)
+            {
+                SceneDrawItem item = _drawItems[i];
+                if (item.Kind != SceneDrawItem.ItemKind.Sprite)
+                {
+                    continue;
+                }
+
+                LotScene.Sprite sprite = scene.Sprites[item.Index];
+                if (sprite.Wall is not null || (zoom == LotZoom.Far && sprite.HideAtFarZoom == true))
+                {
+                    continue;
+                }
+
+                int texture = sprite.Texture;
+                int? depthTexture = sprite.DepthTexture;
+                var rect = new Vector4(sprite.X, sprite.Y, sprite.Width, sprite.Height);
+                if (sprite.Image(zoom) is { } image)
+                {
+                    texture = image.Texture;
+                    depthTexture = image.DepthTexture;
+                    rect = new Vector4(sprite.X + image.X, sprite.Y + image.Y, image.Width, image.Height);
+                }
+
+                if (depthTexture is not int dt)
+                {
+                    continue;
+                }
+
+                if (origin.X + (rect.X + rect.Z) * scale < 0f ||
+                    origin.Y + (rect.Y + rect.W) * scale < 0f ||
+                    origin.X + rect.X * scale >= canvas.X ||
+                    origin.Y + rect.Y * scale >= canvas.Y)
+                {
+                    continue;
+                }
+
+                nint t0 = _sceneTextures[texture].Handle;
+                nint t1 = _sceneTextures[dt].Handle;
+                if (lastBound != (t0, t1))
+                {
+                    bindings[0] = new SDL_GPUTextureSamplerBinding { texture = t0, sampler = colorSpriteSampler };
+                    bindings[1] = new SDL_GPUTextureSamplerBinding { texture = t1, sampler = GPU.PixelSampler };
+                    SDL_BindGPUFragmentSamplers(pass, 0, bindings, 2);
+                    lastBound = (t0, t1);
+                }
+
+                var quad = new Quad(
+                    new Vector4(origin.X + rect.X * scale, origin.Y + rect.Y * scale, rect.Z * scale, rect.W * scale),
+                    canvas,
+                    sprite.Flip)
+                {
+                    DepthInterval = new Vector4(sprite.DepthNear ?? 0f, sprite.DepthFar ?? 0f, alphaCutoff, modeFlag),
+                    Tint = Vector4.One,
+                };
+                SDL_PushGPUVertexUniformData(command, 0, (nint)(&quad), (uint)sizeof(Quad));
+                SDL_DrawGPUPrimitives(pass, 6, 1, 0, 0);
+            }
+        }
+        finally
+        {
+            SDL_EndGPURenderPass(pass);
+        }
+    }
+
     /// <summary>Calculates ambient lighting from scene depth, combining occlusion and sun shadows into an
     /// intermediate target that is blurred and multiplied into scene color.</summary>
     private unsafe void EncodeAmbient(
@@ -3142,7 +3310,7 @@ public sealed class LotRenderer : IDisposable
             _trailFill = 0f;
         }
 
-        const int uniformCount = 13 + MaxLamps + MaxPrints;
+        const int uniformCount = 15 + MaxLamps + MaxPrints;
         Vector4* uniforms = stackalloc Vector4[uniformCount];
         uniforms[0] = new Vector4(viewport.Origin.X, viewport.Origin.Y, viewport.Scale, Ambient.GroundOffset);
         uniforms[1] = new Vector4(Ambient.Radius, Ambient.Occlusion, shadowStrength, Ambient.Thickness);
@@ -3169,14 +3337,18 @@ public sealed class LotRenderer : IDisposable
         {
             uniforms[offset + i] = prints[i];
         }
+        offset += MaxPrints;
+        uniforms[offset] = new Vector4(Ambient.GrassQuality, Ambient.SpringBloom, Ambient.Snowfall, Ambient.Fireflies);
+        uniforms[offset + 1] = new Vector4(Ambient.Hail, Ambient.Frost, Ambient.Thunder, 0f);
 
         var defaultScissor = new SDL_Rect { x = 0, y = 0, w = (int)canvas.X, h = (int)canvas.Y };
         GPUTexture term = AmbientDebug > 0 ? color : AmbientTexture(color.Width, color.Height);
 
         GPUTexture lift = EmptyLift();
-        if (Ambient.SurfaceMode != 0 && AmbientDebug == 0)
+        if ((Ambient.SurfaceMode != 0 || Ambient.SpringBloom > 0.01f) && AmbientDebug == 0)
         {
             GPUTexture source = SurfaceTexture(color.Width, color.Height);
+            GPUTexture seasonDepth = SeasonDepthTexture(depth.Width, depth.Height);
             nint copy = SDL_BeginGPUCopyPass(command);
             if (copy == 0)
             {
@@ -3188,11 +3360,16 @@ public sealed class LotRenderer : IDisposable
                 var from = new SDL_GPUTextureLocation { texture = color.Handle };
                 var to = new SDL_GPUTextureLocation { texture = source.Handle };
                 SDL_CopyGPUTextureToTexture(copy, in from, in to, (uint)color.Width, (uint)color.Height, 1, false);
+                var fromDepth = new SDL_GPUTextureLocation { texture = depth.Handle };
+                var toDepth = new SDL_GPUTextureLocation { texture = seasonDepth.Handle };
+                SDL_CopyGPUTextureToTexture(copy, in fromDepth, in toDepth, (uint)depth.Width, (uint)depth.Height, 1, false);
             }
             finally
             {
                 SDL_EndGPUCopyPass(copy);
             }
+
+            EncodeSeasonDepth(command, color, seasonDepth, viewport, canvas, displaced);
 
             GPUTexture trail = EmptyIndoorMask();
             if (displaced && _trailTextures.Count == 2)
@@ -3203,9 +3380,10 @@ public sealed class LotRenderer : IDisposable
                 RunAmbientPass(command, in defaultScissor, uniforms, uniformCount, GPUContext.Program.Trail, trail, false, [previous]);
             }
 
+            GPUTexture seasonLift = LiftTexture(color.Width, color.Height);
             if (displaced)
             {
-                lift = LiftTexture(color.Width, color.Height);
+                lift = seasonLift;
             }
 
             GPUTexture sims = EncodeSimMask(command, depth, viewport, canvas);
@@ -3217,8 +3395,8 @@ public sealed class LotRenderer : IDisposable
                 GPUContext.Program.Season,
                 color,
                 true,
-                [depth, ground, heightMap.Texture, _indoorMask ?? EmptyIndoorMask(), source, trail, _overheadMap ?? EmptyOverheadMap(), sims],
-                lift);
+                [seasonDepth, ground, heightMap.Texture, _indoorMask ?? EmptyIndoorMask(), source, trail, _overheadMap ?? EmptyOverheadMap(), sims],
+                seasonLift);
         }
 
         RunAmbientPass(
