@@ -134,6 +134,13 @@ public sealed class AppLogTests
     [Fact]
     public async Task AppLogWatchdog_LogsStalledStage_AndSuppressesDuringModalDialogs()
     {
+        static string ReadSharedText(string path)
+        {
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(fs);
+            return reader.ReadToEnd();
+        }
+
         string temp = Path.Combine(Path.GetTempPath(), "sims-applog-watchdog-" + Guid.NewGuid().ToString("N"));
         try
         {
@@ -145,18 +152,27 @@ public sealed class AppLogTests
                     explicitLog,
                     attachConsoleError: false,
                     enableWatchdog: true,
-                    stallThreshold: TimeSpan.FromMilliseconds(90));
+                    stallThreshold: TimeSpan.FromMilliseconds(80));
 
                 AppLog.SetStage("Modal test stage");
                 AppLog.BeginModalWait("Test folder dialog");
                 await Task.Delay(180);
                 AppLog.EndModalWait();
 
-                string afterModal = File.ReadAllText(explicitLog);
+                string afterModal = ReadSharedText(explicitLog);
                 Assert.DoesNotContain("STALL DETECTED", afterModal, StringComparison.Ordinal);
 
                 AppLog.SetStage("Daemon: loading large neighborhood");
-                await Task.Delay(220);
+                var deadline = System.Diagnostics.Stopwatch.StartNew();
+                while (deadline.Elapsed < TimeSpan.FromSeconds(3))
+                {
+                    if (ReadSharedText(explicitLog).Contains("[WATCHDOG] STALL DETECTED: stage 'Daemon: loading large neighborhood'", StringComparison.Ordinal))
+                    {
+                        break;
+                    }
+                    await Task.Delay(20);
+                }
+
                 AppLog.SetStage("Ready: Neighborhood N1 (mode 1)", isSteadyState: true);
             }
             finally

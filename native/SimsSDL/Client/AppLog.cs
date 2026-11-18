@@ -449,7 +449,8 @@ internal static class AppLog
     private static readonly Lock StateLock = new();
     private static AppLogSession? _session;
     private static TeeTextWriter? _stderrTee;
-    private static Timer? _watchdogTimer;
+    private static ManualResetEventSlim? _watchdogStop;
+    private static Thread? _watchdogThread;
     private static long _startupTimestamp;
     private static long _stageTimestamp;
     private static string _currentStage = "Uninitialized";
@@ -538,9 +539,31 @@ internal static class AppLog
 
             if (enableWatchdog && _session.LogFilePath is not null)
             {
-                int periodMs = (int)Math.Clamp(_watchdogThreshold.TotalMilliseconds / 3.0, 25.0, 2000.0);
-                _watchdogTimer = new Timer(OnWatchdogTick, null, periodMs, periodMs);
+                int periodMs = (int)Math.Clamp(_watchdogThreshold.TotalMilliseconds / 3.0, 20.0, 2000.0);
+                var stopSignal = new ManualResetEventSlim(false);
+                _watchdogStop = stopSignal;
+                var thread = new Thread(() => WatchdogLoop(stopSignal, periodMs))
+                {
+                    IsBackground = true,
+                    Name = "SimsNativeWatchdog",
+                };
+                _watchdogThread = thread;
+                thread.Start();
             }
+        }
+    }
+
+    private static void WatchdogLoop(ManualResetEventSlim stopSignal, int periodMs)
+    {
+        try
+        {
+            while (!stopSignal.Wait(periodMs))
+            {
+                OnWatchdogTick(null);
+            }
+        }
+        catch (ObjectDisposedException)
+        {
         }
     }
 
@@ -1029,18 +1052,33 @@ internal static class AppLog
 
     private static void ShutdownLocked()
     {
-        if (_watchdogTimer is { } timer)
+        var stopSignal = _watchdogStop;
+        var watchdogThread = _watchdogThread;
+        _watchdogStop = null;
+        _watchdogThread = null;
+        if (stopSignal is not null)
         {
             try
             {
-                timer.Dispose();
+                stopSignal.Set();
             }
             catch
             {
             }
-
-            _watchdogTimer = null;
         }
+
+        if (watchdogThread is not null && watchdogThread != Thread.CurrentThread)
+        {
+            try
+            {
+                _ = watchdogThread.Join(millisecondsTimeout: 250);
+            }
+            catch
+            {
+            }
+        }
+
+        stopSignal?.Dispose();
 
         _windowLoopActive = false;
         _modalWaitReason = null;

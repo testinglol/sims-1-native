@@ -383,31 +383,36 @@ internal static class SceneExporter
             var roofs = new RoofGrid?[maxRoofLevel + 1];
             var rooms = new RoomMap?[maxRoofLevel + 1];
             var roofableRooms = new HashSet<ushort>?[maxRoofLevel + 1];
-            var terrain = LotTerrain.Read(lot);
-            var items = world.WalkOrder.ToArray();
-            RoofGrid? upper = null;
-            for (var buildLevel = maxRoofLevel; buildLevel >= 1; buildLevel--)
+            var terrain = ReadArray(lot, 0) is { Rows: Size, Width: Size, ElementSize: 4 }
+                ? LotTerrain.Read(lot)
+                : null;
+            if (terrain is not null)
             {
-                var grid = LotRoofGrid.Build(lot, buildLevel, items, upper);
-                roofs[buildLevel] = grid;
-                upper = grid;
-
-                var levelRooms = RoomMap.Build(lot, buildLevel, Size, Size);
-                rooms[buildLevel] = levelRooms;
-                var localObjects = items.Where(item => item.Position.Height == buildLevel)
-                    .ToLookup(item => (X: item.Position.X >> 4, Y: item.Position.Y >> 4));
-                var roofable = new HashSet<ushort>();
-                foreach (var roomId in levelRooms.RoomIds)
+                var items = world.WalkOrder.ToArray();
+                RoofGrid? upper = null;
+                for (var buildLevel = maxRoofLevel; buildLevel >= 1; buildLevel--)
                 {
-                    var tiles = levelRooms.TilesInRoom(roomId).ToArray();
-                    var flat = tiles.All(tile => terrain.IsFlatAt(tile.X, tile.Y, terrain.ReferenceHeight(tile.X, tile.Y)));
-                    var roomOverride = (roomId & 0x3ff) != 0 && tiles.Any(tile => localObjects[tile].Any(item =>
-                        item.Data[(int)ObjectData.Hidden] == 0 && item.RoomWord84 >= 0 &&
-                        item.Data[(int)ObjectData.Category] == 8));
-                    if (flat && (roomOverride || !levelRooms.IsOutside(roomId)))
-                        roofable.Add(roomId);
+                    var grid = LotRoofGrid.Build(lot, buildLevel, items, upper);
+                    roofs[buildLevel] = grid;
+                    upper = grid;
+
+                    var levelRooms = RoomMap.Build(lot, buildLevel, Size, Size);
+                    rooms[buildLevel] = levelRooms;
+                    var localObjects = items.Where(item => item.Position.Height == buildLevel)
+                        .ToLookup(item => (X: item.Position.X >> 4, Y: item.Position.Y >> 4));
+                    var roofable = new HashSet<ushort>();
+                    foreach (var roomId in levelRooms.RoomIds)
+                    {
+                        var tiles = levelRooms.TilesInRoom(roomId).ToArray();
+                        var flat = tiles.All(tile => terrain.IsFlatAt(tile.X, tile.Y, terrain.ReferenceHeight(tile.X, tile.Y)));
+                        var roomOverride = (roomId & 0x3ff) != 0 && tiles.Any(tile => localObjects[tile].Any(item =>
+                            item.Data[(int)ObjectData.Hidden] == 0 && item.RoomWord84 >= 0 &&
+                            item.Data[(int)ObjectData.Category] == 8));
+                        if (flat && (roomOverride || !levelRooms.IsOutside(roomId)))
+                            roofable.Add(roomId);
+                    }
+                    roofableRooms[buildLevel] = roofable;
                 }
-                roofableRooms[buildLevel] = roofable;
             }
             entry = new ShelterCacheEntry(lot, fingerprint, stories, floors, walls, roofs, rooms, roofableRooms);
             cachedShelter = entry;
