@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   macos-arm64:
-    runs-on: macos-15
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -26,11 +26,48 @@ jobs:
         with:
           dotnet-version: '9.0.x'
 
-      - name: Install SDL3
-        run: brew install sdl3
+      - name: Install Apple Silicon Mach-O tools and SDL3 arm64 dylib
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v llvm-install-name-tool >/dev/null 2>&1 && ! command -v llvm-install-name-tool-18 >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends llvm
+          fi
+          rcodesign_dir="${RUNNER_TEMP}/rcodesign"
+          mkdir -p "$rcodesign_dir"
+          curl -fsSL "https://github.com/indygreg/apple-platform-rs/releases/download/apple-codesign/0.29.0/apple-codesign-0.29.0-x86_64-unknown-linux-musl.tar.gz" \
+            | tar -xz -C "$rcodesign_dir" --strip-components=1
+          echo "${rcodesign_dir}" >> "${GITHUB_PATH}"
 
-      - name: Run C# tests
-        run: dotnet test native/SimsEngine.Tests/SimsEngine.Tests.csproj -c Release -p:EnableWindowsTargeting=true -p:NuGetAudit=false --nologo
+          sdl_dir="${RUNNER_TEMP}/macos-sdl3"
+          mkdir -p "$sdl_dir"
+          python3 - "$sdl_dir" <<'PY'
+          import json, pathlib, sys, tarfile, urllib.request
+
+          out_dir = pathlib.Path(sys.argv[1])
+          tok = json.loads(urllib.request.urlopen(
+              "https://ghcr.io/token?service=ghcr.io&scope=repository:homebrew/core/sdl3:pull",
+              timeout=20,
+          ).read())["token"]
+          formula = json.loads(urllib.request.urlopen(
+              "https://formulae.brew.sh/api/formula/sdl3.json",
+              timeout=20,
+          ).read())
+          files = formula["bottle"]["stable"]["files"]
+          bottle = files.get("arm64_sonoma") or files.get("arm64_sequoia") or next(
+              v for k, v in files.items() if k.startswith("arm64_")
+          )
+          tgz = out_dir / "sdl3-bottle.tar.gz"
+          req = urllib.request.Request(bottle["url"], headers={"Authorization": f"Bearer {tok}"})
+          tgz.write_bytes(urllib.request.urlopen(req, timeout=30).read())
+          with tarfile.open(tgz, "r:gz") as tf:
+              tf.extractall(out_dir)
+          dylib = next(p for p in out_dir.rglob("libSDL3.0.dylib") if not p.is_symlink())
+          target = out_dir / "libSDL3.0.dylib"
+          target.write_bytes(dylib.read_bytes())
+          PY
+          echo "SDL3_DYLIB=${sdl_dir}/libSDL3.0.dylib" >> "${GITHUB_ENV}"
 
       - name: Determine release version
         shell: bash
@@ -40,11 +77,11 @@ jobs:
           elif [[ -n "${{ inputs.version }}" ]]; then
             echo "RELEASE_VERSION=${{ inputs.version }}" >> "${GITHUB_ENV}"
           else
-            echo "RELEASE_VERSION=0.2.0" >> "${GITHUB_ENV}"
+            echo "RELEASE_VERSION=0.4.1" >> "${GITHUB_ENV}"
           fi
 
       - name: Package macOS arm64 bundle
-        run: ./tools/package_release.command "${RELEASE_VERSION}"
+        run: chmod +x tools/package_release.command && ./tools/package_release.command "${RELEASE_VERSION}"
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
@@ -159,10 +196,35 @@ jobs:
         with:
           dotnet-version: '9.0.x'
 
-      - name: Build SDL3 shared library
+      - name: Resolve latest SDL3 version
+        id: sdl3-meta
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' >> "${GITHUB_OUTPUT}"
+          import json, os, urllib.request
+          headers = {"User-Agent": "sims-native-ci"}
+          if os.environ.get("GH_TOKEN"):
+              headers["Authorization"] = f"Bearer {os.environ['GH_TOKEN']}"
+          req = urllib.request.Request("https://api.github.com/repos/libsdl-org/SDL/releases/latest", headers=headers)
+          rel = json.loads(urllib.request.urlopen(req, timeout=20).read())
+          url = next(a["browser_download_url"] for a in rel["assets"] if a["name"].endswith(".tar.gz") and a["name"].startswith("SDL3-"))
+          print(f"tag={rel['tag_name']}")
+          print(f"tarball_url={url}")
+          PY
+
+      - name: Cache Linux SDL3 build
+        id: sdl3-cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/sdl3-linux-install
+          key: sdl3-ubuntu2404-${{ steps.sdl3-meta.outputs.tag }}
+
+      - name: Build SDL3 shared library
+        if: steps.sdl3-cache.outputs.cache-hit != 'true'
+        shell: bash
         run: |
           set -euo pipefail
           sudo apt-get update
@@ -175,12 +237,10 @@ jobs:
             libdrm-dev libgbm-dev libgl1-mesa-dev libgles2-mesa-dev libegl1-mesa-dev \
             libdbus-1-dev libibus-1.0-dev libudev-dev libthai-dev libfribidi-dev \
             libusb-1.0-0-dev liburing-dev
-          tarball_url="$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" https://api.github.com/repos/libsdl-org/SDL/releases/latest \
-            | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(a["browser_download_url"] for a in d["assets"] if a["name"].endswith(".tar.gz") and a["name"].startswith("SDL3-")))')"
           src_archive="${RUNNER_TEMP}/sdl3.tar.gz"
           src_extract="${RUNNER_TEMP}/sdl3-src"
-          sdl_install="${RUNNER_TEMP}/sdl3-install"
-          curl -fsSL -o "$src_archive" "$tarball_url"
+          sdl_install="/tmp/sdl3-linux-install"
+          curl -fsSL -o "$src_archive" "${{ steps.sdl3-meta.outputs.tarball_url }}"
           mkdir -p "$src_extract"
           tar -xzf "$src_archive" -C "$src_extract"
           sdl_root="$(find "$src_extract" -maxdepth 1 -mindepth 1 -type d | head -n 1)"
@@ -194,7 +254,10 @@ jobs:
             -DCMAKE_INSTALL_PREFIX="$sdl_install"
           cmake --build "${RUNNER_TEMP}/sdl3-build"
           cmake --install "${RUNNER_TEMP}/sdl3-build"
-          echo "SDL3_DIR=$sdl_install" >> "${GITHUB_ENV}"
+
+      - name: Export SDL3_DIR
+        shell: bash
+        run: echo "SDL3_DIR=/tmp/sdl3-linux-install" >> "${GITHUB_ENV}"
 
       - name: Run C# tests
         run: dotnet test native/SimsEngine.Tests/SimsEngine.Tests.csproj -c Release -p:EnableWindowsTargeting=true -p:NuGetAudit=false --nologo

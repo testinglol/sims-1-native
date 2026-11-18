@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -95,15 +96,18 @@ def check_common(bundle: Path, game_dirs: list[Path]) -> None:
 
 
 def check_otool_dependencies(binary: Path) -> None:
+    otool_bin = shutil.which("otool") or shutil.which("llvm-otool") or shutil.which("llvm-otool-18")
+    if not otool_bin:
+        raise SystemExit("Missing otool / llvm-otool to inspect Mach-O dependencies")
     result = subprocess.run(
-        ["otool", "-L", str(binary)],
+        [otool_bin, "-L", str(binary)],
         check=True,
         capture_output=True,
         text=True,
     )
     lines = [line.strip().split(" (", 1)[0] for line in result.stdout.splitlines()[1:] if line.strip()]
     for dep in lines:
-        if dep.startswith("/opt/homebrew/") or dep.startswith("/usr/local/"):
+        if dep.startswith("/opt/homebrew/") or dep.startswith("/usr/local/") or "@@HOMEBREW" in dep:
             raise SystemExit(f"Non-portable dependency in {binary}: {dep}")
 
 
@@ -137,7 +141,7 @@ def check_macos(bundle: Path) -> None:
 
     for mach in (exe, sdl_dylib):
         file_out = subprocess.run(["file", str(mach)], check=True, capture_output=True, text=True).stdout
-        if "arm64" not in file_out:
+        if "arm64" not in file_out and "aarch64" not in file_out:
             raise SystemExit(f"Expected arm64 Mach-O binary at {mach}, got: {file_out.strip()}")
         check_otool_dependencies(mach)
 

@@ -107,13 +107,8 @@ public sealed class DxilShaderLinkageTests
     }
 
     [Fact]
-    public void WindowsDxilBinaries_HaveSignedContainersAndMatchingOsg1Isg1Registers()
+    public void DxilBinaries_HaveSignedContainersAndMatchingOsg1Isg1Registers()
     {
-        if (!OperatingSystem.IsWindows())
-        {
-            return;
-        }
-
         string shadersDir = LocateShadersDirectory();
         foreach (var (_, vert, frag) in CorePipelines)
         {
