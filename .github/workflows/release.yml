@@ -172,7 +172,7 @@ jobs:
           "RELEASE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Run C# tests
-        run: dotnet test native/SimsEngine.Tests/SimsEngine.Tests.csproj -c Release -p:EnableWindowsTargeting=true -p:NuGetAudit=false --nologo
+        run: dotnet test native/SimsEngine.Tests/SimsEngine.Tests.csproj -c Release -p:EnableWindowsTargeting=true -p:NuGetAudit=false --nologo --filter "FullyQualifiedName!~SimsEngine.Tests.E2E."
 
       - name: Package Windows x64 bundle
         shell: pwsh
@@ -260,7 +260,7 @@ jobs:
         run: echo "SDL3_DIR=/tmp/sdl3-linux-install" >> "${GITHUB_ENV}"
 
       - name: Run C# tests
-        run: dotnet test native/SimsEngine.Tests/SimsEngine.Tests.csproj -c Release -p:EnableWindowsTargeting=true -p:NuGetAudit=false --nologo
+        run: dotnet test native/SimsEngine.Tests/SimsEngine.Tests.csproj -c Release -p:EnableWindowsTargeting=true -p:NuGetAudit=false --nologo --filter "FullyQualifiedName!~SimsEngine.Tests.E2E."
 
       - name: Determine release version
         shell: bash

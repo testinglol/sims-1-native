@@ -3846,7 +3846,11 @@ internal static class SceneExporter
                             {
                                 var vertex = placed[index + corner];
                                 var point = camera.Project(vertex.Position.X, vertex.Position.Z, vertex.Position.Y * 40);
-                                var output = new Vertex(point.X, point.Y, camera.Depth(vertex.Position.X, vertex.Position.Z, vertex.Position.Y),
+                                // Bias roof depth slightly toward the camera so wall-top sprite corners directly beneath
+                                // the eaves never z-fight or poke through the sloped roof mesh.
+                                var roofDepthBias = level == totalStories ? 0.0045f : 0.0018f;
+                                var roofDepth = MathF.Max(0.001f, camera.Depth(vertex.Position.X, vertex.Position.Z, vertex.Position.Y) - roofDepthBias);
+                                var output = new Vertex(point.X, point.Y, roofDepth,
                                     vertex.U, vertex.V, normal.X, normal.Y, normal.Z);
                                 vertices.Add(output);
                                 meshVertices.Add((output, column / 2, row / 2));
