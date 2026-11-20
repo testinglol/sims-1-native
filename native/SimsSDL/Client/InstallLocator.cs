@@ -139,24 +139,24 @@ public static class InstallLocator
                           GetEnvironmentValue(environment, "APPDATA");
             if (!string.IsNullOrEmpty(baseDir))
             {
-                return Path.Combine(baseDir, "TheSimsNative");
+                return Path.Combine(baseDir, "PlumbobEngine");
             }
 
-            return Path.Combine(home, "AppData", "Local", "TheSimsNative");
+            return Path.Combine(home, "AppData", "Local", "PlumbobEngine");
         }
 
         if (OperatingSystem.IsMacOS())
         {
-            return Path.Combine(home, "Library", "Application Support", "TheSimsNative");
+            return Path.Combine(home, "Library", "Application Support", "PlumbobEngine");
         }
 
         var xdg = GetEnvironmentValue(environment, "XDG_DATA_HOME");
         if (!string.IsNullOrEmpty(xdg))
         {
-            return Path.Combine(xdg, "TheSimsNative");
+            return Path.Combine(xdg, "PlumbobEngine");
         }
 
-        return Path.Combine(home, ".local", "share", "TheSimsNative");
+        return Path.Combine(home, ".local", "share", "PlumbobEngine");
     }
 
     public static bool IsValidGameDirectory(string path)

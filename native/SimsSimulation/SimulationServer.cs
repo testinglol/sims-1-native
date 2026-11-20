@@ -2720,6 +2720,7 @@ internal sealed partial class SimulationServer
         lastStreamedObjectsSignature = null;
         buildableLot = null;
         buildableMask = null;
+        buildableLevel2Mask = null;
         stateFloorsLot = null;
         stateFloorsCache = null;
         stateWallsLot = null;
@@ -7329,6 +7330,7 @@ internal sealed partial class SimulationServer
         width = LotWidth,
         height = LotHeight,
         buildable = includeArchitectureGrids ? Buildable() : null,
+        buildableLevel2 = includeArchitectureGrids ? BuildableLevel2() : null,
         floors = includeArchitectureGrids ? StateFloors() : null,
         walls = includeArchitectureGrids ? StateWalls() : null,
         objects = !includeObjects ? null : world is null ? Array.Empty<object>() : world.WalkOrder.Select(item =>
@@ -7838,6 +7840,7 @@ internal sealed partial class SimulationServer
 
     private IffFile? buildableLot;
     private bool[]? buildableMask;
+    private bool[]? buildableLevel2Mask;
 
     // Filters buildable tiles by verifying coordinates are inside lot bounds and carry the buildable flag
     // bit.
@@ -7847,11 +7850,24 @@ internal sealed partial class SimulationServer
         if (ReferenceEquals(buildableLot, currentLot) && buildableMask is not null) return buildableMask;
         var tiles = LotTiles.Read(currentLot);
         var mask = new bool[LotWidth * LotHeight];
+        var mask2 = new bool[LotWidth * LotHeight];
         for (var y = 0; y < LotHeight; y++)
             for (var x = 0; x < LotWidth; x++)
-                mask[y * LotWidth + x] = tiles.InsideLot(x, y) && tiles.Buildable(x, y, 1);
+            {
+                var inside = tiles.InsideLot(x, y);
+                mask[y * LotWidth + x] = inside && tiles.Buildable(x, y, 1);
+                mask2[y * LotWidth + x] = inside && tiles.Buildable(x, y, 2);
+            }
         buildableLot = currentLot;
+        buildableLevel2Mask = mask2;
         return buildableMask = mask;
+    }
+
+    private bool[] BuildableLevel2()
+    {
+        if (lot is not { } currentLot) return new bool[LotWidth * LotHeight];
+        if (!ReferenceEquals(buildableLot, currentLot) || buildableLevel2Mask is null) Buildable();
+        return buildableLevel2Mask ?? new bool[LotWidth * LotHeight];
     }
 
     private IffFile? stateFloorsLot;

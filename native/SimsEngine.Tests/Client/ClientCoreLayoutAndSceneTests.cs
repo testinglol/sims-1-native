@@ -100,7 +100,7 @@ public sealed class ClientCoreLayoutAndSceneTests
         Assert.Equal(9, rect.TileCount);
         Assert.Equal(new Vector2(0.5f, 0.0f), FloorBrushRectangle.CornerUV(0, 0));
 
-        var buildableJson = JsonDocument.Parse("""{"width":2,"height":2,"buildable":[true,false,false,true]}""").RootElement;
+        var buildableJson = JsonDocument.Parse("""{"width":2,"height":2,"buildable":[true,false,false,true],"buildableLevel2":[false,true,true,false]}""").RootElement;
         var map = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
         foreach (var p in buildableJson.EnumerateObject())
             map[p.Name] = p.Value.Clone();
@@ -108,6 +108,47 @@ public sealed class ClientCoreLayoutAndSceneTests
         Assert.NotNull(area);
         Assert.True(area!.Contains(new GroundTile(0, 0)));
         Assert.False(area.Contains(new GroundTile(1, 0)));
+        var area2 = BuildableArea.Create(map, "buildableLevel2");
+        Assert.NotNull(area2);
+        Assert.False(area2!.Contains(new GroundTile(0, 0)));
+        Assert.True(area2.Contains(new GroundTile(1, 0)));
+
+        var terrainVerts = new[]
+        {
+            new LotScene.TerrainVertex(100, 100, 0, 0, 0, 0, 0, 0, 0),
+            new LotScene.TerrainVertex(132, 116, 0, 0, 0, 0, 0, 0, 0),
+            new LotScene.TerrainVertex(100, 132, 0, 0, 0, 0, 0, 0, 0),
+            new LotScene.TerrainVertex(100, 132, 0, 0, 0, 0, 0, 0, 0),
+            new LotScene.TerrainVertex(68, 116, 0, 0, 0, 0, 0, 0, 0),
+            new LotScene.TerrainVertex(100, 100, 0, 0, 0, 0, 0, 0, 0),
+        };
+        var placementScene = new LotScene
+        {
+            SchemaVersion = 1,
+            House = 1,
+            Width = 640,
+            Height = 480,
+            LotWidth = 1,
+            LotHeight = 1,
+            ViewLevel = 1,
+            Textures = [],
+            Sprites = [],
+            Limitations = [],
+            TerrainVertices = terrainVerts,
+        };
+        var multiLevelPreview = new PlacementPreview
+        {
+            SchemaVersion = 1,
+            Valid = true,
+            Status = "Success",
+            Tiles = [new PlacementPreview.Tile(0, 0, 1), new PlacementPreview.Tile(0, 0, 2)],
+        };
+        var diamonds = multiLevelPreview.TileDiamonds(placementScene);
+        Assert.Equal(2, diamonds.Count);
+        Assert.Equal(1, diamonds[0].Level);
+        Assert.Equal(100f, diamonds[0].Top.Y);
+        Assert.Equal(2, diamonds[1].Level);
+        Assert.Equal(100f - PlacementPreview.StoryLiftPerLevel, diamonds[1].Top.Y);
 
         Assert.True(HouseholdCreationRequest.AllowsFamilyNameInput("Goth"));
         Assert.False(HouseholdCreationRequest.AllowsFamilyNameInput("Bad/Name"));

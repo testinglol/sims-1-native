@@ -2,6 +2,17 @@
 
 All notable changes to **Plumbob Engine** are documented in this file.
 
+## [0.5.1] - 2026-11-20
+
+### Roof Rendering, Snowy Roofs, Seasons & Branding
+- **Fixed Snowy Roofs in Winter**: Updated `LotRenderer.EncodeSimMask` to exclude roof meshes (`Roof != null`) from `simMap` so rooftops accumulate winter snow alongside the terrain, trees, and hedges.
+- **Fixed Roof Disappearance on Animation Ticks**: Fixed `LotRenderer.ApplyAnimation` resetting `_meshSlices` from `_staticMeshSlices` so roof meshes appended after dynamic avatar meshes never lose their vertex buffer slices on the first animation tick.
+- **Fixed Walls Poking Through Rooftops**: Added a forward roof depth bias in `SceneExporter` so wall-top corners beneath sloped eaves never z-fight or poke through roofs.
+- **Plumbob Engine Branding, Save Data & Logs**: Updated user-facing app title, crash dialog, default save data root (`PlumbobEngine`), log filenames (`plumbob-engine-*.log`), and standalone release bundles (`Plumbob Engine.app` / `Plumbob-Engine-{macOS-arm64,Windows-x64,Linux-x64}.zip`).
+- **Asset-Clean Seasons Snowman & Cross-Platform Pack Fixes**: Updated `PluginWorld` and `LocalSeasons` so `Build Snowman Here` places the player's own Vacation `Snowman.iff` directly (zero bundled `.iff` assets), updated `PluginHost.ExportEnvironment` to stage `.dxil` pack shaders for Windows Direct3D 12, and fixed bundled plugin auto-trust canonical path matching on Windows.
+
+---
+
 ## [0.5.0] - 2026-11-20
 
 ### Preinstalled Official Packs (Enabled by Default)

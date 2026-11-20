@@ -98,16 +98,13 @@ public static class ModManager
         string canonicalBundled;
         try
         {
-            canonicalBundled = PackContentPaths.ResolveSymlinksInPath(bundledRoot)
-                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-                + Path.DirectorySeparatorChar;
+            canonicalBundled = PackContentPaths.ResolveSymlinksInPath(bundledRoot);
         }
         catch
         {
             return;
         }
 
-        var comparison = OperatingSystem.IsLinux() ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
         var bundledPackIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (var pack in content.Packs.Ordered)
         {
@@ -124,7 +121,7 @@ public static class ModManager
                 continue;
             }
 
-            if (canonicalPack.StartsWith(canonicalBundled, comparison))
+            if (PackContentPaths.IsUnderCanonicalRoot(canonicalPack, canonicalBundled))
                 bundledPackIds.Add(pack.Manifest.Id);
         }
 

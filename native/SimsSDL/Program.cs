@@ -827,7 +827,7 @@ internal static unsafe partial class Program
     private static void RunWindow(Options options, LotRenderer renderer, LiveController? live = null, InputScript? script = null)
     {
         nint window = SDL_CreateWindow(
-            "The Sims",
+            "Plumbob Engine",
             options.Width,
             options.Height,
             SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
@@ -1993,11 +1993,11 @@ internal static unsafe partial class Program
         AppLog.Flush();
         string? logPath = AppLog.CurrentLogPath;
         string? logsDir = AppLog.CurrentLogsDirectory;
-        const string title = "The Sims Native — Crash Report";
+        const string title = "Plumbob Engine — Crash Report";
         string logSection = !string.IsNullOrEmpty(logPath)
             ? $"\n\nLog file saved to:\n{logPath}"
             : string.Empty;
-        string message = $"The Sims Native encountered an unexpected error and had to close.\n\n{ex.GetType().Name}: {ex.Message}{logSection}";
+        string message = $"Plumbob Engine encountered an unexpected error and had to close.\n\n{ex.GetType().Name}: {ex.Message}{logSection}";
 
         AppLog.BeginModalWait("Crash report dialog");
         try

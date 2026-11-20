@@ -159,6 +159,7 @@ internal sealed partial class LiveController
 
     private BuildCursorKey? _desiredBuildCursor;
     private BuildableArea? _buildable;
+    private BuildableArea? _buildableLevel2;
     /// <summary>Tracks the timestamp of the last build refusal to throttle error audio playback to at most
     /// once every 400 ms.</summary>
     private ulong _lastBuildRefusal;

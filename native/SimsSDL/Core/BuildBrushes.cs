@@ -150,7 +150,7 @@ public sealed class BuildableArea : IEquatable<BuildableArea>
         return new BuildableArea(width, height, [.. tiles]);
     }
 
-    public static BuildableArea? Create(IReadOnlyDictionary<string, JsonElement> state)
+    public static BuildableArea? Create(IReadOnlyDictionary<string, JsonElement> state, string key = "buildable")
     {
         if (!state.TryGetValue("width", out JsonElement widthEl) ||
             widthEl.ValueKind != JsonValueKind.Number ||
@@ -158,7 +158,7 @@ public sealed class BuildableArea : IEquatable<BuildableArea>
             !state.TryGetValue("height", out JsonElement heightEl) ||
             heightEl.ValueKind != JsonValueKind.Number ||
             !heightEl.TryGetInt32(out int height) ||
-            !state.TryGetValue("buildable", out JsonElement buildableEl) ||
+            !state.TryGetValue(key, out JsonElement buildableEl) ||
             buildableEl.ValueKind != JsonValueKind.Array)
         {
             return null;
@@ -184,14 +184,14 @@ public sealed class BuildableArea : IEquatable<BuildableArea>
         return Create(width, height, tiles);
     }
 
-    public static BuildableArea? Create(IReadOnlyDictionary<string, object?> state)
+    public static BuildableArea? Create(IReadOnlyDictionary<string, object?> state, string key = "buildable")
     {
         if (!TryGetInt(state, "width", out int width) || !TryGetInt(state, "height", out int height))
         {
             return null;
         }
 
-        if (!state.TryGetValue("buildable", out object? rawTiles))
+        if (!state.TryGetValue(key, out object? rawTiles))
         {
             return null;
         }

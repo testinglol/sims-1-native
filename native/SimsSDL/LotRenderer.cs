@@ -224,7 +224,14 @@ public sealed partial class LotRenderer : IDisposable
 
     private TerrainVertex[] _placementVertices = [];
     private GPUBuffer? _placementBuffer;
+    private TerrainVertex[] _upperPlacementVertices = [];
+    private GPUBuffer? _upperPlacementBuffer;
     private bool _placementDirty;
+    private BuildableArea? _buildableLevel1;
+    private BuildableArea? _buildableLevel2;
+    private GPUBuffer? _buildGridLevel1Buffer;
+    private GPUBuffer? _buildGridLevel2Buffer;
+    private bool _buildGridDirty;
     private AvatarVertex[] _floorBrushVertices = [];
     private GPUBuffer? _floorBrushBuffer;
     private bool _floorBrushDirty;
@@ -515,6 +522,9 @@ public sealed partial class LotRenderer : IDisposable
 
         Collect(all, _terrainBuffer);
         Collect(all, _placementBuffer);
+        Collect(all, _upperPlacementBuffer);
+        Collect(all, _buildGridLevel1Buffer);
+        Collect(all, _buildGridLevel2Buffer);
         Collect(all, _floorBrushBuffer);
         Collect(all, _floorBrushTexture);
         Collect(all, _heightMapTexture);
@@ -585,9 +595,19 @@ public sealed partial class LotRenderer : IDisposable
             _placementDirty = false;
             Retire(_placementBuffer);
             _placementBuffer = GPU.MakeStorageBuffer(_placementVertices);
+            Retire(_upperPlacementBuffer);
+            _upperPlacementBuffer = _upperPlacementVertices.Length > 0
+                ? GPU.MakeStorageBuffer(_upperPlacementVertices)
+                : null;
             RetireDistinctTextures(_ghostTextures);
             _ghostTextures = GPU.UploadTextures(_ghostPixels);
             _ghostPixels = [];
+        }
+
+        if (_buildGridDirty)
+        {
+            _buildGridDirty = false;
+            RebuildBuildGridBuffers();
         }
 
         if (_floorBrushDirty)
@@ -998,6 +1018,7 @@ public sealed partial class LotRenderer : IDisposable
         _animationSequence = 0;
         Retire(_terrainBuffer);
         _terrainBuffer = MakeTerrain(loaded.Scene);
+        _buildGridDirty = true;
 
         IReadOnlyList<LotScene.Mesh> allMeshes = loaded.Scene.Meshes ?? [];
         List<LotScene.Sprite> keptSprites = new(loaded.Scene.Sprites.Count);
@@ -2013,18 +2034,268 @@ public sealed partial class LotRenderer : IDisposable
 
     public SimsSDL.Core.SceneViewport? SceneViewport(Vector2 canvas) => Viewport(canvas);
 
+    public void SetBuildableAreas(BuildableArea? level1, BuildableArea? level2)
+    {
+        if (Equals(_buildableLevel1, level1) && Equals(_buildableLevel2, level2))
+        {
+            return;
+        }
+
+        _buildableLevel1 = level1;
+        _buildableLevel2 = level2;
+        _buildGridDirty = true;
+    }
+
+    private void RebuildBuildGridBuffers()
+    {
+        Retire(_buildGridLevel1Buffer);
+        _buildGridLevel1Buffer = null;
+        Retire(_buildGridLevel2Buffer);
+        _buildGridLevel2Buffer = null;
+
+        if (Scene is not { } scene ||
+            scene.LotWidth is not int width || scene.LotHeight is not int height ||
+            scene.TerrainVertices is not { } terrain || terrain.Count != width * height * 6)
+        {
+            return;
+        }
+
+        IReadOnlyList<short>? heights = scene.TerrainHeights;
+        int heightStride = width + 1;
+        bool hasHeights = heights is not null && heights.Count == heightStride * (height + 1);
+
+        var level1 = new List<TerrainVertex>(width * height * 12);
+        var flatGridColor = new Vector4(0f, 0f, 0f, 0.38f);
+        var slopedGridColor = new Vector4(0f, 0f, 0f, 0.20f);
+        const float gridHalfWidth = 0.45f;
+
+        for (int y = 0; y < height; y++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                if (_buildableLevel1 is not null && !_buildableLevel1.Contains(x, y))
+                {
+                    continue;
+                }
+
+                int start = (y * width + x) * 6;
+                var top = new Vector2(terrain[start + 0].X, terrain[start + 0].Y);
+                var right = new Vector2(terrain[start + 1].X, terrain[start + 1].Y);
+                var bottom = new Vector2(terrain[start + 2].X, terrain[start + 2].Y);
+                var left = new Vector2(terrain[start + 4].X, terrain[start + 4].Y);
+                if (Vector2.DistanceSquared(top, bottom) <= 1f)
+                {
+                    continue;
+                }
+
+                bool flat = true;
+                if (hasHeights)
+                {
+                    int h00 = heights![y * heightStride + x];
+                    flat = heights[y * heightStride + x + 1] == h00 &&
+                           heights[(y + 1) * heightStride + x] == h00 &&
+                           heights[(y + 1) * heightStride + x + 1] == h00;
+                }
+
+                Vector4 lineColor = flat ? flatGridColor : slopedGridColor;
+                AppendEdgeQuad(level1, top, left, gridHalfWidth, lineColor);
+                AppendEdgeQuad(level1, top, right, gridHalfWidth, lineColor);
+
+                bool closeRight = _buildableLevel1 is not null ? !_buildableLevel1.Contains(x + 1, y) : x == width - 1;
+                bool closeBottom = _buildableLevel1 is not null ? !_buildableLevel1.Contains(x, y + 1) : y == height - 1;
+                if (closeRight)
+                {
+                    AppendEdgeQuad(level1, right, bottom, gridHalfWidth, lineColor);
+                }
+
+                if (closeBottom)
+                {
+                    AppendEdgeQuad(level1, left, bottom, gridHalfWidth, lineColor);
+                }
+            }
+        }
+
+        if (level1.Count > 0)
+        {
+            _buildGridLevel1Buffer = GPU.MakeStorageBuffer(level1.ToArray());
+        }
+
+        if (scene.SelectedLevel >= 2 && _buildableLevel2 is not null)
+        {
+            var hasFloor2 = new bool[width * height];
+            if (scene.Meshes is not null)
+            {
+                foreach (LotScene.Mesh mesh in scene.Meshes)
+                {
+                    if (mesh.Floor is { } floor && (floor.Level ?? 1) == 2 &&
+                        floor.X >= 0 && floor.X < width && floor.Y >= 0 && floor.Y < height)
+                    {
+                        hasFloor2[floor.Y * width + floor.X] = true;
+                    }
+                }
+            }
+
+            var level2 = new List<TerrainVertex>();
+            var checkerDark = new Vector4(0f, 0f, 0f, 0.16f);
+            var checkerLight = new Vector4(0.06f, 0.06f, 0.06f, 0.10f);
+            var bevelWhite = new Vector4(0.85f, 0.85f, 0.85f, 0.85f);
+            var bevelBlack = new Vector4(0f, 0f, 0f, 0.75f);
+            float lift = PlacementPreview.StoryLiftPerLevel;
+
+            for (int y = 0; y < height; y++)
+            {
+                for (int x = 0; x < width; x++)
+                {
+                    if (!_buildableLevel2.Contains(x, y) || hasFloor2[y * width + x])
+                    {
+                        continue;
+                    }
+
+                    int start = (y * width + x) * 6;
+                    var top = new Vector2(terrain[start + 0].X, terrain[start + 0].Y - lift);
+                    var right = new Vector2(terrain[start + 1].X, terrain[start + 1].Y - lift);
+                    var bottom = new Vector2(terrain[start + 2].X, terrain[start + 2].Y - lift);
+                    var left = new Vector2(terrain[start + 4].X, terrain[start + 4].Y - lift);
+                    if (Vector2.DistanceSquared(top, bottom) <= 1f)
+                    {
+                        continue;
+                    }
+
+                    Vector4 fill = ((x + y) & 1) == 0 ? checkerDark : checkerLight;
+                    level2.Add(new TerrainVertex { Position = top, Color = fill });
+                    level2.Add(new TerrainVertex { Position = right, Color = fill });
+                    level2.Add(new TerrainVertex { Position = bottom, Color = fill });
+                    level2.Add(new TerrainVertex { Position = bottom, Color = fill });
+                    level2.Add(new TerrainVertex { Position = left, Color = fill });
+                    level2.Add(new TerrainVertex { Position = top, Color = fill });
+
+                    AppendEdgeQuad(level2, top, left, gridHalfWidth, bevelWhite);
+                    AppendEdgeQuad(level2, top, right, gridHalfWidth, bevelWhite);
+                    AppendEdgeQuad(level2, right, bottom, gridHalfWidth, bevelBlack);
+                    AppendEdgeQuad(level2, left, bottom, gridHalfWidth, bevelBlack);
+                }
+            }
+
+            if (level2.Count > 0)
+            {
+                _buildGridLevel2Buffer = GPU.MakeStorageBuffer(level2.ToArray());
+            }
+        }
+    }
+
+    private static void AppendEdgeQuad(List<TerrainVertex> vertices, Vector2 a, Vector2 b, float halfWidth, Vector4 color)
+    {
+        Vector2 delta = b - a;
+        float lenSq = delta.LengthSquared();
+        if (lenSq < 1e-4f)
+        {
+            return;
+        }
+
+        float invLen = halfWidth / MathF.Sqrt(lenSq);
+        var n = new Vector2(-delta.Y * invLen, delta.X * invLen);
+        Vector2 a0 = a - n;
+        Vector2 a1 = a + n;
+        Vector2 b0 = b - n;
+        Vector2 b1 = b + n;
+
+        vertices.Add(new TerrainVertex { Position = a0, Color = color });
+        vertices.Add(new TerrainVertex { Position = b0, Color = color });
+        vertices.Add(new TerrainVertex { Position = b1, Color = color });
+        vertices.Add(new TerrainVertex { Position = b1, Color = color });
+        vertices.Add(new TerrainVertex { Position = a1, Color = color });
+        vertices.Add(new TerrainVertex { Position = a0, Color = color });
+    }
+
+    private static void AppendDiamondOutline(
+        List<TerrainVertex> vertices,
+        Vector2 top,
+        Vector2 right,
+        Vector2 bottom,
+        Vector2 left,
+        float insetRatio,
+        Vector4 color)
+    {
+        Vector2 center = (top + right + bottom + left) * 0.25f;
+        Vector2 iTop = Vector2.Lerp(top, center, insetRatio);
+        Vector2 iRight = Vector2.Lerp(right, center, insetRatio);
+        Vector2 iBottom = Vector2.Lerp(bottom, center, insetRatio);
+        Vector2 iLeft = Vector2.Lerp(left, center, insetRatio);
+
+        static void AppendQuad(List<TerrainVertex> dst, Vector2 o0, Vector2 o1, Vector2 i1, Vector2 i0, Vector4 col)
+        {
+            dst.Add(new TerrainVertex { Position = o0, Color = col });
+            dst.Add(new TerrainVertex { Position = o1, Color = col });
+            dst.Add(new TerrainVertex { Position = i1, Color = col });
+            dst.Add(new TerrainVertex { Position = i1, Color = col });
+            dst.Add(new TerrainVertex { Position = i0, Color = col });
+            dst.Add(new TerrainVertex { Position = o0, Color = col });
+        }
+
+        AppendQuad(vertices, top, right, iRight, iTop, color);
+        AppendQuad(vertices, right, bottom, iBottom, iRight, color);
+        AppendQuad(vertices, bottom, left, iLeft, iBottom, color);
+        AppendQuad(vertices, left, top, iTop, iLeft, color);
+    }
+
+    private static void AppendUnplaceableSymbol(
+        List<TerrainVertex> vertices,
+        Vector2 top,
+        Vector2 right,
+        Vector2 bottom,
+        Vector2 left,
+        Vector4 color)
+    {
+        Vector2 center = (top + right + bottom + left) * 0.25f;
+        const int segments = 16;
+        const float outerRadius = 12.5f;
+        const float innerRadius = 9.5f;
+
+        for (int i = 0; i < segments; i++)
+        {
+            float a0 = i * (MathF.PI * 2f / segments);
+            float a1 = (i + 1) * (MathF.PI * 2f / segments);
+            var d0 = new Vector2(MathF.Cos(a0), MathF.Sin(a0));
+            var d1 = new Vector2(MathF.Cos(a1), MathF.Sin(a1));
+
+            Vector2 o0 = center + d0 * outerRadius;
+            Vector2 o1 = center + d1 * outerRadius;
+            Vector2 i0 = center + d0 * innerRadius;
+            Vector2 i1 = center + d1 * innerRadius;
+
+            vertices.Add(new TerrainVertex { Position = o0, Color = color });
+            vertices.Add(new TerrainVertex { Position = o1, Color = color });
+            vertices.Add(new TerrainVertex { Position = i1, Color = color });
+            vertices.Add(new TerrainVertex { Position = i1, Color = color });
+            vertices.Add(new TerrainVertex { Position = i0, Color = color });
+            vertices.Add(new TerrainVertex { Position = o0, Color = color });
+        }
+
+        float slash = innerRadius * 0.78f;
+        AppendEdgeQuad(
+            vertices,
+            center + new Vector2(-slash, -slash),
+            center + new Vector2(slash, slash),
+            1.6f,
+            color);
+    }
+
     private void SetPlacement(
         TerrainVertex[] vertices,
         PlacementPreview.GhostData? ghost = null,
-        (int Width, int Height, bool Depth8, byte[] Pixels)[]? pixels = null)
+        (int Width, int Height, bool Depth8, byte[] Pixels)[]? pixels = null,
+        TerrainVertex[]? upperVertices = null)
     {
         _placementVertices = vertices;
+        _upperPlacementVertices = upperVertices ?? [];
         _placementGhost = ghost;
         _ghostPixels = pixels ?? [];
         RetireDistinctTextures(_ghostTextures);
         _ghostTextures = [];
         Retire(_placementBuffer);
         _placementBuffer = null;
+        Retire(_upperPlacementBuffer);
+        _upperPlacementBuffer = null;
         _placementDirty = true;
         if (_floorBrushVertices.Length > 0 || _floorBrushBuffer is not null)
         {
@@ -2220,21 +2491,29 @@ public sealed partial class LotRenderer : IDisposable
         }
 
         PlacementIsValid = preview.Valid;
-        Vector4 color = preview.Valid ? new Vector4(0.04f, 0.35f, 0.04f, 0.4f) : new Vector4(0.4f, 0.02f, 0.02f, 0.4f);
-        List<LotScene.TerrainVertex> geometry = preview.Geometry(Scene);
-        var vertices = new TerrainVertex[geometry.Count];
-        for (int i = 0; i < geometry.Count; i++)
+        List<PlacementPreview.TileDiamond> diamonds = preview.TileDiamonds(Scene);
+        var lower = new List<TerrainVertex>(diamonds.Count * 24);
+        var upper = new List<TerrainVertex>();
+        var yellow = new Vector4(1f, 1f, 0f, 1f);
+        var red = new Vector4(1f, 0f, 0f, 1f);
+        int selectedLevel = Scene.SelectedLevel;
+
+        foreach (PlacementPreview.TileDiamond diamond in diamonds)
         {
-            vertices[i] = new TerrainVertex
+            List<TerrainVertex> target = diamond.Level > selectedLevel ? upper : lower;
+            AppendDiamondOutline(target, diamond.Top, diamond.Right, diamond.Bottom, diamond.Left, 0.14f, yellow);
+            if (!preview.Valid)
             {
-                Position = new Vector2(geometry[i].X, geometry[i].Y),
-                Color = color,
-            };
+                AppendUnplaceableSymbol(target, diamond.Top, diamond.Right, diamond.Bottom, diamond.Left, red);
+            }
         }
+
+        TerrainVertex[] lowerVertices = lower.ToArray();
+        TerrainVertex[]? upperVertices = upper.Count > 0 ? upper.ToArray() : null;
 
         if (preview.Ghost is not { } ghost)
         {
-            SetPlacement(vertices);
+            SetPlacement(lowerVertices, upperVertices: upperVertices);
             return;
         }
 
@@ -2245,7 +2524,7 @@ public sealed partial class LotRenderer : IDisposable
             prepared[i] = PrepareUpload(ghost.Scene.Textures[i], data[i]);
         }
 
-        SetPlacement(vertices, ghost, prepared);
+        SetPlacement(lowerVertices, ghost, prepared, upperVertices);
     }
 
     public void UpdateBuildCursor(PlacementPreview.GhostData? ghost)
@@ -3171,7 +3450,7 @@ public sealed partial class LotRenderer : IDisposable
         {
             for (int i = 0; i < meshes.Count && i < _meshSlices.Count; i++)
             {
-                if (meshes[i].Unlit != true && !IsTranslucentAvatarMesh(meshes[i]) && _meshSlices[i] is not null)
+                if (meshes[i].Unlit != true && meshes[i].Roof is null && !IsTranslucentAvatarMesh(meshes[i]) && _meshSlices[i] is not null)
                 {
                     sims.Add(i);
                 }
@@ -4277,6 +4556,16 @@ public sealed partial class LotRenderer : IDisposable
             }
         }
 
+        if (ShowsPlacement && _buildGridLevel1Buffer is not null)
+        {
+            Bind(GPUContext.Program.Placement, GPUContext.DepthMode.Flat);
+            if (BindVertices(_buildGridLevel1Buffer))
+            {
+                Push(new Quad(new Vector4(origin.X, origin.Y, scale, scale), canvas));
+                SDL_DrawGPUPrimitives(pass, (uint)_buildGridLevel1Buffer.Count, 1, 0, 0);
+            }
+        }
+
         void DrawFloorShadow(LotScene.Sprite sprite)
         {
             if (!ShadowsEnabled || !LiveMode || sprite.Wall is not null ||
@@ -4413,6 +4702,23 @@ public sealed partial class LotRenderer : IDisposable
         SpritePassMode primaryPass = SpritePassMode.OpaqueCore;
         int lastShadowLevel = 0;
         bool drewFloorBrush = false;
+        bool drewLevel2BuildGrid = false;
+
+        void DrawLevel2BuildGridIfNeeded()
+        {
+            if (!ShowsPlacement || drewLevel2BuildGrid || scene.SelectedLevel < 2 || _buildGridLevel2Buffer is null)
+            {
+                return;
+            }
+
+            drewLevel2BuildGrid = true;
+            Bind(GPUContext.Program.Placement, GPUContext.DepthMode.Flat);
+            if (BindVertices(_buildGridLevel2Buffer))
+            {
+                Push(new Quad(new Vector4(origin.X, origin.Y, scale, scale), canvas));
+                SDL_DrawGPUPrimitives(pass, (uint)_buildGridLevel2Buffer.Count, 1, 0, 0);
+            }
+        }
 
         void DrawFloorBrushIfNeeded()
         {
@@ -4455,6 +4761,11 @@ public sealed partial class LotRenderer : IDisposable
                 }
 
                 sliceEnd += 1;
+            }
+
+            if (itemLevel >= 2)
+            {
+                DrawLevel2BuildGridIfNeeded();
             }
 
             if (itemLevel > scene.SelectedLevel || (itemLevel == scene.SelectedLevel && itemLayer >= 1))
@@ -4665,6 +4976,7 @@ public sealed partial class LotRenderer : IDisposable
             sliceStart = sliceEnd;
         }
 
+        DrawLevel2BuildGridIfNeeded();
         DrawFloorBrushIfNeeded();
 
         if (!deferTranslucentAvatars)
@@ -4719,6 +5031,16 @@ public sealed partial class LotRenderer : IDisposable
         {
             Bind(GPUContext.Program.Ghost, GPUContext.DepthMode.Flat);
             DrawGhost(placementGhost, _ghostTextures, 0.6f);
+        }
+
+        if (ShowsPlacement && _upperPlacementBuffer is not null)
+        {
+            Bind(GPUContext.Program.Placement, GPUContext.DepthMode.Flat);
+            if (BindVertices(_upperPlacementBuffer))
+            {
+                Push(new Quad(new Vector4(origin.X, origin.Y, scale, scale), canvas));
+                SDL_DrawGPUPrimitives(pass, (uint)_upperPlacementBuffer.Count, 1, 0, 0);
+            }
         }
 
         if (ShowsBuildCursor && BuildCursor is { } cursorGhost && _buildCursorTextures.Count == cursorGhost.Scene.Textures.Count)

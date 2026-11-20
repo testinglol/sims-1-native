@@ -17,7 +17,7 @@ public sealed class AppLogTests
             DateTime baseUtc = new(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
             for (int i = 0; i < 5; i++)
             {
-                string oldLog = Path.Combine(logsDir, $"sims-native-2025010{i + 1}-000000-100.log");
+                string oldLog = Path.Combine(logsDir, $"plumbob-engine-2025010{i + 1}-000000-100.log");
                 File.WriteAllText(oldLog, $"old-{i}");
                 File.SetLastWriteTimeUtc(oldLog, baseUtc.AddMinutes(i));
             }
@@ -38,7 +38,7 @@ public sealed class AppLogTests
                 session.Flush();
             }
 
-            string[] remaining = Directory.GetFiles(logsDir, "sims-native-*.log");
+            string[] remaining = Directory.GetFiles(logsDir, "plumbob-engine-*.log");
             Assert.Equal(3, remaining.Length);
             Assert.Contains(sessionPath!, remaining);
 
@@ -117,7 +117,7 @@ public sealed class AppLogTests
             }
 
             string logText = File.ReadAllText(explicitLog);
-            Assert.Contains("=== The Sims Native Startup ===", logText, StringComparison.Ordinal);
+            Assert.Contains("=== Plumbob Engine Startup ===", logText, StringComparison.Ordinal);
             Assert.Contains("Sims.exe=present (1234 bytes)", logText, StringComparison.Ordinal);
             Assert.Contains("GameData, UIGraphics, ExpansionPack7", logText, StringComparison.Ordinal);
             Assert.Contains(".spv=2, .dxil=1, .msl=0", logText, StringComparison.Ordinal);

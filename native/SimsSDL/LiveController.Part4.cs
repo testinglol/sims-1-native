@@ -1751,9 +1751,28 @@ internal sealed partial class LiveController
             }
         }
 
+        bool buildableChanged = false;
         if (BuildableArea.Create(state) is { } area)
         {
-            _buildable = area;
+            if (!Equals(_buildable, area))
+            {
+                _buildable = area;
+                buildableChanged = true;
+            }
+        }
+
+        if (BuildableArea.Create(state, "buildableLevel2") is { } area2)
+        {
+            if (!Equals(_buildableLevel2, area2))
+            {
+                _buildableLevel2 = area2;
+                buildableChanged = true;
+            }
+        }
+
+        if (buildableChanged)
+        {
+            Renderer.SetBuildableAreas(_buildable, _buildableLevel2);
         }
 
         var sims = state.JsonArray("sims") ?? [];

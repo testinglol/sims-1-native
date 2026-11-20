@@ -560,6 +560,64 @@ public sealed record PlacementPreview
 
         return result;
     }
+
+    /// <summary>Story elevation lift in scene units per level (matches EntityTransform.StoryHeight * 40).</summary>
+    public const float StoryLiftPerLevel = 2.95f * 40f;
+
+    public readonly record struct TileDiamond(
+        System.Numerics.Vector2 Top,
+        System.Numerics.Vector2 Right,
+        System.Numerics.Vector2 Bottom,
+        System.Numerics.Vector2 Left,
+        int Level);
+
+    /// <summary>Returns the isometric tile diamond corners for every footprint tile across all levels
+    /// (including upper-story footprints for multi-level objects such as spiral staircases).</summary>
+    public List<TileDiamond> TileDiamonds(LotScene scene)
+    {
+        if (SchemaVersion != 1 || Status is null || Status.Length > 128
+            || Tiles is null || Tiles.Count == 0 || Tiles.Count > 128
+            || scene.LotWidth is not int width || scene.LotHeight is not int height)
+        {
+            throw new ContentError("Invalid placement preview");
+        }
+
+        IReadOnlyList<LotScene.TerrainVertex>? baseTerrain = scene.TerrainVertices;
+        int baseLevel = 1;
+        if (baseTerrain is null || baseTerrain.Count != width * height * 6)
+        {
+            baseTerrain = scene.ConstructionVertices;
+            baseLevel = scene.SelectedLevel;
+        }
+
+        if (baseTerrain is null || baseTerrain.Count != width * height * 6)
+            throw new ContentError("Invalid placement preview");
+
+        Ghost?.Validate();
+
+        var result = new List<TileDiamond>(Tiles.Count);
+        foreach (var tile in Tiles)
+        {
+            if (tile.X is < -128 or > 255 || tile.Y is < -128 or > 255 || tile.Level is < 1 or > 5)
+                throw new ContentError("Placement footprint exceeds limits");
+
+            if (tile.X >= 0 && tile.X < width && tile.Y >= 0 && tile.Y < height)
+            {
+                int start = (tile.Y * width + tile.X) * 6;
+                float lift = (tile.Level - baseLevel) * StoryLiftPerLevel;
+                var top = new System.Numerics.Vector2(baseTerrain[start + 0].X, baseTerrain[start + 0].Y - lift);
+                var right = new System.Numerics.Vector2(baseTerrain[start + 1].X, baseTerrain[start + 1].Y - lift);
+                var bottom = new System.Numerics.Vector2(baseTerrain[start + 2].X, baseTerrain[start + 2].Y - lift);
+                var left = new System.Numerics.Vector2(baseTerrain[start + 4].X, baseTerrain[start + 4].Y - lift);
+                if (System.Numerics.Vector2.DistanceSquared(top, bottom) > 1f)
+                {
+                    result.Add(new TileDiamond(top, right, bottom, left, tile.Level));
+                }
+            }
+        }
+
+        return result;
+    }
 }
 
 public static class PlacementTooltip

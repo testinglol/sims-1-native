@@ -22,13 +22,13 @@ On first launch, select your *The Sims 1* install directory (or pass `--game <di
 
 Saves, profiles, and settings are stored outside the game directory:
 
-- macOS: `~/Library/Application Support/TheSimsNative`
-- Windows: `%LOCALAPPDATA%\TheSimsNative`
-- Linux: `$XDG_DATA_HOME/TheSimsNative` (or `~/.local/share/TheSimsNative`)
+- macOS: `~/Library/Application Support/PlumbobEngine`
+- Windows: `%LOCALAPPDATA%\PlumbobEngine`
+- Linux: `$XDG_DATA_HOME/PlumbobEngine` (or `~/.local/share/PlumbobEngine`)
 
 Layout inside the data directory:
 
-- `logs/latest.log`: live diagnostic log for the current/most recent launch (plus rolling `sims-native-*.log` session logs)
+- `logs/latest.log`: live diagnostic log for the current/most recent launch (plus rolling `plumbob-engine-*.log` session logs)
 - `Settings/install.json`: saved game path
 - `Settings/mods.json`: enabled packs, load order, and disabled `Downloads` subfolders
 - `Packs/`: user content packs
@@ -40,9 +40,9 @@ Layout inside the data directory:
 If the game crashes or gets stuck during startup, neighborhood loading, or lot transitions:
 
 1. Press **`Ctrl+Shift+L`** (`Cmd+Shift+L` on macOS) at any time—even on the loading splash screen—to open the `logs` folder with `latest.log` selected, or open it directly:
-   - Windows: `%LOCALAPPDATA%\TheSimsNative\logs\latest.log`
-   - macOS: `~/Library/Application Support/TheSimsNative/logs/latest.log`
-   - Linux: `~/.local/share/TheSimsNative/logs/latest.log`
+   - Windows: `%LOCALAPPDATA%\PlumbobEngine\logs\latest.log`
+   - macOS: `~/Library/Application Support/PlumbobEngine/logs/latest.log`
+   - Linux: `~/.local/share/PlumbobEngine/logs/latest.log`
 2. Optional launch flags for troubleshooting on Windows:
    - `SimsSDL.exe --gpu-driver vulkan` or `SimsSDL.exe --gpu-driver direct3d12` to test an alternate GPU backend
    - `SimsSDL.exe --no-audio` to isolate audio device issues
@@ -66,9 +66,9 @@ Requires the .NET 9 SDK and SDL3 (`brew install sdl3` on macOS, `SDL3_DIR` / `-S
 SIMS_GAME_DIR="/path/to/The Sims 1" ./tools/play_sdl.command
 
 # Package release archives into dist/
-./tools/package_release.command 0.5.0
-pwsh -File tools/package_windows.ps1 -Version 0.5.0 -SdlDir C:\path\to\SDL3
-./tools/package_linux.sh 0.5.0
+./tools/package_release.command 0.5.1
+pwsh -File tools/package_windows.ps1 -Version 0.5.1 -SdlDir C:\path\to\SDL3
+./tools/package_linux.sh 0.5.1
 
 # Run tests (asset-dependent tests skip if runtime/game and SIMS_GAME_DIR are absent)
 dotnet test native/SimsEngine.Tests/SimsEngine.Tests.csproj -c Release -p:EnableWindowsTargeting=true --nologo

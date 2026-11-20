@@ -32,11 +32,11 @@ public sealed class ClientInstallPacksAndInProcessBridgeTests
             Assert.False(InstallLocator.IsStandaloneDistribution(devWorkspace));
             Assert.True(InstallLocator.IsStandaloneDistribution(standaloneWorkspace));
             Assert.True(InstallLocator.IsStandaloneDistribution(
-                Path.Combine(temp, "The Sims Native.app", "Contents", "Resources", "workspace")));
+                Path.Combine(temp, "Plumbob Engine.app", "Contents", "Resources", "workspace")));
 
             Assert.Equal(devWorkspace, InstallLocator.DefaultDataRoot(devWorkspace, standalone: false));
             var standaloneData = InstallLocator.DefaultDataRoot(standaloneWorkspace, standalone: true);
-            Assert.Contains("TheSimsNative", standaloneData, StringComparison.Ordinal);
+            Assert.Contains("PlumbobEngine", standaloneData, StringComparison.Ordinal);
 
             var fakeGame = Path.Combine(temp, "Game");
             Assert.False(InstallLocator.IsValidGameDirectory(fakeGame));

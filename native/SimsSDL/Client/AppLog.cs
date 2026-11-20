@@ -55,7 +55,7 @@ public sealed class AppLogSession : IDisposable
             return opened;
         }
 
-        string fallbackDir = Path.Combine(Path.GetTempPath(), "TheSimsNative", "logs");
+        string fallbackDir = Path.Combine(Path.GetTempPath(), "PlumbobEngine", "logs");
         if (TryOpenLogDirectory(fallbackDir, maxRetainedLogs) is { } fallback)
         {
             return fallback;
@@ -78,7 +78,7 @@ public sealed class AppLogSession : IDisposable
         PruneOldSessionLogs(logsDir, Math.Max(1, maxRetainedLogs) - 1);
 
         DateTime now = DateTime.Now;
-        string baseName = $"sims-native-{now:yyyyMMdd-HHmmss}-{Environment.ProcessId}";
+        string baseName = $"plumbob-engine-{now:yyyyMMdd-HHmmss}-{Environment.ProcessId}";
         string sessionPath = Path.Combine(logsDir, $"{baseName}.log");
         int suffix = 1;
         while (File.Exists(sessionPath) && suffix < 100)
@@ -127,7 +127,7 @@ public sealed class AppLogSession : IDisposable
         try
         {
             var files = new DirectoryInfo(logsDir)
-                .GetFiles("sims-native-*.log")
+                .GetFiles("plumbob-engine-*.log")
                 .OrderByDescending(static f => f.LastWriteTimeUtc)
                 .ThenByDescending(static f => f.Name, StringComparer.Ordinal)
                 .ToArray();
@@ -790,7 +790,7 @@ internal static class AppLog
         {
         }
 
-        session.WriteLine("INFO", "=== The Sims Native Startup ===");
+        session.WriteLine("INFO", "=== Plumbob Engine Startup ===");
         session.WriteLine("INFO", FormattableString.Invariant($"Time: {nowLocal:O} (UTC: {nowUtc:O})"));
         session.WriteLine("INFO", FormattableString.Invariant($"PID: {Environment.ProcessId}"));
         session.WriteLine("INFO", FormattableString.Invariant($"OS: {RuntimeInformation.OSDescription} ({RuntimeInformation.OSArchitecture}, process {RuntimeInformation.ProcessArchitecture}, cpus={Environment.ProcessorCount})"));
