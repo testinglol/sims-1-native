@@ -397,13 +397,17 @@ public sealed class ClientInstallPacksAndInProcessBridgeTests
         Assert.Equal(SimsSDL.Core.LotZoom.Closer, SimsSDL.Core.LotZoom.Near.Stepped(1));
         Assert.Equal(SimsSDL.Core.LotZoom.Closest, SimsSDL.Core.LotZoom.Closer.Stepped(1));
         Assert.Equal(SimsSDL.Core.LotZoom.Closest, SimsSDL.Core.LotZoom.Closest.Stepped(1));
-        Assert.Equal(SimsSDL.Core.LotZoom.Far, SimsSDL.Core.LotZoom.Closest.Stepped(-10));
+        Assert.Equal(SimsSDL.Core.LotZoom.Farthest, SimsSDL.Core.LotZoom.Far.Stepped(-1));
+        Assert.Equal(SimsSDL.Core.LotZoom.Farthest, SimsSDL.Core.LotZoom.Closest.Stepped(-10));
 
+        Assert.Equal(0.33f, SimsSDL.Core.LotZoom.Farthest.Factor());
         Assert.Equal(3f, SimsSDL.Core.LotZoom.Closer.Factor());
         Assert.Equal(4f, SimsSDL.Core.LotZoom.Closest.Factor());
 
+        Assert.Equal(SimsSDL.Core.LotZoom.Far, SimsSDL.Core.LotZoom.Farthest.AssetZoom());
         Assert.Equal(SimsSDL.Core.LotZoom.Near, SimsSDL.Core.LotZoom.Closer.AssetZoom());
         Assert.Equal(SimsSDL.Core.LotZoom.Near, SimsSDL.Core.LotZoom.Closest.AssetZoom());
+        Assert.Equal(SimsSDL.Core.LotZoom.Far.SoundGain(), SimsSDL.Core.LotZoom.Farthest.SoundGain());
         Assert.Equal(1f, SimsSDL.Core.LotZoom.Near.SoundGain());
         Assert.Equal(1f, SimsSDL.Core.LotZoom.Closer.SoundGain());
         Assert.Equal(1f, SimsSDL.Core.LotZoom.Closest.SoundGain());

@@ -2280,7 +2280,7 @@ public sealed class LiveUI
 
         int zoomInt = zoom switch
         {
-            LotZoom.Far => 1,
+            <= LotZoom.Far => 1,
             LotZoom.Medium => 2,
             _ => 3,
         };

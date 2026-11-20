@@ -723,8 +723,12 @@ internal static class NeighborhoodExport
             mode,
             variant,
             neighborhood = Neighborhoods.Current,
-            neighborhoods = Neighborhoods.Installed(profile),
-            neighborhoodNames = TownNames(profile),
+            neighborhoods = Neighborhoods.Installed(profile)
+                .Concat(Neighborhoods.Installed(gameRoot))
+                .Distinct()
+                .Order()
+                .ToArray(),
+            neighborhoodNames = TownNames(profile, gameRoot),
             backgroundResource = config.BackgroundResource,
             backgroundSource = config.BackgroundResource.StartsWith("UIGraphics/", StringComparison.Ordinal)
                 ? "UIGraphics/UIGraphics.far#" + config.BackgroundResource["UIGraphics/".Length..]
@@ -795,13 +799,19 @@ internal static class NeighborhoodExport
         }
     }
 
-    private static Dictionary<string, string> TownNames(string profile)
+    private static Dictionary<string, string> TownNames(string profile, string gameRoot)
     {
         var names = new Dictionary<string, string>();
-        foreach (var number in Neighborhoods.Installed(profile))
+        var installed = Neighborhoods.Installed(profile)
+            .Concat(Neighborhoods.Installed(gameRoot))
+            .Distinct()
+            .Order();
+        foreach (var number in installed)
         {
             if (number == 1) continue;
-            var dir = Path.Combine(profile, Neighborhoods.DirectoryName(number));
+            var dirName = Neighborhoods.DirectoryName(number);
+            var dir = Path.Combine(profile, dirName);
+            if (!Directory.Exists(dir)) dir = Path.Combine(gameRoot, dirName);
             if (!Directory.Exists(dir)) continue;
             var file = Directory.EnumerateFiles(dir, "*.json", SearchOption.TopDirectoryOnly)
                 .FirstOrDefault(candidate => Path.GetFileName(candidate).Equals("Town.json", StringComparison.OrdinalIgnoreCase));

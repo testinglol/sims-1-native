@@ -553,7 +553,7 @@ public sealed class GPUContext : IDisposable
             case Program.AmbientBlur:
                 vertex = Shader("fullscreen.vert", SDL_GPU_SHADERSTAGE_VERTEX);
                 fragment = program == Program.Ambient
-                    ? Shader("ambient.frag", SDL_GPU_SHADERSTAGE_FRAGMENT, samplers: 7, uniforms: 1)
+                    ? Shader("ambient.frag", SDL_GPU_SHADERSTAGE_FRAGMENT, samplers: 8, uniforms: 1)
                     : Shader("ambientBlur.frag", SDL_GPU_SHADERSTAGE_FRAGMENT, samplers: 4, uniforms: 1);
                 blended = program == Program.AmbientBlur;
                 multiplied = true;

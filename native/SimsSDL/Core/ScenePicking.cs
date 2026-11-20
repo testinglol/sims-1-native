@@ -69,6 +69,7 @@ public readonly record struct SceneDrawItem
 /// reusing near-zoom discrete assets.</summary>
 public enum LotZoom
 {
+    Farthest = 0,
     Far = 1,
     Medium = 2,
     Near = 3,
@@ -82,6 +83,7 @@ public static class LotZoomExtensions
 
     public static float Factor(this LotZoom zoom) => zoom switch
     {
+        LotZoom.Farthest => 0.33f,
         LotZoom.Far => 0.5f,
         LotZoom.Medium => 1f,
         LotZoom.Near => 2f,
@@ -100,11 +102,11 @@ public static class LotZoomExtensions
     };
 
     /// <summary>Calculates volume attenuation based on zoom level, dividing gain by (4 - assetZoom) to yield
-    /// 1.0 at near/closer/closest, 0.5 at medium, and 0.33 at far zoom.</summary>
+    /// 1.0 at near/closer/closest, 0.5 at medium, and 0.33 at far/farthest zoom.</summary>
     public static float SoundGain(this LotZoom zoom) => 1f / (4 - (int)zoom.AssetZoom());
 
     public static LotZoom Stepped(this LotZoom zoom, int steps) =>
-        (LotZoom)Math.Clamp((int)zoom + steps, (int)LotZoom.Far, (int)LotZoom.Closest);
+        (LotZoom)Math.Clamp((int)zoom + steps, (int)LotZoom.Farthest, (int)LotZoom.Closest);
 }
 
 public readonly record struct SceneViewport

@@ -2,6 +2,16 @@
 
 All notable changes to **Plumbob Engine** are documented in this file.
 
+## [0.5.2] - 2026-11-20
+
+### Windows Direct3D 12, Neighborhoods, Camera Zoom & Autumn Foliage
+- **Fixed Windows Direct3D 12 Black Screen with Packs Enabled**: Fixed `GPUContext.Pipeline` (`Program.Ambient`) declaring 7 fragment samplers instead of 8 (`worldDepthMap` at binding 7), which caused `ambient.frag.dxil` PSO creation to fail on Windows Direct3D 12.
+- **Fixed Neighborhood Switcher (Neighborhoods 2–8)**: Updated `NeighborhoodExport` and `TownNames` to include all installed `UserData2`–`UserData8` neighborhoods from the game install alongside already-imported profile neighborhoods, so players can switch between all neighborhoods from the Neighborhood screen with lazy on-demand import.
+- **Added Extended Zoom-Out Level (`LotZoom.Farthest`)**: Added a wider `0.33x` zoom-out step below `Far` (`0.5x`) so 1080p displays can view the full lot and yard comfortably without needing DSR or resolution workarounds.
+- **Improved Autumn Foliage Variation**: Updated the Seasons shader (`season.frag` across Metal, Vulkan, and Direct3D 12 HLSL) so sunlit outer foliage turns rich golden-amber, orange, and russet while shaded interior leaves retain subtle olive-green depth.
+
+---
+
 ## [0.5.1] - 2026-11-20
 
 ### Roof Rendering, Snowy Roofs, Seasons & Branding

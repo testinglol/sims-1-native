@@ -176,6 +176,7 @@ internal sealed class Options
                 case "--zoom":
                     Zoom = ReadValue(argument) switch
                     {
+                        "farthest" => LotZoom.Farthest,
                         "far" => LotZoom.Far,
                         "medium" => LotZoom.Medium,
                         "closer" or "3x" => LotZoom.Closer,
