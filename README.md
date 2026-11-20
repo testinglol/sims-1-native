@@ -1,5 +1,7 @@
 # Plumbob Engine
 
+![Plumbob Engine — Summer, Autumn, and Winter](.github/assets/seasons-banner.jpg)
+
 Cross-platform C# (.NET 9) and SDL3 (`SDL_GPU`) engine and client for *The Sims 1*.
 
 > **Disclaimer**: Plumbob Engine is an independent, clean-room engine reimplementation and is not affiliated with, endorsed by, or sponsored by Electronic Arts Inc. or Maxis. All trademarks belong to their respective owners.

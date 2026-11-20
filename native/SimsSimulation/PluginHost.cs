@@ -710,7 +710,13 @@ internal sealed class PluginHost : IDisposable
         foreach (var (plugin, effect) in environmentContributors)
         {
             var descriptor = plugin.Descriptor;
-            var resources = effect.Shaders.Values.SelectMany(resource => new[] { resource + ".msl", resource + ".spv" });
+            var resources = effect.Shaders.Values.SelectMany(resource =>
+            {
+                var list = new List<string> { resource + ".msl", resource + ".spv" };
+                if (File.Exists(Path.Combine(mountRoot, resource + ".dxil")))
+                    list.Add(resource + ".dxil");
+                return list;
+            });
             if (effect.Indicator is { } indicator)
                 resources = resources.Concat([indicator.Strip, indicator.WeatherIcon, indicator.Window, indicator.Overlay]);
             if (effect.AmbientSounds.Length > 0)

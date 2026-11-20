@@ -69,11 +69,13 @@ __pycache__/
 !/native/SimsSimulation/InMemorySessionAssets.cs
 !/native/SimsSimulation/InstalledFiles.cs
 !/native/SimsSimulation/LotCamera.cs
+!/native/SimsSimulation/LotSessionPool.cs
 !/native/SimsSimulation/MenuTextSources.cs
 !/native/SimsSimulation/NeighborhoodEdits.cs
 !/native/SimsSimulation/NeighborhoodExport.cs
 !/native/SimsSimulation/NeighborhoodFamilies.cs
 !/native/SimsSimulation/Neighborhoods.cs
+!/native/SimsSimulation/NeighborhoodWorldAssetsService.cs
 !/native/SimsSimulation/ObjectAuthor.cs
 !/native/SimsSimulation/ObjectCatalog.cs
 !/native/SimsSimulation/OutfitAuthor.cs
@@ -89,6 +91,7 @@ __pycache__/
 !/native/SimsSimulation/ServingEntry.cs
 !/native/SimsSimulation/SimPortrait.cs
 !/native/SimsSimulation/SimulationServer.cs
+!/native/SimsSimulation/SimulationServer.ConnectedNeighborhood.cs
 !/native/SimsSimulation/SpecialBuildCatalogPage.cs
 !/native/SimsSimulation/SpriteArt.cs
 !/native/SimsSimulation/TerrainColors.cs

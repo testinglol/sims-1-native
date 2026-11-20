@@ -1354,15 +1354,8 @@ public sealed partial class LotRenderer : IDisposable
             MakeCombinedDynamicMeshes(dynamicMeshes, dynamicSlices);
         }
 
-        if (_meshSlices.Count > _staticMeshSlices.Count)
-        {
-            _meshSlices.RemoveRange(_staticMeshSlices.Count, _meshSlices.Count - _staticMeshSlices.Count);
-        }
-        else if (_meshSlices.Count < _staticMeshSlices.Count)
-        {
-            _meshSlices.Clear();
-            _meshSlices.AddRange(_staticMeshSlices);
-        }
+        _meshSlices.Clear();
+        _meshSlices.AddRange(_staticMeshSlices);
         for (int i = 0; i < dynamicSlices.Count; i++)
         {
             _meshSlices.Add(dynamicSlices[i]);

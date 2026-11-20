@@ -156,18 +156,31 @@ internal sealed class PluginWorld(
     {
         var item = World.ObjectById(objectId) ?? throw new ArgumentException("Object no longer exists");
         var source = item.TypeRecord is { } type ? registry()?.Find(unchecked((uint)type.Key))?.Source : null;
-        if (source is null || !source.Replace('\\', '/').Contains("/Downloads/" + packId + "/", StringComparison.OrdinalIgnoreCase))
+        var root = item.MultiTileMasterId != 0 ? (World.ObjectById(item.MultiTileMasterId) ?? item) : item;
+        var ownsPlaced = placedObjectOwners.TryGetValue(root.Id, out var ownerPack) && string.Equals(ownerPack, packId, StringComparison.Ordinal);
+        if (!ownsPlaced && (source is null || !source.Replace('\\', '/').Contains("/Downloads/" + packId + "/", StringComparison.OrdinalIgnoreCase)))
             throw new ArgumentException("Object attributes may only be changed on this pack's own objects");
         if (index is { } attribute && attribute >= item.Attributes.Length) throw new ArgumentOutOfRangeException(nameof(index));
         return item;
+    }
+
+    private readonly Dictionary<short, string> placedObjectOwners = new();
+
+    private static bool IsPackOrBaseGameObject(string? source, string packId)
+    {
+        if (source is null) return false;
+        var normalized = source.Replace('\\', '/');
+        if (normalized.Contains("/Downloads/" + packId + "/", StringComparison.OrdinalIgnoreCase))
+            return true;
+        return !normalized.Contains("/Downloads/", StringComparison.OrdinalIgnoreCase);
     }
 
     public short? TryPlaceOwnedObject(string packId, uint guid, int tileX, int tileY, int level, short direction, short? clearForSimId)
     {
         if (world() is not { } currentWorld || level < 1) return null;
         var source = registry()?.Find(guid)?.Source;
-        if (source is null || !source.Replace('\\', '/').Contains("/Downloads/" + packId + "/", StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException("Only this pack's own objects may be placed");
+        if (!IsPackOrBaseGameObject(source, packId))
+            throw new ArgumentException("Only this pack's own or base game objects may be placed");
         using var savedTypes = currentWorld.BeginSavedObjectTypeRegistrationScope();
         var group = currentWorld.ObjectGroupFactory?.Invoke(unchecked((int)guid));
         if (group is { Count: 0 }) return null;
@@ -222,6 +235,7 @@ internal sealed class PluginWorld(
                     break;
                 }
             }
+            if (placed) placedObjectOwners[root.Id] = packId;
             return placed ? root.Id : null;
         }
         finally
@@ -235,10 +249,11 @@ internal sealed class PluginWorld(
         if (world() is not { } currentWorld) return false;
         if (currentWorld.ObjectById(objectId) is not { } existing) return false;
         var source = existing.TypeRecord is { } type ? registry()?.Find(unchecked((uint)type.Key))?.Source : null;
-        if (source is null || !source.Replace('\\', '/').Contains("/Downloads/" + packId + "/", StringComparison.OrdinalIgnoreCase))
+        var root = existing.MultiTileMasterId != 0 ? (currentWorld.ObjectById(existing.MultiTileMasterId) ?? existing) : existing;
+        var ownsPlaced = placedObjectOwners.TryGetValue(root.Id, out var ownerPack) && string.Equals(ownerPack, packId, StringComparison.Ordinal);
+        if (!ownsPlaced && (source is null || !source.Replace('\\', '/').Contains("/Downloads/" + packId + "/", StringComparison.OrdinalIgnoreCase)))
             throw new ArgumentException("Only this pack's own objects may be removed");
         if (existing[ObjectData.UseCount] > 0) return false;
-        var root = existing.MultiTileMasterId != 0 ? (currentWorld.ObjectById(existing.MultiTileMasterId) ?? existing) : existing;
         if (root[ObjectData.UseCount] > 0) return false;
         var seen = new HashSet<short> { root.Id };
         for (var nextId = root.MultiTileNextId; nextId != 0 && seen.Add(nextId); )
@@ -247,6 +262,7 @@ internal sealed class PluginWorld(
             if (part[ObjectData.UseCount] > 0) return false;
             nextId = part.MultiTileNextId;
         }
+        placedObjectOwners.Remove(root.Id);
         currentWorld.RemoveCreatedObjectGroup(root);
         return true;
     }
