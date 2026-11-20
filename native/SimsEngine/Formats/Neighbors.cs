@@ -82,7 +82,7 @@ public sealed class Neighbors
                 }
                 else
                 {
-                    var count = (record >= 8 || storedFormat == 4 || (version > 0x48 && stream.Remaining >= 0x200)) ? 0x100 : 0x50;
+                    var count = record >= 8 ? 0x100 : 0x50;
                     personData = stream.Int16s(count);
                 }
             }
@@ -128,7 +128,7 @@ public sealed class Neighbors
                 writer.Int32(entry.PersonData is null ? 0 : 1);
                 if (entry.PersonData is { } personData)
                 {
-                    var count = entry.RecordVersion < 3 ? 0x40 : (entry.StoredFormat == 4 || entry.RecordVersion >= 8) ? 0x100 : 0x50;
+                    var count = entry.RecordVersion < 3 ? 0x40 : entry.RecordVersion >= 8 ? 0x100 : 0x50;
                     for (var index = 0; index < count; index++)
                         writer.Int16(index < personData.Count ? personData[index] : (short)0);
                     if (entry.RecordVersion < 3) writer.Int16(entry.PersonDataTrailingWord);

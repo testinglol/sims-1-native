@@ -199,6 +199,30 @@ public class HouseFileTests
     }
 
     [Fact]
+    public void Version73NeighborsRead80ShortPersonDataForRecordVersionBelow8EvenWithLargeRemainingBytes()
+    {
+        var builder = Persist(0x49, "NBRS").U32(2)
+            .U32(1).S32(10).S32(4).EvenString("OlderSim").S32(0).S32(1);
+        for (var index = 0; index < 0x50; index++) builder.S16((short)(index + 1));
+        builder.S16(5).U32(0x11112222).S32(-1).U32(0);
+
+        builder.U32(1).S32(10).S32(9).EvenString("NewerSim").S32(0).S32(1);
+        for (var index = 0; index < 0x100; index++) builder.S16((short)(index + 10));
+        builder.S16(6).U32(0x33334444).S32(-1).U32(0);
+
+        var (file, chunk) = builder.InFile("NBRS");
+        var neighbors = Neighbors.Read(file, chunk);
+
+        Assert.Equal(2, neighbors.Entries.Count);
+        Assert.Equal("OlderSim", neighbors.Entries[0].Name);
+        Assert.Equal(0x50, neighbors.Entries[0].PersonData!.Count);
+        Assert.Equal((short)5, neighbors.Entries[0].NeighborId);
+        Assert.Equal("NewerSim", neighbors.Entries[1].Name);
+        Assert.Equal(0x100, neighbors.Entries[1].PersonData!.Count);
+        Assert.Equal((short)6, neighbors.Entries[1].NeighborId);
+    }
+
+    [Fact]
     public void NeighborhoodDataReadsSixteenValues()
     {
         var builder = Persist(0x3e, "NGBH");

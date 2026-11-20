@@ -2,6 +2,13 @@
 
 All notable changes to **Plumbob Engine** are documented in this file.
 
+## [0.5.3] - 2026-11-20
+
+### Save & Neighborhood Compatibility
+- **Fixed `NBRS` Parser Desync on Version-73 Neighborhoods with Older Neighbor Records**: Updated `Neighbors.Read` and `Neighbors.WriteChunkData` to follow classic `Sims.exe` (`FUN_00423e3b`) exactly—reading `0x50` (80) `PersonData` shorts for `recordVersion < 8` and `0x100` (256) only for `recordVersion >= 8`—fixing startup errors (`NBRS #1 ... entries do not fit the chunk`) on played/upgraded retail `Neighborhood.iff` saves.
+
+---
+
 ## [0.5.2] - 2026-11-20
 
 ### Windows Direct3D 12, Neighborhoods, Camera Zoom & Autumn Foliage

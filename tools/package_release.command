@@ -5,7 +5,7 @@
 #   tools/package_release.command [VERSION]
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
-version="${1:-0.5.2}"
+version="${1:-0.5.3}"
 build="$(date +%Y%m%d%H%M)"
 dist="$root/dist"
 target_app="$dist/Plumbob Engine.app"

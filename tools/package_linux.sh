@@ -4,7 +4,7 @@
 #   tools/package_linux.sh [VERSION]
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
-version="${1:-0.5.2}"
+version="${1:-0.5.3}"
 dist="$root/dist"
 stage_root="$root/.package-staging/linux-x64"
 stage="$stage_root/Plumbob Engine"

@@ -66,9 +66,9 @@ Requires the .NET 9 SDK and SDL3 (`brew install sdl3` on macOS, `SDL3_DIR` / `-S
 SIMS_GAME_DIR="/path/to/The Sims 1" ./tools/play_sdl.command
 
 # Package release archives into dist/
-./tools/package_release.command 0.5.2
-pwsh -File tools/package_windows.ps1 -Version 0.5.2 -SdlDir C:\path\to\SDL3
-./tools/package_linux.sh 0.5.2
+./tools/package_release.command 0.5.3
+pwsh -File tools/package_windows.ps1 -Version 0.5.3 -SdlDir C:\path\to\SDL3
+./tools/package_linux.sh 0.5.3
 
 # Run tests (asset-dependent tests skip if runtime/game and SIMS_GAME_DIR are absent)
 dotnet test native/SimsEngine.Tests/SimsEngine.Tests.csproj -c Release -p:EnableWindowsTargeting=true --nologo
