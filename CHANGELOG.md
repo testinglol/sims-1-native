@@ -1,6 +1,29 @@
 # Changelog
 
-All notable changes to **The Sims Native** are documented in this file.
+All notable changes to **Plumbob Engine** are documented in this file.
+
+## [0.5.0] - 2026-11-20
+
+### Preinstalled Official Packs (Enabled by Default)
+- **Enhanced Graphics (`local.lighting`) & Seasons (`local.seasons`) Bundled Out of the Box**: Both official packs now ship preinstalled inside the standalone macOS (`Contents/Resources/Packs`), Windows (`Packs/`), and Linux (`Packs/`) releases, enabled by default on first launch and automatically trusted without prompting. Players can toggle or reorder them at any time in the in-game **Mods** menu (`Settings/mods.json`).
+- **Full Cross-Platform Pack Shaders (Metal, Vulkan, Direct3D 12)**: Added HLSL SM 6.0 / signed DXIL compilation and stage-linkage validation for bundled pack shaders (including fixing `terrain.frag` `OSG1 -> ISG1` linkage on Direct3D 12 and adding `.dxil` support to `ContentPack`), so Enhanced Graphics and Seasons render natively on Windows Direct3D 12 as well as macOS Metal and Linux Vulkan.
+
+### Connected Neighborhood
+- **Multi-Lot & Neighbor Visit Architecture**: Added `NeighborhoodManager`, `NeighborLotController`, `GatewayRouting`, `NeighborhoodStreetGraph`, `NeighborhoodStreetLayout`, and `MasterRoadNetwork` alongside client/renderer integration (`LiveController.ConnectedNeighborhood`, `LotRenderer.ConnectedNeighborhood`) for visiting neighbor lots, split-household multi-lot coordination, and adjacent-lot isometric rendering.
+
+### Audio & HIT VM Parity
+- **HIT Bytecode VM**: Implemented the original *The Sims* HIT audio scripting VM (`HitVm`, `HitVmTypes`) with expanded `SoundBank`, `UtkAudio`, and `SDLAudioPlayer` parity.
+
+### Vector UI, Cheat Console & Graphics Polish
+- **Complete Vector Control Panel & Fitted Chrome**: Added pure-SVG vector icons across all Build tools (walls, wallpaper, floors, doors, windows, stairs, fireplace, roof, terrain, water, trees, hand, undo/redo) and Buy categories (function, room, and pets), plus fitted vector panel chrome (`SimsVectorUiKit.FittedChrome`, `SimsVectorUiKit.FittedPanels`) and improved Options, Neighborhood, Gameplay, Buy, Build, Camera, and Household Creation overlays.
+- **In-Game Cheat Console (`OriginalCheatConsoleOverlay`)**: Added the classic cheat console overlay for entering cheats directly in-game.
+- **Rendering & Thumbnail Refinements**: Updated 3D avatar lighting and sprite depth shaders (`avatar.vert`, `avatar.frag`, `spriteDepth.frag`), improved catalog thumbnail anti-aliasing, and refined procedural roof bounds and scene picking.
+
+### Simulation, Animation & Save Parity
+- **Overhead Feedback & Animation Transitions**: Added `World.OverheadFeedback` headline/balloon handling, smoother Sim animation transitions and pose blending (`Pose`, `AvatarAnimations`, `AvatarSceneGeometry`), and vehicle drive-away regression fixes.
+- **SimAntics & Build Tool Fixes**: Improved `AnimateSim`, `GenericSimsCall`, `InteractionTestEvaluator`, `Relationship`, `RouteExecutor`, `MakeNewCharacter`, `ReachOps`, `SpecialEffect`, `Tutorial`, `WardrobeSuitService`, `WallTool`, `PoolTool`, `SavedLotObjectLoader`, `SavedLotSerialization`, and `SaveCompatibility`.
+
+---
 
 ## [0.4.1] - 2026-11-18
 

@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "forecast",
+  "title": "Weather Outlook",
+  "frame": { "x": 240, "y": 150, "width": 320, "height": 300 },
+  "elements": [
+    { "id": "season", "kind": "label", "frame": { "x": 20, "y": 44, "width": 280, "height": 20 }, "binding": "season" },
+    { "id": "now", "kind": "label", "frame": { "x": 20, "y": 68, "width": 280, "height": 20 }, "binding": "now" },
+    { "id": "today", "kind": "label", "frame": { "x": 20, "y": 92, "width": 280, "height": 20 }, "binding": "today" },
+    { "id": "today-temps", "kind": "label", "frame": { "x": 20, "y": 116, "width": 280, "height": 20 }, "binding": "today-temps" },
+    { "id": "tomorrow", "kind": "label", "frame": { "x": 20, "y": 146, "width": 280, "height": 20 }, "binding": "tomorrow" },
+    { "id": "tomorrow-temps", "kind": "label", "frame": { "x": 20, "y": 170, "width": 280, "height": 20 }, "binding": "tomorrow-temps" },
+    { "id": "next", "kind": "label", "frame": { "x": 20, "y": 200, "width": 280, "height": 20 }, "binding": "next" },
+    { "id": "disclaimer", "kind": "label", "frame": { "x": 20, "y": 226, "width": 280, "height": 20 },
+      "text": "Forecasts may differ from weather." }
+  ]
+}

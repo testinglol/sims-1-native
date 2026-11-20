@@ -836,10 +836,11 @@ public sealed class TrueTypeFont
             if (e.X1 > maxEdgeX) maxEdgeX = e.X1;
         }
 
-        int minRow = Math.Clamp((int)MathF.Floor(minEdgeY), 0, dstHeight - 1);
-        int maxRow = Math.Clamp((int)MathF.Ceiling(maxEdgeY), 0, dstHeight - 1);
-        int minCol = Math.Clamp((int)MathF.Floor(minEdgeX), 0, dstWidth - 1);
-        int maxCol = Math.Clamp((int)MathF.Ceiling(maxEdgeX), 0, dstWidth - 1);
+        int pad = erodePx < -0.01f ? 1 : 0;
+        int minRow = Math.Clamp((int)MathF.Floor(minEdgeY) - pad, 0, dstHeight - 1);
+        int maxRow = Math.Clamp((int)MathF.Ceiling(maxEdgeY) + pad, 0, dstHeight - 1);
+        int minCol = Math.Clamp((int)MathF.Floor(minEdgeX) - pad, 0, dstWidth - 1);
+        int maxCol = Math.Clamp((int)MathF.Ceiling(maxEdgeX) + pad, 0, dstWidth - 1);
         int rowSpan = maxCol - minCol + 1;
         int boxH = maxRow - minRow + 1;
         if (rowSpan <= 0 || boxH <= 0)
@@ -907,9 +908,10 @@ public sealed class TrueTypeFont
             }
         }
 
-        if (erodePx > 0.01f && rowSpan >= 2 && boxH >= 2)
+        if (MathF.Abs(erodePx) > 0.01f && rowSpan >= 2 && boxH >= 2)
         {
-            float r = Math.Clamp(erodePx, 0f, 0.9f);
+            bool dilate = erodePx < 0f;
+            float r = Math.Clamp(MathF.Abs(erodePx), 0f, 0.9f);
             float keep = 1f - r;
             var tempBuf = new float[covBuf.Length];
             for (int y = 0; y < boxH; y++)
@@ -920,7 +922,8 @@ public sealed class TrueTypeFont
                     float left = x > 0 ? covBuf[row + x - 1] : 0f;
                     float right = x + 1 < rowSpan ? covBuf[row + x + 1] : 0f;
                     float c = covBuf[row + x];
-                    tempBuf[row + x] = c * keep + MathF.Min(c, MathF.Min(left, right)) * r;
+                    float nb = dilate ? MathF.Max(c, MathF.Max(left, right)) : MathF.Min(c, MathF.Min(left, right));
+                    tempBuf[row + x] = c * keep + nb * r;
                 }
             }
 
@@ -932,13 +935,14 @@ public sealed class TrueTypeFont
                     float up = y > 0 ? tempBuf[(y - 1) * rowSpan + x] : 0f;
                     float down = y + 1 < boxH ? tempBuf[(y + 1) * rowSpan + x] : 0f;
                     float c = tempBuf[row + x];
-                    covBuf[row + x] = c * keep + MathF.Min(c, MathF.Min(up, down)) * r;
+                    float nb = dilate ? MathF.Max(c, MathF.Max(up, down)) : MathF.Min(c, MathF.Min(up, down));
+                    covBuf[row + x] = c * keep + nb * r;
                 }
             }
         }
 
         float lum = (0.2126f * color.R + 0.7152f * color.G + 0.0722f * color.B) / 255f;
-        float gamma = lum > 0.5f ? 1.15f : 1.04f;
+        float gamma = lum > 0.5f ? 0.92f : 1.04f;
 
         for (int y = 0; y < boxH; y++)
         {

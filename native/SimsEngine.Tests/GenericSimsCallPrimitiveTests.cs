@@ -1155,7 +1155,7 @@ public sealed class GenericSimsCallPrimitiveTests
     }
 
     [Fact]
-    public void CallFifteenUsesOriginalCountAndCursorAfterEachScopeCompaction()
+    public void CallFifteenResetsCursorAndAppliesEachEntryAfterScopeCompaction()
     {
         var (context, _, _, item, scope) = CallFifteen(
             new InteractionScopeEntry(2, 9, 5),
@@ -1164,9 +1164,8 @@ public sealed class GenericSimsCallPrimitiveTests
         Assert.Equal(PrimitiveResult.True, GenericSimsCallPrimitive.Execute(context, Operand(0x15)));
 
         Assert.Equal((short)5, item.InteractionBehaviorSavedWord);
-        Assert.Equal(1, scope.Count);
-        Assert.True(scope.TryGet(0, out var remaining));
-        Assert.Equal(new InteractionScopeEntry(2, 10, 6), remaining);
+        Assert.Equal((short)6, item.InteractionExecutorWords[0x62c]);
+        Assert.Equal(0, scope.Count);
     }
 
     [Fact]
@@ -1228,7 +1227,7 @@ public sealed class GenericSimsCallPrimitiveTests
     }
 
     [Fact]
-    public void CallSeventeenSkipsModeEightShiftedToTheResetCursorIndex()
+    public void CallSeventeenFindsModeEightShiftedToIndexZeroAfterResettingCursor()
     {
         var (context, me, _, scope) = CallSeventeen(
             new InteractionScopeEntry(2, 7, 13),
@@ -1238,10 +1237,8 @@ public sealed class GenericSimsCallPrimitiveTests
         Assert.Equal(PrimitiveResult.True, GenericSimsCallPrimitive.Execute(context, Operand(0x17)));
 
         Assert.Equal((short)13, me.Temporaries[0]);
-        Assert.Equal((short)5, me.Temporaries[1]);
-        Assert.Equal(1, scope.Count);
-        Assert.True(scope.TryGet(0, out var remaining));
-        Assert.Equal(new InteractionScopeEntry(2, 8, 21), remaining);
+        Assert.Equal((short)21, me.Temporaries[1]);
+        Assert.Equal(0, scope.Count);
     }
 
     [Theory]
@@ -1250,7 +1247,7 @@ public sealed class GenericSimsCallPrimitiveTests
     public void CallThirteenAndFourteenOnScopeMissWriteMinusOneWithoutPersisting(int call, int mode)
     {
         var (context, me, host, scope) = CallThirteenOrFourteen(
-            new InteractionScopeEntry(mode == 0 ? 2 : 1, mode == 0 ? 3 : 2, 4));
+            new InteractionScopeEntry(mode == 0 ? 3 : 1, 2, 4));
 
         Assert.Equal(PrimitiveResult.True, GenericSimsCallPrimitive.Execute(context, Operand((short)call)));
 
@@ -1344,11 +1341,11 @@ public sealed class GenericSimsCallPrimitiveTests
     }
 
     [Fact]
-    public void CallFourteenSelectsOnlyModeThreeAndWritesMinusOneWhenRecordResolutionMisses()
+    public void CallFourteenSelectsOnlyKeyThreeAndWritesMinusOneWhenRecordResolutionMisses()
     {
         var (context, me, host, scope) = CallThirteenOrFourteen(
             new InteractionScopeEntry(1, 2, 5),
-            new InteractionScopeEntry(1, 3, 1));
+            new InteractionScopeEntry(3, 3, 1));
 
         Assert.Equal(PrimitiveResult.True, GenericSimsCallPrimitive.Execute(context, Operand(0x14)));
 
@@ -1615,7 +1612,7 @@ public sealed class GenericSimsCallPrimitiveTests
 
         Assert.Equal(PrimitiveResult.True, GenericSimsCallPrimitive.Execute(context, Operand(0x19)));
 
-        Assert.Equal(9, neighbor.PersonRecordVersion);
+        Assert.Equal(10, neighbor.PersonRecordVersion);
         Assert.Equal((short)46, neighbor.PersonData[2]);
         Assert.Empty(host.Calls);
     }

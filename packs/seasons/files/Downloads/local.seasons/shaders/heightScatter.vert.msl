@@ -1,0 +1,172 @@
+#pragma clang diagnostic ignored "-Wmissing-prototypes"
+
+#include <metal_stdlib>
+#include <simd/simd.h>
+
+using namespace metal;
+
+// Implementation of the GLSL mod() function, which is slightly different than Metal fmod()
+template<typename Tx, typename Ty>
+inline Tx mod(Tx x, Ty y)
+{
+    return x - y * floor(x / y);
+}
+
+// Implementation of signed integer mod accurate to SPIR-V specification
+template<typename Tx, typename Ty>
+inline Tx spvSMod(Tx x, Ty y)
+{
+    Tx remainder = x - y * (x / y);
+    return select(Tx(remainder + y), remainder, remainder == 0 || (x >= 0) == (y >= 0));
+}
+
+struct Scatter
+{
+    float4 view;
+    float4 extent;
+    float4 frame;
+    float4 grid;
+};
+
+struct main0_out
+{
+    float4 gl_Position [[position]];
+    float gl_PointSize [[point_size]];
+};
+
+static inline __attribute__((always_inline))
+float3 lotPoint(thread const float2& scene, thread const float& key, thread const bool& terrain, thread const float2& frame)
+{
+    float2 local = scene - frame;
+    float _26;
+    if (terrain)
+    {
+        _26 = ((16.0 * key) - local.y) / 40.0;
+    }
+    else
+    {
+        _26 = ((16.0 * key) - local.y) / 52.799999237060546875;
+    }
+    float h = _26;
+    float _50;
+    if (terrain)
+    {
+        _50 = key;
+    }
+    else
+    {
+        _50 = key - (0.800000011920928955078125 * h);
+    }
+    float s = _50;
+    float u = local.x / 32.0;
+    return float3(0.5 * (s + u), 0.5 * (s - u), h);
+}
+
+vertex main0_out main0(constant Scatter& scatter [[buffer(0)]], texture2d<float> depthMap [[texture(0)]], sampler depthMapSmplr [[sampler(0)]], uint gl_VertexIndex [[vertex_id]])
+{
+    main0_out out = {};
+    out.gl_PointSize = 1.0;
+    int columns = int(scatter.extent.z);
+    float2 pixel = floor((float2(float(spvSMod(int(gl_VertexIndex), columns)), float(int(gl_VertexIndex) / columns)) * scatter.view.w) + mod(scatter.view.xy, float2(scatter.view.w))) + float2(0.5);
+    bool _134 = pixel.x < scatter.extent.x;
+    bool _142;
+    if (_134)
+    {
+        _142 = pixel.y < scatter.extent.y;
+    }
+    else
+    {
+        _142 = _134;
+    }
+    float _143;
+    if (_142)
+    {
+        _143 = depthMap.read(uint2(int2(pixel)), 0).x;
+    }
+    else
+    {
+        _143 = 1.0;
+    }
+    float depth = _143;
+    if (depth >= 1.0)
+    {
+        out.gl_Position = float4(-2.0, -2.0, 1.0, 1.0);
+        return out;
+    }
+    float2 param = (pixel - scatter.view.xy) / float2(scatter.view.z);
+    float param_1 = (0.89999997615814208984375 - depth) / 0.0030000000260770320892333984375;
+    bool param_2 = false;
+    float2 param_3 = scatter.frame.xy;
+    float3 lot = lotPoint(param, param_1, param_2, param_3);
+    if (scatter.extent.w > 0.5)
+    {
+        float _step = fast::max(scatter.view.z, 1.0);
+        bool ground = false;
+        for (int i = 1; i <= 2; i++)
+        {
+            float2 below = pixel + float2(0.0, float(i) * _step);
+            bool _230;
+            if (!ground)
+            {
+                _230 = below.y >= scatter.extent.y;
+            }
+            else
+            {
+                _230 = ground;
+            }
+            bool _241;
+            if (!_230)
+            {
+                _241 = depthMap.read(uint2(int2(below)), 0).x >= 1.0;
+            }
+            else
+            {
+                _241 = _230;
+            }
+            ground = _241;
+        }
+        float2 abovePixel = pixel - float2(0.0, 3.0 * _step);
+        float _255;
+        if (abovePixel.y >= 0.0)
+        {
+            _255 = depthMap.read(uint2(int2(abovePixel)), 0).x;
+        }
+        else
+        {
+            _255 = 1.0;
+        }
+        float above = _255;
+        float2 param_4 = (abovePixel - scatter.view.xy) / float2(scatter.view.z);
+        float param_5 = (0.89999997615814208984375 - above) / 0.0030000000260770320892333984375;
+        bool param_6 = false;
+        float2 param_7 = scatter.frame.xy;
+        float3 up = lotPoint(param_4, param_5, param_6, param_7);
+        bool _291 = (!ground) || (above >= 1.0);
+        bool _302;
+        if (!_291)
+        {
+            _302 = (up.z - lot.z) < 0.02999999932944774627685546875;
+        }
+        else
+        {
+            _302 = _291;
+        }
+        bool _314;
+        if (!_302)
+        {
+            _314 = length(up.xy - lot.xy) > 0.20000000298023223876953125;
+        }
+        else
+        {
+            _314 = _302;
+        }
+        if (_314)
+        {
+            out.gl_Position = float4(-2.0, -2.0, 1.0, 1.0);
+            return out;
+        }
+    }
+    float2 texel = (lot.xy + float2(scatter.frame.w)) * scatter.frame.z;
+    out.gl_Position = float4(((texel.x / scatter.grid.x) * 2.0) - 1.0, 1.0 - ((texel.y / scatter.grid.y) * 2.0), fast::clamp(0.5 - (lot.z / 64.0), 0.0, 1.0), 1.0);
+    return out;
+}

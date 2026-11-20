@@ -690,12 +690,16 @@ internal static class NeighborhoodExport
                 ? ExportHouseRenderScenes(houseFile, loadedHouseWorld, registry, gameRoot, session, checked((short)house))
                 : null;
 
+            var isCommunity = (zoningDictionary.TryGetValue((short)house, out var zone) && zone == 1) ||
+                (!residential && ((mode == 2 && house is >= 21 and <= 30) ||
+                                  (mode == 3 && house is >= 40 and <= 49) ||
+                                  (mode == 5 && house is >= 81 and <= 89)));
             entries.Add(new Entry(index, house, x, y, Path.Combine("neighborhood", closedFilename), Path.Combine("neighborhood", openFilename),
                 closedDimensions.Width, closedDimensions.Height, openDimensions.Width, openDimensions.Height,
                 thumbWidth, thumbHeight, xOff, baseYOff, addYOff,
                 $"{source}#BMP:513", $"{source}#BMP:512", $"{source}#THMB:512", occupied, residential,
                 !occupied && residential && price is >= 0 and <= 20_000,
-                price, zoningDictionary.TryGetValue((short)house, out var zone) && zone == 1, filterFlags,
+                price, isCommunity, filterFlags,
                 string.IsNullOrEmpty(lotName) ? null : lotName, string.IsNullOrEmpty(houseDescription) ? null : houseDescription, street,
                 string.IsNullOrEmpty(streetTemplate) ? null : streetTemplate,
                 familyName, family == null ? null : family.Budget + family.Value,
@@ -734,7 +738,7 @@ internal static class NeighborhoodExport
             ambientSound = config.AmbientSound,
             animationLayers = config.AnimationLayers,
             locationsSource = $"UserData/LotLocations.iff#STR:{locationsId}",
-            travelFilter = mode == 4 ? TravelFilter.Load(userPath, TravelFilter.Unleashed, language) : (int?)null,
+            travelFilter = mode is 2 or 3 or 4 or 5 or 7 ? LoadTravelFilterForMode(userPath, mode, language) : (int?)null,
             entries,
             families = mode is 1 or 7 ? UnhousedFamilies(userPath, gameRoot, language, registry, careerCatalog) : [],
             imports,
@@ -828,8 +832,27 @@ internal static class NeighborhoodExport
     internal sealed record FamilyChoice(int Id, string Name, int Budget, int NetWorth, int Friends, string[] Members,
         MemberProfile[] MemberProfiles, byte[]?[] MemberThumbnails, int MagiCoins = 0);
 
-    /// <summary>Calculates total household MagiCoins by summing inventory tokens of type 7 with GUID
-    /// 0x99E81BEC across all family members.</summary>
+    internal static int SlotForMode(int mode) => mode switch
+    {
+        2 => 1,
+        3 => 2,
+        4 => 3,
+        5 => 4,
+        7 => 5,
+        _ => TravelFilter.Unleashed,
+    };
+
+    internal static int DefaultFallbackForMode(int mode) => mode is 5 or 7 ? 0x400 : 2;
+
+    internal static int LoadTravelFilterForMode(string userPath, int mode, byte language)
+    {
+        var fallback = DefaultFallbackForMode(mode);
+        var loaded = TravelFilter.Load(userPath, SlotForMode(mode), language, fallback);
+        return loaded != 0 ? loaded : fallback;
+    }
+
+    /// <summary>Calculates total household MagiCoins by summing MagiCoin inventory tokens across all
+    /// family members.</summary>
     internal static int SumFamilyMagiCoins(
         Family family,
         IReadOnlyDictionary<uint, Neighbor> neighborsByGuid,
@@ -843,11 +866,11 @@ internal static class NeighborhoodExport
             if (!ngbhData.Inventories.TryGetValue(neighbor.NeighborId, out var items)) continue;
             foreach (var item in items)
             {
-                if (item.Type == 7 && item.GUID == 0x99e81becu)
+                if (IsMagiCoinItem(item))
                     total += item.Count;
             }
         }
-        return (short)total;
+        return total;
     }
 
     internal static FamilyChoice[] UnhousedFamilies(string userPath, string gameRoot, byte language = 1,
@@ -869,9 +892,9 @@ internal static class NeighborhoodExport
         return nghFile.OfType(ResourceType.Parse("FAMI"))
             .Where(c => c.Id != 0)
             .Select(c => (ChunkId: c.Id, Family: Family.Read(nghFile, c)))
-            // Excludes stray animal families flagged with bit 0x08, retaining default and user household
-            // bin families.
-            .Where(f => f.Family.HouseNumber == 0 && f.Family.Members.Count > 0 && (f.Family.Flags & 8) == 0 && !IsPetsOnly(f.Family, neighborsByGuid))
+            // Excludes hidden/stray families flagged with 0x18 (0x10 | 0x08), retaining default, user,
+            // evicted, and NeighborhoodEdits-imported household bin families.
+            .Where(f => f.Family.HouseNumber == 0 && f.Family.Members.Count > 0 && (f.Family.Flags & 0x18) != 0x18 && !IsPetsOnly(f.Family, neighborsByGuid))
             .OrderBy(f => f.ChunkId)
             .Select(f =>
             {

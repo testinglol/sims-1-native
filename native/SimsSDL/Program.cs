@@ -39,6 +39,9 @@ internal sealed class Options
 
     public string? GpuDriver { get; set; }
 
+    public bool? EdgeScroll { get; set; }
+    public bool? AutoCenter { get; set; }
+
     public bool HelpRequested { get; set; }
 
     public Options()
@@ -175,8 +178,28 @@ internal sealed class Options
                     {
                         "far" => LotZoom.Far,
                         "medium" => LotZoom.Medium,
+                        "closer" or "3x" => LotZoom.Closer,
+                        "closest" or "4x" => LotZoom.Closest,
                         _ => LotZoom.Near,
                     };
+                    break;
+                case "--edgescroll":
+                    EdgeScroll = true;
+                    break;
+                case "--no-edgescroll":
+                    EdgeScroll = false;
+                    break;
+                case "-edgescroll":
+                    EdgeScroll = !string.Equals(ReadValue(argument), "off", StringComparison.OrdinalIgnoreCase);
+                    break;
+                case "--autocenter":
+                    AutoCenter = true;
+                    break;
+                case "--no-autocenter":
+                    AutoCenter = false;
+                    break;
+                case "-autocenter":
+                    AutoCenter = !string.Equals(ReadValue(argument), "off", StringComparison.OrdinalIgnoreCase);
                     break;
                 case "--live":
                     break;
@@ -322,7 +345,7 @@ internal static unsafe partial class Program
         SimsSDL: the cross-platform front end on SDL3 and SDL_GPU. It plays the game through the simulation host from the
         original neighborhood screen, opens one lot directly with --house, or shows an exported lot scene.
 
-            SimsSDL --scene <dir/scene.json> [--png out.png] [--width 1280] [--height 960] [--zoom near|medium|far]
+            SimsSDL --scene <dir/scene.json> [--png out.png] [--width 1280] [--height 960] [--zoom far|medium|near|closer|closest]
                     [--scale 2] [--no-lighting] [--no-ambient]
             SimsSDL [--house <1-100>] [--game <game dir>] [--workspace <repo>] [--data-root <dir>] [--profile player]
                     [--neighborhood 1] [--speed 0|1|3|10] [--answer-dialogs] [--no-audio] [--packs <dir>] [--script <file>]
@@ -494,6 +517,7 @@ internal static unsafe partial class Program
                         if (script is not null)
                         {
                             live.ScriptUISounds = [];
+                            live.SuppressEdgeScrollForScript = true;
                         }
 
                         RunWindow(options, renderer, live, script);
@@ -1427,10 +1451,18 @@ internal static unsafe partial class Program
                         profiler.Mark("tick");
                         live.Ui.RoofsVisible = renderer.RoofsVisible;
                         live.Ui.ViewLevel = renderer.ViewLevel;
+                        renderer.AmbientPaused = live.Ui.IsModalDialogBlocking || !live.Ui.ShowsLot;
 
                         try
                         {
-                            renderer.Overlay = live.Ui.Draws(new Vector2(width, height), renderer.UIScale, renderer.Speed);
+                            var renderCanvas = new Vector2(width, height);
+                            live.Ui.ActiveOverheadFeedback = renderer.DrawsLot ? renderer.Scene?.OverheadFeedback : null;
+                            renderer.Overlay = live.Ui.Draws(
+                                renderCanvas,
+                                renderer.UIScale,
+                                renderer.Speed,
+                                renderer.DrawsLot ? renderer.SceneViewport(renderCanvas) : null,
+                                renderer.EffectiveVisualZoom);
                             renderer.PreviewPlacement = live.Ui.PreviewPlacement is { } preview
                                 ? (preview.Index, preview.Rects as Dictionary<int, Vector4> ?? new Dictionary<int, Vector4>(preview.Rects))
                                 : null;

@@ -774,9 +774,9 @@ public sealed class GPUContext : IDisposable
 
         try
         {
-            var chunks = new List<ReadOnlyMemory<byte>>(images.Count);
-            var uploads = new List<(int TexIndex, uint MipLevel, int Width, int Height, int ChunkIndex)>(images.Count);
-
+            var numLevelsPerImage = new uint[images.Count];
+            int mipmappedCount = 0;
+            long totalMipPixels = 0;
             for (int i = 0; i < images.Count; i++)
             {
                 var image = images[i];
@@ -785,6 +785,12 @@ public sealed class GPUContext : IDisposable
                     && mipmapped[i]
                     && (image.Width > 1 || image.Height > 1);
                 uint numLevels = wantMips ? CalcMipLevels(image.Width, image.Height) : 1u;
+                numLevelsPerImage[i] = numLevels;
+                if (numLevels > 1)
+                {
+                    mipmappedCount++;
+                    totalMipPixels += (long)image.Width * image.Height;
+                }
 
                 result.Add(MakeTexture(
                     image.Width,
@@ -792,22 +798,79 @@ public sealed class GPUContext : IDisposable
                     image.Depth8 ? SDL_GPU_TEXTUREFORMAT_R8_UNORM : ColorFormat,
                     SDL_GPU_TEXTUREUSAGE_SAMPLER,
                     numLevels: numLevels));
+            }
 
+            // Generate CPU mip chains in parallel when uploading batches or large textures.
+            var mipChains = mipmappedCount > 0 ? new byte[]?[images.Count][] : null;
+            if (mipChains is not null)
+            {
+                if (mipmappedCount > 1 && totalMipPixels >= 32768)
+                {
+                    Parallel.For(0, images.Count, i =>
+                    {
+                        uint numLevels = numLevelsPerImage[i];
+                        if (numLevels <= 1) return;
+                        var image = images[i];
+                        var chain = new byte[numLevels - 1][];
+                        int lw = image.Width;
+                        int lh = image.Height;
+                        byte[] cur = image.Pixels;
+                        for (uint level = 1; level < numLevels; level++)
+                        {
+                            cur = SimsSDL.Core.SpritePixels.DownsamplePremultipliedSrgbBox(cur, lw, lh);
+                            lw = Math.Max(1, lw >> 1);
+                            lh = Math.Max(1, lh >> 1);
+                            chain[level - 1] = cur;
+                        }
+                        mipChains[i] = chain;
+                    });
+                }
+                else
+                {
+                    for (int i = 0; i < images.Count; i++)
+                    {
+                        uint numLevels = numLevelsPerImage[i];
+                        if (numLevels <= 1) continue;
+                        var image = images[i];
+                        var chain = new byte[numLevels - 1][];
+                        int lw = image.Width;
+                        int lh = image.Height;
+                        byte[] cur = image.Pixels;
+                        for (uint level = 1; level < numLevels; level++)
+                        {
+                            cur = SimsSDL.Core.SpritePixels.DownsamplePremultipliedSrgbBox(cur, lw, lh);
+                            lw = Math.Max(1, lw >> 1);
+                            lh = Math.Max(1, lh >> 1);
+                            chain[level - 1] = cur;
+                        }
+                        mipChains[i] = chain;
+                    }
+                }
+            }
+
+            var chunks = new List<ReadOnlyMemory<byte>>(images.Count * 2);
+            var uploads = new List<(int TexIndex, uint MipLevel, int Width, int Height, int ChunkIndex)>(images.Count * 2);
+
+            for (int i = 0; i < images.Count; i++)
+            {
+                var image = images[i];
+                uint numLevels = numLevelsPerImage[i];
                 int levelWidth = image.Width;
                 int levelHeight = image.Height;
-                byte[] currentPixels = image.Pixels;
                 int baseChunkIndex = chunks.Count;
-                chunks.Add(currentPixels);
+                chunks.Add(image.Pixels);
                 uploads.Add((i, 0u, levelWidth, levelHeight, baseChunkIndex));
 
-                for (uint level = 1; level < numLevels; level++)
+                if (numLevels > 1 && mipChains?[i] is { } chain)
                 {
-                    currentPixels = SimsSDL.Core.SpritePixels.DownsamplePremultipliedSrgbBox(currentPixels, levelWidth, levelHeight);
-                    levelWidth = Math.Max(1, levelWidth >> 1);
-                    levelHeight = Math.Max(1, levelHeight >> 1);
-                    int chunkIndex = chunks.Count;
-                    chunks.Add(currentPixels);
-                    uploads.Add((i, level, levelWidth, levelHeight, chunkIndex));
+                    for (uint level = 1; level < numLevels; level++)
+                    {
+                        levelWidth = Math.Max(1, levelWidth >> 1);
+                        levelHeight = Math.Max(1, levelHeight >> 1);
+                        int chunkIndex = chunks.Count;
+                        chunks.Add(chain[level - 1]!);
+                        uploads.Add((i, level, levelWidth, levelHeight, chunkIndex));
+                    }
                 }
             }
 

@@ -1,0 +1,24 @@
+{
+  "daysPerSeason": 7,
+  "initialDay": 0,
+  "lighting": {
+    "radius": 26,
+    "occlusion": 0.8,
+    "shadow": 0.45,
+    "thickness": 40,
+    "reach": 4,
+    "contactRadius": 40,
+    "contact": 0.25,
+    "heightTexels": 16,
+    "groundOffset": 0,
+    "lampReach": 240,
+    "lampGain": 1.4,
+    "night": 0.55,
+    "windowSun": 1.2,
+    "cloudShade": 0.5,
+    "windX": 0.3,
+    "windY": 0.12,
+    "cloudHeight": 20,
+    "tint": 0.6
+  }
+}

@@ -31,6 +31,8 @@ public sealed class OriginalCameraOverlay
 
     private readonly ButtonSpec[] _buttons;
     private readonly OriginalGameplayOverlay.Image _universal;
+    private readonly OriginalGameplayOverlay.Image _vectorUniversal;
+    private OriginalGameplayOverlay.Image ActiveUniversal => SimsBitmapFont.SharpTextEnabled ? _vectorUniversal : _universal;
     private readonly OriginalGameplayOverlay.Image _patch;
     private readonly OriginalGameplayOverlay.Image _toothpickLeft;
     private readonly OriginalGameplayOverlay.Image _toothpickRight;
@@ -129,6 +131,7 @@ public sealed class OriginalCameraOverlay
 
         var universalTarga = new SimsTarga(content.Read("UIGraphics/cpanel/Backgrounds/UniversalBack.tga"));
         _universal = OriginalGameplayOverlay.CreateImage(device, universalTarga.Width, universalTarga.Height, universalTarga.Rgba);
+        try { _vectorUniversal = SimsVectorUiKit.ToOverlayImage(SimsVectorUiKit.RenderFittedPanel("universalback", scale: 8)); } catch { _vectorUniversal = _universal; }
 
         OriginalGameplayOverlay.Image UploadBackground(string name)
         {
@@ -146,6 +149,15 @@ public sealed class OriginalCameraOverlay
         OriginalGameplayOverlay.Image UploadButton(string name)
         {
             var bitmap = new SimsBitmap(content.Read($"UIGraphics/CPanel/Buttons/{name}.bmp"));
+            if (SimsBitmapFont.SharpTextEnabled)
+            {
+                int w1x = Math.Max(1, bitmap.Width / 4);
+                int h1x = Math.Max(1, bitmap.Height);
+                if (string.Equals(name, "Camera", StringComparison.OrdinalIgnoreCase))
+                    return SimsVectorUiKit.ToOverlayImage(SimsVectorUiKit.RenderCameraModeButtonStrip(w1x, h1x, scale: 4));
+                if (string.Equals(name, "CamViewAlbum", StringComparison.OrdinalIgnoreCase))
+                    return SimsVectorUiKit.ToOverlayImage(SimsVectorUiKit.RenderCameraViewAlbumStrip(w1x, h1x, scale: 4));
+            }
             return OriginalGameplayOverlay.CreateImage(device, bitmap.Width, bitmap.Height, bitmap.Rgba, magenta: true);
         }
 
@@ -408,20 +420,14 @@ public sealed class OriginalCameraOverlay
             }
 
             var rect = PlacementTooltip.Rect(image.Size, new CGPoint(_tooltipAnchor.X, _tooltipAnchor.Y - 1), canvas);
-            // Truncates animation height and hides tooltips while height is below 1 pixel so zero progress
-            // does not render a stray border line.
-            var height = Math.Floor(rect.Height * progress);
-            if (height < 1.0)
-            {
-                return [];
-            }
-
+            var lift = (1.0 - progress) * 2.0;
             return
             [
                 new OriginalGameplayOverlay.Part(
                     image,
-                    new CGRect(rect.X, rect.Y + rect.Height - height, rect.Width, height),
-                    new Vector4(0f, (float)(1.0 - height / rect.Height), 1f, 1f))
+                    new CGRect(rect.X, rect.Y + lift, rect.Width, rect.Height),
+                    new Vector4(0f, 0f, 1f, 1f),
+                    (float)Math.Clamp(progress, 0.0, 1.0))
             ];
         }
         catch
@@ -436,7 +442,7 @@ public sealed class OriginalCameraOverlay
     {
         var top = canvas.Height - 150;
         var parts = PopupParts(canvas);
-        parts.Add(new OriginalGameplayOverlay.Part(_universal, new CGRect(0, top - 33, _universal.Size.Width, _universal.Size.Height)));
+        parts.Add(new OriginalGameplayOverlay.Part(ActiveUniversal, new CGRect(0, top - 33, _universal.Size.Width, _universal.Size.Height)));
         parts.Add(new OriginalGameplayOverlay.Part(_patch, new CGRect(165, top - 33 + 83, _patch.Size.Width, _patch.Size.Height)));
         parts.Add(new OriginalGameplayOverlay.Part(_toothpickLeft, new CGRect(220 + 133, canvas.Height - 100 + 6, _toothpickLeft.Size.Width, _toothpickLeft.Size.Height)));
         parts.Add(new OriginalGameplayOverlay.Part(_toothpickRight, new CGRect(220 + 206, canvas.Height - 100 + 6, _toothpickRight.Size.Width, _toothpickRight.Size.Height)));

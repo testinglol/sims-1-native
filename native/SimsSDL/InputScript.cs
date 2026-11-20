@@ -71,7 +71,7 @@ internal sealed class InputScript
 
     private static readonly HashSet<string> SimpleWaitforConditions = new(StringComparer.Ordinal)
     {
-        "lot", "album", "illustrated", "scene", "menu", "head", "panel", "dialog", "nodialog", "quiet",
+        "lot", "adjacent-lots", "album", "illustrated", "scene", "menu", "head", "panel", "dialog", "nodialog", "quiet",
         "neighborhood", "picker", "creation", "preview", "popup", "catalog", "placement", "cursor",
         "built", "canundo", "canredo", "idle", "freewill", "winter-clothes", "everyday-clothes"
     };
@@ -196,13 +196,66 @@ internal sealed class InputScript
                     _waitFrames = TryParseInt(argument, out int waitCount) ? waitCount : 1;
                     return new Action.None();
 
+                case "connected-mode":
+                {
+                    bool enable = string.Equals(argument, "on", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(argument, "true", StringComparison.OrdinalIgnoreCase);
+                    _ = live.ScriptSetConnectedNeighborhood(enable, adjacentRendering: enable, storyProgression: enable);
+                    _waitFrames = 30;
+                    return new Action.None();
+                }
+
+                case "visit-lot":
+                {
+                    if (words.Length < 2 || !TryParseInt(words[1], out int targetHouse))
+                        throw new InvalidOperationException("visit-lot requires a house number");
+                    bool knock = words.Skip(2).Any(w => string.Equals(w, "knock", StringComparison.OrdinalIgnoreCase));
+                    bool walk = words.Skip(2).Any(w => string.Equals(w, "walk", StringComparison.OrdinalIgnoreCase));
+                    _ = live.ScriptVisitLot(targetHouse, knock: knock, walk: walk);
+                    _waitFrames = walk ? 15 : 30;
+                    return new Action.None();
+                }
+
+                case "focus-lot":
+                {
+                    if (words.Length < 2 || !TryParseInt(words[1], out int targetHouse))
+                        throw new InvalidOperationException("focus-lot requires a house number");
+                    _ = live.ScriptFocusLot(targetHouse);
+                    _waitFrames = 35;
+                    return new Action.None();
+                }
+
+                case "return-home":
+                {
+                    _ = live.ScriptReturnHome(walk: false);
+                    _waitFrames = 35;
+                    return new Action.None();
+                }
+
+                case "assert-adjacent-lots":
+                {
+                    int minCount = TryParseInt(argument, out int parsedMin) ? parsedMin : 1;
+                    int actual = live.Renderer.AdjacentLotCount;
+                    if (actual < minCount)
+                        throw new InvalidOperationException($"Expected at least {minCount} adjacent lots rendered, found {actual}.");
+                    break;
+                }
+
                 case "autodismiss-until":
                     live.ScriptAnswersDialogs = true;
                     live.ScriptDialogStop = argument;
                     break;
 
                 case "autodismiss":
-                    live.ScriptAnswersDialogs = true;
+                    if (string.Equals(argument, "off", StringComparison.OrdinalIgnoreCase))
+                    {
+                        live.ScriptAnswersDialogs = false;
+                        live.ScriptDialogStop = null;
+                    }
+                    else
+                    {
+                        live.ScriptAnswersDialogs = true;
+                    }
                     break;
 
                 case "keep-speed":
@@ -317,6 +370,7 @@ internal sealed class InputScript
                     keys.Remove("none");
                     _held = keys;
                     live.ScriptDeleteModifier = _held.Contains("ctrl") || _held.Contains("alt");
+                    live.ScriptCtrlModifier = _held.Contains("ctrl");
                     live.ScriptShiftModifier = _held.Contains("shift");
                     return new Action.None();
                 }
@@ -730,7 +784,7 @@ internal sealed class InputScript
             return;
         }
 
-        if (words.Length > 2 && words[1] is ("map" or "camera" or "absent"))
+        if (words.Length > 2 && words[1] is ("map" or "camera" or "absent" or "house"))
         {
             if (!TryParseInt(words[2], out _))
             {
@@ -809,6 +863,24 @@ internal sealed class InputScript
             case "ctrl-down":
                 SendDeleteModifiedKey(new LiveController.Key.Down(), live);
                 return;
+            case "ctrl+shift+c":
+            case "ctrl-shift-c":
+            {
+                bool prevCtrl = live.ScriptCtrlModifier;
+                bool prevShift = live.ScriptShiftModifier;
+                live.ScriptCtrlModifier = true;
+                live.ScriptShiftModifier = true;
+                try
+                {
+                    _ = live.HandleKeyDown(new LiveController.Key.Character("c"));
+                }
+                finally
+                {
+                    live.ScriptCtrlModifier = prevCtrl;
+                    live.ScriptShiftModifier = prevShift;
+                }
+                return;
+            }
         }
 
         LiveController.Key key = argument switch
@@ -912,6 +984,7 @@ internal sealed class InputScript
                 IReadOnlyList<int> simIds = live.ScriptSimIDs;
                 return live.Ui.ShowsLot && live.ScriptSceneReady && simIds.Count > 0 && simIds.All(live.ScriptSceneContains);
             }
+            case "adjacent-lots": return live.Renderer.AdjacentLotCount >= 3 && (live.Renderer.Scene is not { House: > 0 } adjScene || live.Renderer.AdjacentLotsForHouse == adjScene.House);
             case "scene": return live.Ui.ShowsLot && live.ScriptSceneReady;
             case "menu": return live.Ui.PieMenu is not null;
             case "head": return live.ScriptPieHeadSettled;
@@ -966,6 +1039,14 @@ internal sealed class InputScript
                     !current.Floors.SequenceEqual(saved.Floors, StringComparer.Ordinal) ||
                     !current.Heights.SequenceEqual(saved.Heights) ||
                     !current.Grass.SequenceEqual(saved.Grass));
+        }
+
+        if (name.StartsWith("house ", StringComparison.Ordinal))
+        {
+            return TryParseInt(name[6..], out int expectedHouse) &&
+                   live.Ui.ShowsLot &&
+                   !live.Renderer.IsLoadingScene &&
+                   live.Renderer.Scene?.House == expectedHouse;
         }
 
         if (name.StartsWith("pointer ", StringComparison.Ordinal))

@@ -1,0 +1,99 @@
+#pragma clang diagnostic ignored "-Wmissing-prototypes"
+
+#include <metal_stdlib>
+#include <simd/simd.h>
+
+using namespace metal;
+
+struct Ambient
+{
+    float4 view;
+    float4 params;
+    float4 light;
+    float4 extent;
+    float4 lamp;
+    float4 contact;
+    float4 frame;
+    float4 sunLot;
+    float4 clouds;
+    float4 drift;
+    float4 weather;
+    float4 tone;
+    float4 season;
+    float4 lamps[16];
+    float4 prints[16];
+    float4 seasonExtra;
+    float4 seasonExtra2;
+    float4 shadowView;
+};
+
+struct main0_out
+{
+    float4 color [[color(0)]];
+};
+
+static inline __attribute__((always_inline))
+float print(thread const float2& lot, thread const float4& p)
+{
+    float foot = abs(p.w);
+    bool paw = foot > 1.5;
+    float size = paw ? 1.0 : foot;
+    float2 along = float2(cos(p.z), sin(p.z));
+    float2 across = float2(-along.y, along.x);
+    float _63;
+    if (paw)
+    {
+        _63 = 0.04500000178813934326171875;
+    }
+    else
+    {
+        _63 = 0.064999997615814208984375 * size;
+    }
+    float2 d = (lot - p.xy) + ((across * sign(p.w)) * _63);
+    if (dot(d, d) > 0.0900000035762786865234375)
+    {
+        return 0.0;
+    }
+    float2 local = float2(dot(d, along), dot(d, across)) / float2(size);
+    float edge;
+    if (paw)
+    {
+        edge = (length(local / float2(0.0500000007450580596923828125, 0.039999999105930328369140625)) - 1.0) * 0.039999999105930328369140625;
+    }
+    else
+    {
+        float sole = (length((local - float2(0.02999999932944774627685546875, 0.0)) / float2(0.085000000894069671630859375, 0.0529999993741512298583984375)) - 1.0) * 0.0529999993741512298583984375;
+        float heel = (length((local - float2(-0.039999999105930328369140625, 0.0)) / float2(0.04500000178813934326171875, 0.0460000000894069671630859375)) - 1.0) * 0.0460000000894069671630859375;
+        edge = fast::min(sole, heel) * size;
+    }
+    return fast::clamp(0.5 - ((edge * 32.0) / 1.5), 0.0, 1.0);
+}
+
+fragment main0_out main0(constant Ambient& ambient [[buffer(0)]], texture2d<float> previous [[texture(0)]], sampler previousSmplr [[sampler(0)]], float4 gl_FragCoord [[position]])
+{
+    main0_out out = {};
+    int2 at = int2(gl_FragCoord.xy);
+    float _166;
+    if (ambient.season.w < (-0.5))
+    {
+        _166 = 0.0;
+    }
+    else
+    {
+        _166 = fast::max(0.0, previous.read(uint2(at), 0).x - ambient.season.z);
+    }
+    float pressed = _166;
+    float2 lot = (gl_FragCoord.xy / float2(32.0)) - float2(1.0);
+    for (int i = 0; i < 16; i++)
+    {
+        if (ambient.prints[i].w == 0.0)
+        {
+            break;
+        }
+        float2 param = lot;
+        float4 param_1 = ambient.prints[i];
+        pressed = fast::max(pressed, print(param, param_1));
+    }
+    out.color = float4(pressed, 0.0, 0.0, 1.0);
+    return out;
+}

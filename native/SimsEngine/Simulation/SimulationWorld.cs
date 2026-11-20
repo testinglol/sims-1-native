@@ -67,6 +67,58 @@ public sealed partial class SimulationWorld
         GenericSimsCallRecordCallbackTarget = new FamePromotionChecks();
     }
 
+    public Neighborhood.NeighborhoodManager Neighborhood { get; set; } = new();
+
+    // Map of neighboring lot IDs to their file paths or pre-loaded IffFile references.
+    public Dictionary<int, string> NeighborLotPaths { get; } = new();
+
+    public Dictionary<short, Neighborhood.CrossLotTransitVisualOverride> TransitVisualOverrides { get; } = new();
+
+    public void CancelDirectPositionRoutes(XPerson person)
+    {
+        ArgumentNullException.ThrowIfNull(person);
+        if (_directPositionRoutes.TryGetValue(person.Id, out var active))
+        {
+            RouteExecutor.CancelDirectPosition(this, person, active.Frame);
+            _directPositionRoutes.Remove(person.Id);
+        }
+        if (person.NativeRoute is { OwnerFrame: { } routeFrame })
+            RouteExecutor.CancelDirectPosition(this, person, routeFrame);
+        person.NativeRoute = null;
+        StopCurrentAnimation(person);
+        person.AnimatorControlState = 3;
+    }
+
+    public void CancelSyntheticDirectPositionRouteFor(XPerson person)
+    {
+        ArgumentNullException.ThrowIfNull(person);
+        if (_directPositionRoutes.TryGetValue(person.Id, out var route))
+        {
+            var stack = SavedExecutionStacks.GetValueOrDefault(person.Id);
+            var isSavedFrame = stack?.Frames.Any(f => ReferenceEquals(f, route.Frame)) == true;
+            if (!isSavedFrame)
+                CancelDirectPositionRoutes(person);
+        }
+    }
+
+    public void CancelSyntheticDirectPositionRoutes()
+    {
+        foreach (var (personId, route) in _directPositionRoutes.ToArray())
+        {
+            if (ObjectById(personId) is XPerson person)
+            {
+                var stack = SavedExecutionStacks.GetValueOrDefault(personId);
+                var isSavedFrame = stack?.Frames.Any(f => ReferenceEquals(f, route.Frame)) == true;
+                if (!isSavedFrame)
+                    CancelDirectPositionRoutes(person);
+            }
+            else
+            {
+                _directPositionRoutes.Remove(personId);
+            }
+        }
+    }
+
     public void OnStarPowerChange(short personId, short oldStars, short newStars)
     {
         if (oldStars == newStars) return;

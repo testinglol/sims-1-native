@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "id": "lighting-settings",
+  "title": "Enhanced Graphics",
+  "frame": { "x": 250, "y": 140, "width": 300, "height": 266 },
+  "elements": [
+    { "id": "enabled-btn", "kind": "button", "frame": { "x": 24, "y": 46, "width": 252, "height": 28 }, "text": "Toggle Enhanced Lighting", "action": "toggle-enabled" },
+    { "id": "shadows-btn", "kind": "button", "frame": { "x": 24, "y": 82, "width": 252, "height": 28 }, "text": "Toggle Dynamic Shadows", "action": "toggle-shadows" },
+    { "id": "ao-btn", "kind": "button", "frame": { "x": 24, "y": 118, "width": 252, "height": 28 }, "text": "Toggle Ambient Occlusion", "action": "toggle-ao" },
+    { "id": "cycle-btn", "kind": "button", "frame": { "x": 24, "y": 154, "width": 252, "height": 28 }, "text": "Toggle Day / Night Cycle", "action": "toggle-cycle" },
+    { "id": "hd-lots-btn", "kind": "button", "frame": { "x": 24, "y": 190, "width": 252, "height": 28 }, "text": "Toggle HD Lot Thumbnails", "action": "toggle-hd-lots" }
+  ]
+}

@@ -64,13 +64,16 @@ public readonly record struct SceneDrawItem
     }
 }
 
-/// <summary>Defines the three lot zoom levels. Scene units represent medium-zoom pixels, rendering at 2
-/// screen pixels per unit at near zoom and 0.5 at far zoom using discrete asset resolutions.</summary>
+/// <summary>Defines the lot zoom levels. Scene units represent medium-zoom pixels, rendering at 0.5
+/// screen pixels per unit at far zoom, 2 at near zoom, and 3 or 4 at extended close-up zoom levels while
+/// reusing near-zoom discrete assets.</summary>
 public enum LotZoom
 {
     Far = 1,
     Medium = 2,
-    Near = 3
+    Near = 3,
+    Closer = 4,
+    Closest = 5
 }
 
 public static class LotZoomExtensions
@@ -82,15 +85,26 @@ public static class LotZoomExtensions
         LotZoom.Far => 0.5f,
         LotZoom.Medium => 1f,
         LotZoom.Near => 2f,
+        LotZoom.Closer => 3f,
+        LotZoom.Closest => 4f,
         _ => 1f
     };
 
-    /// <summary>Calculates volume attenuation based on zoom level, dividing gain by (4 - zoom) to yield 1.0
-    /// at near, 0.5 at medium, and 0.33 at far zoom.</summary>
-    public static float SoundGain(this LotZoom zoom) => 1f / (4 - (int)zoom);
+    /// <summary>Maps any zoom level to the three discrete game asset and simulator zoom tiers
+    /// (Far = 1, Medium = 2, Near = 3).</summary>
+    public static LotZoom AssetZoom(this LotZoom zoom) => zoom switch
+    {
+        <= LotZoom.Far => LotZoom.Far,
+        LotZoom.Medium => LotZoom.Medium,
+        _ => LotZoom.Near
+    };
+
+    /// <summary>Calculates volume attenuation based on zoom level, dividing gain by (4 - assetZoom) to yield
+    /// 1.0 at near/closer/closest, 0.5 at medium, and 0.33 at far zoom.</summary>
+    public static float SoundGain(this LotZoom zoom) => 1f / (4 - (int)zoom.AssetZoom());
 
     public static LotZoom Stepped(this LotZoom zoom, int steps) =>
-        (LotZoom)Math.Clamp((int)zoom + steps, (int)LotZoom.Far, (int)LotZoom.Near);
+        (LotZoom)Math.Clamp((int)zoom + steps, (int)LotZoom.Far, (int)LotZoom.Closest);
 }
 
 public readonly record struct SceneViewport
@@ -98,6 +112,13 @@ public readonly record struct SceneViewport
     public Vector2 Size { get; }
     public float Scale { get; }
     public Vector2 Origin { get; }
+
+    internal SceneViewport(Vector2 size, float scale, Vector2 origin)
+    {
+        Size = size;
+        Scale = scale;
+        Origin = origin;
+    }
 
     /// <summary>Lays out the scene at an exact zoom factor with an integer-aligned pixel origin so
     /// nearest-neighbor sampling maps directly to screen pixels. <paramref name="pan"/> offsets the scene
@@ -114,11 +135,12 @@ public readonly record struct SceneViewport
         float zoomFactor,
         float uiScale,
         Vector2 pan,
-        bool snapOriginToPixel = true)
+        bool snapOriginToPixel = true,
+        Vector4? panTileBounds = null)
     {
         Size = new Vector2(canvas.X, MathF.Max(1f, canvas.Y - panelHeight));
         Scale = MathF.Max(uiScale, 0.01f) * zoomFactor;
-        Vector2 clamped = ClampedPan(pan, scene, Scale);
+        Vector2 clamped = ClampedPan(pan, scene, Scale, panTileBounds);
         Vector2 rawOrigin = (Size - new Vector2(scene.Width, scene.Height) * Scale) / 2f + clamped;
         Origin = snapOriginToPixel
             ? new Vector2(
@@ -127,7 +149,7 @@ public readonly record struct SceneViewport
             : rawOrigin;
     }
 
-    public static Vector2 ClampedPan(Vector2 pan, LotScene scene, float scale)
+    public static Vector2 ClampedPan(Vector2 pan, LotScene scene, float scale, Vector4? panTileBounds = null)
     {
         if (scene.LotWidth is int width && scene.LotHeight is int height && width > 2 && height > 2
             && scene.OriginX is float x && scene.OriginY is float y && scale > 0f)
@@ -137,7 +159,9 @@ public readonly record struct SceneViewport
             Vector2 centre = new Vector2(scene.Width, scene.Height) / 2f;
             Vector2 projected = centre - pan / scale + origin - new Vector2(34f, 158f);
             Vector2 camera = new(projected.Y / 32f + projected.X / 64f, projected.Y / 32f - projected.X / 64f);
-            Vector2 source = Vector2.Clamp(scene.Camera.LotPoint(camera, size), Vector2.One, size - Vector2.One);
+            Vector2 minClamp = panTileBounds is { } bounds ? new Vector2(bounds.X + 1f, bounds.Y + 1f) : Vector2.One;
+            Vector2 maxClamp = panTileBounds is { } maxBounds ? new Vector2(maxBounds.Z - 1f, maxBounds.W - 1f) : size - Vector2.One;
+            Vector2 source = Vector2.Clamp(scene.Camera.LotPoint(camera, size), minClamp, maxClamp);
             return (centre - (scene.Camera.ProjectedPoint(source, size) - origin)) * scale;
         }
 

@@ -88,6 +88,7 @@ internal sealed partial class LiveController
                         exported.Manifest,
                         exported.Session,
                         self.Ui.Font);
+                    self.WireNeighborhoodOverlay(neighborhood);
                     self.Ui.Neighborhood = neighborhood;
                     self._neighborhoodHouseSelected = house =>
                     {
@@ -545,6 +546,7 @@ internal sealed partial class LiveController
         }
 
         Content = nextContent;
+        ModManager.TrustBundledPlugins(Content, dataRoot);
         Ui = new LiveUI(Content);
         LoadPlayOptions();
         if (!Options.AnswerDialogs)
@@ -943,6 +945,7 @@ internal sealed partial class LiveController
         _lastAudioAnimationSequence = -1;
         Ui.Loading = false;
         _openingNeighborhoodLot = true;
+        ResetConnectedAdjacentHoldState();
         _centresOnSelectedSim = Ui.OptionsPanel.PlayOptions.AutoCenter;
         _pendingPieHead = null;
         _desiredPieHead = null;
@@ -1624,6 +1627,7 @@ internal sealed partial class LiveController
     private void PresentTravelNeighborhood(NeighborhoodRequest request, string session, string manifest)
     {
         var neighborhood = new OriginalNeighborhoodOverlay(Content, Ui.Device, manifest, session, Ui.Font);
+        WireNeighborhoodOverlay(neighborhood);
         if (neighborhood.Mode != request.Mode)
         {
             throw new ContentError("Neighborhood export returned the wrong mode");
@@ -2451,7 +2455,7 @@ internal sealed partial class LiveController
                 HomeLotHouse = _currentHouse;
                 Log("household moved in");
                 _ = Send("modeMusic", new Dictionary<string, object?> { ["mode"] = "live" });
-                RequestAutoCenterOnSelection();
+                RequestAutoCenterOnSelection(playErrorSound: false);
                 if (Options.Speed is int speed)
                 {
                     _liveModePaused = speed == 0;
@@ -2567,7 +2571,7 @@ internal sealed partial class LiveController
                 HomeLotHouse = moveIn.House;
                 Log("family moved in");
                 _ = Send("modeMusic", new Dictionary<string, object?> { ["mode"] = "live" });
-                RequestAutoCenterOnSelection();
+                RequestAutoCenterOnSelection(playErrorSound: false);
                 if (Options.Speed is int speed)
                 {
                     _liveModePaused = speed == 0;
@@ -2804,7 +2808,7 @@ internal sealed partial class LiveController
         int pipW = Math.Max(1, (int)Math.Round(logicalSize.Width * Scale, MidpointRounding.AwayFromZero));
         int pipH = Math.Max(1, (int)Math.Round(logicalSize.Height * Scale, MidpointRounding.AwayFromZero));
         var pipCanvas = new Vector2(pipW, pipH);
-        LotZoom targetZoom = Enum.IsDefined(typeof(LotZoom), window.Zoom)
+        LotZoom targetZoom = window.Zoom is >= (int)LotZoom.Far and <= (int)LotZoom.Near
             ? (LotZoom)window.Zoom
             : Renderer.Zoom;
 
@@ -2944,8 +2948,8 @@ internal sealed partial class LiveController
             return null;
         }
 
-        double divisor = 1 << (3 - (int)Renderer.Zoom);
-        var size = new CGSize(200.0 / divisor * Scale, 300.0 / divisor * Scale);
+        double zoomScale = Renderer.Zoom.Factor() / LotZoom.Near.Factor();
+        var size = new CGSize(200.0 * zoomScale * Scale, 300.0 * zoomScale * Scale);
         double left = Math.Max(0.0, bounds.MidX - size.Width / 2.0);
         double top = Math.Max(0.0, bounds.MidY - size.Height / 2.0);
         double right = Math.Min(_canvas.Width, bounds.MidX + size.Width / 2.0);
@@ -3054,6 +3058,270 @@ internal sealed partial class LiveController
                 _pendingViewSceneRevision = null;
                 _pendingViewRequestID = Send("roofs", new Dictionary<string, object?> { ["visible"] = false });
             }
+        }
+    }
+
+    private readonly Queue<string> _pendingCheatQueue = new();
+    private (string Id, string Command)? _pendingCheatRequest;
+
+    private static readonly (string Name, string Description)[] CheatHelpEntries =
+    [
+        ("rosebud", "Adds 1000 Simoleons to household funds"),
+        ("klapaucius", "Adds 1000 Simoleons to household funds"),
+        ("move_objects on|off", "Allows moving/deleting normally locked objects"),
+        ("autonomy <0-100>", "Sets Sim autonomy level"),
+        ("set_hour <0-23>", "Sets current hour of day"),
+        ("water_tool", "Activates pond water terrain tool"),
+        ("map_edit on|off", "Allows editing lot perimeter tiles"),
+        ("nessie", "Summons Nessie in neighborhood view"),
+        ("cars [speed] [count]", "Spawns neighborhood road cars"),
+        ("help [filter]", "Lists available cheat commands"),
+    ];
+
+    internal void WireNeighborhoodOverlay(OriginalNeighborhoodOverlay neighborhood)
+    {
+        var weakSelf = new WeakReference<LiveController>(this);
+        neighborhood.PlaySound = name =>
+        {
+            if (weakSelf.TryGetTarget(out var self))
+            {
+                self.PlayUISound(name);
+            }
+        };
+    }
+
+    private bool IsCtrlHeld() =>
+        (SDL_GetModState() & SDL_KMOD_CTRL) != 0 || ScriptCtrlModifier;
+
+    private bool IsShiftHeld() =>
+        (SDL_GetModState() & SDL_KMOD_SHIFT) != 0 || ScriptShiftModifier;
+
+    private bool IsCheatShortcutHeld() => IsCtrlHeld() && IsShiftHeld();
+
+    private bool CanOpenCheatConsole() =>
+        !Ui.Loading
+        && Ui.GameDialog is null
+        && !Ui.HelpVisible
+        && !Ui.BudgetReportVisible
+        && !Ui.Album.Visible
+        && Ui.HouseholdCreation is null
+        && Ui.ModsOverlay is null
+        && Ui.FamilyPicker is null
+        && Ui.Credits is null
+        && Ui.OutfitPicker is null
+        && Ui.GenericSimsCallPicker is null
+        && (Ui.ShowsLot || Ui.Neighborhood is not null);
+
+    private void ToggleCheatConsole()
+    {
+        if (Ui.CheatConsole.Visible)
+        {
+            _pendingCheatQueue.Clear();
+            _pendingCheatRequest = null;
+            Ui.CheatConsole.Close();
+        }
+        else if (CanOpenCheatConsole())
+        {
+            Ui.CheatConsole.Open();
+        }
+    }
+
+    private bool HandleCheatConsoleKeyDown(Key key)
+    {
+        switch (key)
+        {
+            case Key.Character { Value: "c" } when IsCheatShortcutHeld():
+            case Key.Escape:
+                _pendingCheatQueue.Clear();
+                _pendingCheatRequest = null;
+                Ui.CheatConsole.Close();
+                return true;
+            case Key.Enter:
+                SubmitCheatConsole();
+                return true;
+            case Key.Backspace:
+                Ui.CheatConsole.Backspace();
+                return true;
+            case Key.Delete:
+                Ui.CheatConsole.Delete();
+                return true;
+            case Key.Left:
+                Ui.CheatConsole.MoveLeft(word: IsCtrlHeld(), select: IsShiftHeld());
+                return true;
+            case Key.Right:
+                Ui.CheatConsole.MoveRight(word: IsCtrlHeld(), select: IsShiftHeld());
+                return true;
+            case Key.Home:
+                Ui.CheatConsole.MoveHome(select: IsShiftHeld());
+                return true;
+            case Key.End:
+                Ui.CheatConsole.MoveEnd(select: IsShiftHeld());
+                return true;
+            case Key.Up:
+                Ui.CheatConsole.HistoryUp();
+                return true;
+            case Key.Down:
+                Ui.CheatConsole.HistoryDown();
+                return true;
+            case Key.Character { Value: "a" } when IsCtrlHeld():
+                Ui.CheatConsole.SelectAll();
+                return true;
+            default:
+                return true;
+        }
+    }
+
+    private void SubmitCheatConsole()
+    {
+        if (string.IsNullOrWhiteSpace(Ui.CheatConsole.Text))
+        {
+            Ui.CheatConsole.Close();
+            return;
+        }
+
+        if (!Ui.CheatConsole.TryPrepareSegments(out var segments, out var errorTitle, out var errorMessage))
+        {
+            PresentLocalFeedback(errorTitle ?? Strings.SorryTitle(), errorMessage ?? "No previous cheat.");
+            return;
+        }
+
+        if (segments.Count == 0)
+        {
+            Ui.CheatConsole.Close();
+            return;
+        }
+
+        _pendingCheatQueue.Clear();
+        foreach (var seg in segments)
+        {
+            _pendingCheatQueue.Enqueue(seg);
+        }
+
+        DispatchNextCheatCommand();
+    }
+
+    private void DispatchNextCheatCommand()
+    {
+        if (_pendingCheatRequest is not null)
+        {
+            return;
+        }
+
+        while (_pendingCheatQueue.Count > 0)
+        {
+            string cmd = _pendingCheatQueue.Dequeue();
+            string[] tokens = cmd.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            if (tokens.Length == 0)
+            {
+                continue;
+            }
+
+            if (string.Equals(tokens[0], "help", StringComparison.OrdinalIgnoreCase))
+            {
+                _pendingCheatQueue.Clear();
+                string? filter = tokens.Length > 1 ? tokens[1] : null;
+                var matches = string.IsNullOrEmpty(filter)
+                    ? CheatHelpEntries
+                    : CheatHelpEntries.Where(e => e.Name.Contains(filter, StringComparison.OrdinalIgnoreCase)).ToArray();
+                if (matches.Length == 0)
+                {
+                    PresentLocalFeedback(Strings.SorryTitle(), "Sorry, no cheats match the search string.");
+                }
+                else
+                {
+                    string body = string.Join("\n", matches.Select(m => $"{m.Name} - {m.Description}"));
+                    PresentLocalFeedback("Cheat Help", body);
+                }
+
+                return;
+            }
+
+            if (Bridge is not null)
+            {
+                if (Send("cheat", new Dictionary<string, object?> { ["code"] = cmd }) is { } id)
+                {
+                    _pendingCheatRequest = (id, cmd);
+                    return;
+                }
+            }
+            else if (Ui.Neighborhood is { } neighborhood)
+            {
+                if (string.Equals(tokens[0], "nessie", StringComparison.OrdinalIgnoreCase))
+                {
+                    neighborhood.TriggerNessie();
+                    Ui.CheatConsole.RecordExecutedCommand(cmd);
+                    continue;
+                }
+
+                if (string.Equals(tokens[0], "cars", StringComparison.OrdinalIgnoreCase))
+                {
+                    int speed = tokens.Length > 1 && int.TryParse(tokens[1], out int parsedSpeed) ? parsedSpeed : 1;
+                    int count = tokens.Length > 2 && int.TryParse(tokens[2], out int parsedCount) ? parsedCount : 1;
+                    neighborhood.TriggerCars(speed, count);
+                    Ui.CheatConsole.RecordExecutedCommand(cmd);
+                    continue;
+                }
+
+                _pendingCheatQueue.Clear();
+                PresentLocalFeedback(Strings.SorryTitle(), "No such cheat.");
+                return;
+            }
+        }
+
+        if (_pendingCheatQueue.Count == 0 && _pendingCheatRequest is null)
+        {
+            Ui.CheatConsole.Close();
+        }
+    }
+
+    private bool HandleCheatResponse(string id, bool ok, IReadOnlyDictionary<string, JsonElement> evt)
+    {
+        if (_pendingCheatRequest is not { } pending || !string.Equals(pending.Id, id, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        _pendingCheatRequest = null;
+        if (ok)
+        {
+            Ui.CheatConsole.RecordExecutedCommand(pending.Command);
+            DispatchNextCheatCommand();
+        }
+        else
+        {
+            _pendingCheatQueue.Clear();
+            string? error = evt.JsonString("error");
+            if (string.IsNullOrEmpty(error)
+                || error.Contains("Unknown cheat", StringComparison.OrdinalIgnoreCase)
+                || error.Contains("No such cheat", StringComparison.OrdinalIgnoreCase))
+            {
+                PresentLocalFeedback(Strings.SorryTitle(), "No such cheat.");
+            }
+            else if (error.Contains("No previous cheat", StringComparison.OrdinalIgnoreCase))
+            {
+                PresentLocalFeedback(Strings.SorryTitle(), "No previous cheat.");
+            }
+            else
+            {
+                PresentLocalFeedback("Cheat Error", error);
+            }
+        }
+
+        return true;
+    }
+
+    private void HandleNeighborhoodCheatEvent(IReadOnlyDictionary<string, JsonElement> evt)
+    {
+        string? code = evt.JsonString("code");
+        if (string.Equals(code, "nessie", StringComparison.OrdinalIgnoreCase))
+        {
+            Ui.Neighborhood?.TriggerNessie();
+        }
+        else if (string.Equals(code, "cars", StringComparison.OrdinalIgnoreCase))
+        {
+            int speed = evt.JsonInt("speed") ?? 1;
+            int count = evt.JsonInt("count") ?? 1;
+            Ui.Neighborhood?.TriggerCars(speed, count);
         }
     }
 }

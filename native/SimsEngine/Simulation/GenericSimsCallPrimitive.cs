@@ -92,9 +92,16 @@ public static class GenericSimsCallPrimitive
                 return ExecuteAddToFamily(context, context.World.NeighborhoodFamilies?.ActiveFamilyNumber ?? 0);
             case 0x05:
             {
+                int amount;
                 var item = context.World.FindInteractionObjectByTableWord(me.Temporaries[0]);
-                if (item is null) return PrimitiveResult.False;
-                var amount = context.World.GenericSimsCall05Amount(item);
+                if (item is not null)
+                {
+                    amount = context.World.GenericSimsCall05Amount(item);
+                }
+                else if (!context.World.TryGetGenericSimsCall05FamilyAmount(me.Temporaries[0], out amount))
+                {
+                    return PrimitiveResult.False;
+                }
                 context.World.RequireFamilyBudget().AlterFamilyBudget(2, unchecked(-amount));
                 return PrimitiveResult.True;
             }
@@ -107,7 +114,7 @@ public static class GenericSimsCallPrimitive
             case 0x15:
                 return ExecuteCallFifteen(context, me);
             case 0x13:
-                return ExecuteCallThirteenOrFourteen(context, me, 0);
+                return ExecuteCallThirteenOrFourteen(context, me, 1);
             case 0x14:
                 return ExecuteCallThirteenOrFourteen(context, me, 3);
             case 0x11:
@@ -116,15 +123,27 @@ public static class GenericSimsCallPrimitive
                 return ExecuteCallTen(context, me);
             case 0x1b:
             {
+                var occupied = context.World.OccupiedVacationHousesProvider?.Invoke();
                 var available = 9;
                 for (var fieldValue = 40; fieldValue <= 48; fieldValue++)
                 {
+                    var matched = false;
                     foreach (var item in context.World.InteractionLookupOrder)
                     {
                         if (item.GenericSimsCall1BRawWord13C != fieldValue) continue;
-                        available--;
+                        matched = true;
                         break;
                     }
+                    if (!matched && occupied is not null)
+                    {
+                        for (var i = 0; i < occupied.Count; i++)
+                        {
+                            if (occupied[i] != fieldValue) continue;
+                            matched = true;
+                            break;
+                        }
+                    }
+                    if (matched) available--;
                 }
                 me.Temporaries[0] = (short)available;
                 return PrimitiveResult.True;
@@ -139,13 +158,21 @@ public static class GenericSimsCallPrimitive
                 var host = context.World.Host;
                 if (state.PrimaryHandle != 0)
                 {
-                    host?.ReleaseGenericSimsCall03PrimaryHandle(state.PrimaryHandle);
-                    state.PrimaryHandle = 0;
-                    if (state.LinkedGlobalWord60 is not null) state.LinkedGlobalWord60 = 0;
+                    if (host is not null) host.ReleaseGenericSimsCall03PrimaryHandle(state.PrimaryHandle);
+                    else if (context.World.ReleaseGenericSimsCall03PrimaryHandle is { } releasePrimary)
+                        releasePrimary(state.PrimaryHandle);
+                    else
+                        context.World.DismissVisibleDialogRecords();
+                    if (host is not null || !context.World.HasVisibleDialog)
+                    {
+                        state.PrimaryHandle = 0;
+                        if (state.LinkedGlobalWord60 is not null) state.LinkedGlobalWord60 = 0;
+                    }
                 }
                 if (state.SecondaryHandle != 0)
                 {
-                    host?.ReleaseGenericSimsCall03SecondaryHandle(state.SecondaryHandle);
+                    if (host is not null) host.ReleaseGenericSimsCall03SecondaryHandle(state.SecondaryHandle);
+                    else context.World.ReleaseGenericSimsCall03SecondaryHandle?.Invoke(state.SecondaryHandle);
                     state.SecondaryHandle = 0;
                 }
                 return PrimitiveResult.True;
@@ -267,14 +294,11 @@ public static class GenericSimsCallPrimitive
         var remaining = scope.CountValue(2);
         if (remaining <= 0) return PrimitiveResult.True;
 
-        var current = new InteractionScopeEntry(0, 0, 1);
         short cursor = -1;
-        while (remaining-- > 0)
+        while (remaining-- > 0 && scope.TryFindNext(2, ref cursor, 0, out _) && scope.TryGet(cursor, out var current))
         {
-            if (scope.TryFindNext(2, ref cursor, 0, out _) && scope.TryGet(cursor, out var fetched))
-                current = fetched;
-
             var kind = current.Mode;
+            var removeEntry = false;
             if ((uint)kind <= 6)
             {
                 var selector = kind switch
@@ -288,7 +312,7 @@ public static class GenericSimsCallPrimitive
                     _ => 14,
                 };
                 item.SetInteractionExecutorFloat(selector, unchecked((short)current.Result));
-                scope.TryAdvance(cursor, -1);
+                removeEntry = true;
             }
             else if (kind is >= 9 and <= 12)
             {
@@ -300,7 +324,14 @@ public static class GenericSimsCallPrimitive
                     _ => 0x62e,
                 };
                 item.SetInteractionExecutorWord(offset, unchecked((short)current.Result));
+                removeEntry = true;
+            }
+
+            if (removeEntry)
+            {
+                var before = scope.CountValue(2);
                 scope.TryAdvance(cursor, -1);
+                if (scope.CountValue(2) < before) cursor--;
             }
         }
 
@@ -320,7 +351,7 @@ public static class GenericSimsCallPrimitive
         me.Temporaries[0] = unchecked((short)first.Result);
         scope.TryAdvance(cursor, -1);
 
-        cursor = 0;
+        cursor = -1;
         if (scope.TryFindNext(2, ref cursor, 8, out _) && scope.TryGet(cursor, out var second))
         {
             me.Temporaries[1] = unchecked((short)second.Result);
@@ -493,11 +524,11 @@ public static class GenericSimsCallPrimitive
                 ?? throw new InvalidOperationException($"GenericSimsCall 0x20 could not resolve person at position {position}.");
             var scope = context.World.InteractionExecutorScope(person);
             var remaining = scope.CountValue(2);
+            short cursor = -1;
             for (var iteration = 0; iteration < remaining; iteration++)
             {
-                short cursor = -1;
                 if (!scope.TryFindNext(2, ref cursor, 0, out _) || !scope.TryGet(cursor, out var entry))
-                    continue;
+                    break;
 
                 var payload = unchecked((short)entry.Result);
                 var removeEntry = true;
@@ -520,7 +551,12 @@ public static class GenericSimsCallPrimitive
                         removeEntry = false;
                         break;
                 }
-                if (removeEntry) scope.TryAdvance(cursor, -1);
+                if (removeEntry)
+                {
+                    var before = scope.CountValue(2);
+                    scope.TryAdvance(cursor, -1);
+                    if (scope.CountValue(2) < before) cursor--;
+                }
             }
 
             if (host is null)
@@ -564,7 +600,7 @@ public static class GenericSimsCallPrimitive
         }
     }
 
-    private static PrimitiveResult ExecuteCallThirteenOrFourteen(in TreeContext context, XObject me, int mode)
+    private static PrimitiveResult ExecuteCallThirteenOrFourteen(in TreeContext context, XObject me, int value)
     {
         var world = context.World;
         var host = world.Host;
@@ -574,7 +610,7 @@ public static class GenericSimsCallPrimitive
         var scope = context.World.InteractionExecutorScope(item);
 
         short cursor = -1;
-        if (!scope.TryFindNext(1, ref cursor, mode, out _) || !scope.TryGet(cursor, out var fetched))
+        if (!scope.TryFindNext(value, ref cursor, 0, out _) || !scope.TryGet(cursor, out var fetched))
         {
             me.Temporaries[0] = -1;
             return PrimitiveResult.True;
@@ -684,7 +720,8 @@ public static class GenericSimsCallPrimitive
 
     private static PrimitiveResult ExecuteCallInitialization(in TreeContext context, int mode)
     {
-        context.World.Host?.RunGenericSimsCallInitialization(mode);
+        if (context.World.Host is { } host) host.RunGenericSimsCallInitialization(mode);
+        else context.World.RunGenericSimsCallInitialization(mode);
         return PrimitiveResult.True;
     }
 

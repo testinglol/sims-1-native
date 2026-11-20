@@ -82,10 +82,16 @@ public sealed class OriginalGameplayOverlay
     ];
 
     public static readonly CGRect FundsRect = new(118, 123, 62, 14);
+    private static readonly CGRect FamilyFriendsSmileyRect = new(67, 135, 10, 10);
+    private const double FamilyFriendsLabelX = 80.0;
+    private const double FamilyFriendsTextY = 132.5;
 
     private readonly OriginalUIStrings _strings;
     private readonly Image _patch;
+    private readonly Image _vectorPatch;
     private readonly Image _universal;
+    private readonly Image _vectorUniversal;
+    private readonly Image _vectorLcdFriendSmiley;
     private readonly Image _gadget;
     private readonly Image _vectorGadget;
     private readonly Image _people;
@@ -93,6 +99,8 @@ public sealed class OriginalGameplayOverlay
     private readonly Image _unknown;
 
     private Image ActiveGadget => SimsBitmapFont.SharpTextEnabled ? _vectorGadget : _gadget;
+    private Image ActivePatch => SimsBitmapFont.SharpTextEnabled ? _vectorPatch : _patch;
+    private Image ActiveUniversal => SimsBitmapFont.SharpTextEnabled ? _vectorUniversal : _universal;
     private Image ActivePeople => SimsBitmapFont.SharpTextEnabled ? _vectorPeople : _people;
     private readonly Image _iconFrame;
     private readonly Image _thumbTemplate;
@@ -192,6 +200,7 @@ public sealed class OriginalGameplayOverlay
     private readonly Dictionary<CycleIndicator.Hover, (string Text, Image Image)> _seasonTooltips = [];
     private (Image Window, Image Strip, Image Drum)? _reel;
     private (double From, double To, int Frame)? _reelSpin;
+    private (Image Image, double ExpiresAt)? _seasonBanner;
     private CycleIndicator.Hover? _indicatorHovered;
     private double? _indicatorHoverStartedAt;
     private (int Index, CGRect Rect)? _panelTip;
@@ -385,8 +394,11 @@ public sealed class OriginalGameplayOverlay
         }
 
         _patch = Bitmap("Backgrounds/LivePatch.bmp");
+        try { _vectorPatch = SimsVectorUiKit.ToOverlayImage(SimsVectorUiKit.RenderFittedPanel("livepatch", scale: 8)); } catch { _vectorPatch = _patch; }
         var baseTarga = new SimsTarga(content.Read("UIGraphics/cpanel/Backgrounds/UniversalBack.tga"));
         _universal = CreateImage(device, baseTarga.Width, baseTarga.Height, baseTarga.Rgba);
+        try { _vectorUniversal = SimsVectorUiKit.ToOverlayImage(SimsVectorUiKit.RenderFittedPanel("universalback", scale: 8)); } catch { _vectorUniversal = _universal; }
+        _vectorLcdFriendSmiley = SimsVectorUiKit.ToOverlayImage(SimsVectorUiKit.RenderLcdGreenSmiley(10, scale: 4));
         _gadget = Bitmap("Backgrounds/LiveGadget.bmp");
         _vectorGadget = SimsVectorUiKit.ToOverlayImage(SimsVectorUiKit.RenderLiveGadget(scale: 8));
         _people = Bitmap("People/PeopleTemplate.bmp");
@@ -587,8 +599,15 @@ public sealed class OriginalGameplayOverlay
     public static Image CreateImage(UIDevice device, SimsBitmapFont.HiDpiRaster raster) =>
         CreateImage(device, raster.PixelWidth, raster.PixelHeight, raster.Rgba, new CGSize(raster.LogicalWidth, raster.LogicalHeight));
 
-    public static Image CreateImage(UIDevice device, int width, int height, byte[] pixels, bool magenta = false, bool blue = false) =>
-        CreateImage(device, width, height, pixels, new CGSize(width, height), magenta, blue);
+    public static Image CreateImage(
+        UIDevice device,
+        int width,
+        int height,
+        byte[] pixels,
+        bool magenta = false,
+        bool blue = false,
+        bool decontaminateEdges = false) =>
+        CreateImage(device, width, height, pixels, new CGSize(width, height), magenta, blue, decontaminateEdges);
 
     public static Image CreateImage(
         UIDevice device,
@@ -597,7 +616,8 @@ public sealed class OriginalGameplayOverlay
         byte[] pixels,
         CGSize logicalSize,
         bool magenta = false,
-        bool blue = false)
+        bool blue = false,
+        bool decontaminateEdges = false)
     {
         _ = device;
         ArgumentNullException.ThrowIfNull(pixels);
@@ -606,7 +626,13 @@ public sealed class OriginalGameplayOverlay
             throw new ContentError("Cannot allocate gameplay panel texture");
         }
 
-        var rgba = SpritePixels.PremultipliedSRGB(pixels, removeMagenta: magenta, removeBlue: blue);
+        var rgba = SpritePixels.PremultipliedSRGB(
+            pixels,
+            removeMagenta: magenta,
+            removeBlue: blue,
+            decontaminateEdges: decontaminateEdges,
+            width: width,
+            height: height);
         return new Image(new UITexture(width, height, rgba), logicalSize);
     }
 
@@ -754,8 +780,8 @@ public sealed class OriginalGameplayOverlay
 
     public CGRect FamilyFriendsRect(int count)
     {
-        double textWidth = Font.TextWidth(count.ToString(CultureInfo.InvariantCulture));
-        double fontHeight = Font.LineHeight;
+        double textWidth = _clockFont.TextWidth(count.ToString(CultureInfo.InvariantCulture));
+        double fontHeight = _clockFont.LineHeight;
         return OriginalGameplayLayout.FamilyFriendsButton(FundsRect, fontHeight, textWidth);
     }
 
@@ -815,18 +841,30 @@ public sealed class OriginalGameplayOverlay
                 throw new ContentError("Invalid gameplay image dimensions");
             }
 
-            var masked = MaskIconFrameCorners(bitmap.Rgba, bitmap.Width, bitmap.Height, reference.Columns, reference.Rows);
-            var image = CreateImage(Device, bitmap.Width, bitmap.Height, masked, magenta: true);
+            var masked = bitmap.HasAlpha
+                ? bitmap.Rgba
+                : MaskIconFrameCorners(bitmap.Rgba, bitmap.Width, bitmap.Height, reference.Columns, reference.Rows);
+            var image = CreateImage(
+                Device,
+                bitmap.Width,
+                bitmap.Height,
+                masked,
+                magenta: !bitmap.HasAlpha,
+                decontaminateEdges: bitmap.HasAlpha);
             _resources[reference.File] = image;
             return image;
         }
 
         var parts = new List<Part>
         {
-            new(_universal, new CGRect(0, -33, 220, 183)),
-            new(_patch, new CGRect(7, -3, _patch.Size.Width, _patch.Size.Height)),
+            new(ActiveUniversal, new CGRect(0, -33, 220, 183)),
+            new(ActivePatch, new CGRect(7, -3, _patch.Size.Width, _patch.Size.Height)),
             new(ActiveGadget, new CGRect(413, 50, 108, 100))
         };
+        if (SimsBitmapFont.SharpTextEnabled && ActiveUniversal.Texture != _universal.Texture)
+        {
+            parts.Add(new Part(_vectorLcdFriendSmiley, FamilyFriendsSmileyRect));
+        }
 
         bool selectedIsPet = ((next.Selected?.Gender ?? 0) & 6) != 0;
         for (int index = 0; index < _buttons.Length; index++)
@@ -860,7 +898,7 @@ public sealed class OriginalGameplayOverlay
             if (sim.Portrait is { } reference && LoadResource(reference) is { } portraitImage)
             {
                 var faceSize = new CGSize(portraitImage.Size.Width / reference.Columns, portraitImage.Size.Height / reference.Rows);
-                int expression = reference.Columns >= 3 ? (sim.Mood > 30 ? 1 : sim.Mood < -30 ? 2 : 0) : 0;
+                int expression = 0;
                 parts.Add(new Part(
                     portraitImage,
                     new CGRect(
@@ -1387,17 +1425,16 @@ public sealed class OriginalGameplayOverlay
 
         if (next.FamilyFriends is { } familyFriends)
         {
-            var bounds = FamilyFriendsRect(familyFriends);
             string friendsText = familyFriends.ToString(CultureInfo.InvariantCulture);
             if (_cachedFriendsText is not { } cachedFriends || !string.Equals(cachedFriends.Text, friendsText, StringComparison.Ordinal))
             {
-                cachedFriends = (friendsText, Text(friendsText, Font, Device, (0x29, 0xe6, 0x5e)));
+                cachedFriends = (friendsText, Text(friendsText, _clockFont, Device, (0x29, 0xe6, 0x5e)));
                 _cachedFriendsText = cachedFriends;
             }
             var countLabel = cachedFriends.Image;
             statusParts.Add(new Part(
                 countLabel,
-                new CGRect(bounds.X + bounds.Width - countLabel.Size.Width, bounds.Y, countLabel.Size.Width, countLabel.Size.Height)));
+                new CGRect(FamilyFriendsLabelX, FamilyFriendsTextY, countLabel.Size.Width, countLabel.Size.Height)));
         }
 
         if (next.Budget is { } budget)
@@ -1433,20 +1470,16 @@ public sealed class OriginalGameplayOverlay
                 return loaded;
             }
 
-            var glyph = LoadIndicatorAsset(indicator.WeatherIcon);
-            statusParts.Add(new Part(glyph, new CGRect(CycleIndicator.GlyphOrigin.X, CycleIndicator.GlyphOrigin.Y, glyph.Size.Width, glyph.Size.Height)));
+            string combinedSeasonTip = string.IsNullOrWhiteSpace(indicator.WeatherTooltip)
+                ? indicator.CycleTooltip
+                : string.IsNullOrWhiteSpace(indicator.CycleTooltip)
+                    ? indicator.WeatherTooltip
+                    : $"{indicator.CycleTooltip} · {indicator.WeatherTooltip}";
 
-            (CycleIndicator.Hover Hover, string Tip)[] tipEntries =
-            [
-                (CycleIndicator.Hover.Weather, indicator.WeatherTooltip),
-                (CycleIndicator.Hover.Season, indicator.CycleTooltip)
-            ];
-            foreach (var (hoverKind, tipText) in tipEntries)
+            if (!_seasonTooltips.TryGetValue(CycleIndicator.Hover.Season, out var cachedTip)
+                || !string.Equals(cachedTip.Text, combinedSeasonTip, StringComparison.Ordinal))
             {
-                if (!_seasonTooltips.TryGetValue(hoverKind, out var cachedTip) || !string.Equals(cachedTip.Text, tipText, StringComparison.Ordinal))
-                {
-                    _seasonTooltips[hoverKind] = (tipText, CreateImage(Device, PlacementTooltip.RasterizeHiDpi(tipText, _careerFont)));
-                }
+                _seasonTooltips[CycleIndicator.Hover.Season] = (combinedSeasonTip, CreateImage(Device, PlacementTooltip.RasterizeHiDpi(combinedSeasonTip, _careerFont)));
             }
 
             string stripKey = env.Asset(indicator.Strip);
@@ -1474,6 +1507,12 @@ public sealed class OriginalGameplayOverlay
                     {
                         int delta = ((idx - shown) % cnt + cnt) % cnt;
                         _reelSpin = (ReelPosition, spin.To + delta + cnt, 0);
+                        string seasonHeading = indicator.CycleTooltip.Split('—', StringSplitOptions.TrimEntries)[0];
+                        if (!string.IsNullOrWhiteSpace(seasonHeading))
+                        {
+                            string bannerText = $"{seasonHeading} has arrived";
+                            _seasonBanner = (CreateImage(Device, PlacementTooltip.RasterizeHiDpi(bannerText, _careerFont)), MonotonicNowSeconds() + 4.5);
+                        }
                     }
                 }
                 else
@@ -2556,7 +2595,11 @@ public sealed class OriginalGameplayOverlay
     public IReadOnlyList<Part> UniversalStatusParts(CGSize canvas)
     {
         double top = canvas.Height - 150.0;
-        var parts = new List<Part>(_statusBody.Count + 3);
+        var parts = new List<Part>(_statusBody.Count + 4);
+        if (SimsBitmapFont.SharpTextEnabled && ActiveUniversal.Texture != _universal.Texture)
+        {
+            parts.Add(new Part(_vectorLcdFriendSmiley, Offset(FamilyFriendsSmileyRect, 0, top)));
+        }
         foreach (var part in _statusBody)
         {
             parts.Add(new Part(part.Image, Offset(part.Rect, 0, top), part.UV, part.Opacity));
@@ -2638,6 +2681,24 @@ public sealed class OriginalGameplayOverlay
         }
 
         double now = MonotonicNowSeconds();
+        if (_seasonBanner is { } seasonBanner)
+        {
+            double remaining = seasonBanner.ExpiresAt - now;
+            if (remaining > 0.0)
+            {
+                float alpha = remaining < 1.0 ? (float)Math.Clamp(remaining, 0.0, 1.0) : 1f;
+                var bannerImg = seasonBanner.Image;
+                parts.Add(new Part(
+                    bannerImg,
+                    new CGRect((canvas.Width - bannerImg.Size.Width) * 0.5, 14.0, bannerImg.Size.Width, bannerImg.Size.Height),
+                    new Vector4(0f, 0f, 1f, 1f),
+                    alpha));
+            }
+            else
+            {
+                _seasonBanner = null;
+            }
+        }
         if (!panelMinimized && CurrentSubpanel == Subpanel.Needs && State?.Selected is not null)
         {
             AppendNeedsDynamicParts(top, (ulong)(Math.Max(0.0, now) * 1000.0), parts);
@@ -3249,7 +3310,12 @@ public sealed class OriginalGameplayOverlay
             if (Contains(rect, point))
             {
                 var sim = household[index];
-                HoveredPerson = (sim.Id, sim.TooltipName ?? string.Empty, rect);
+                string tip = sim.TooltipName ?? sim.Name;
+                if (sim.IsOnFocusedLot == false && !string.IsNullOrWhiteSpace(sim.LotName))
+                {
+                    tip = $"{tip} ({sim.LotName})";
+                }
+                HoveredPerson = (sim.Id, tip, rect);
                 return;
             }
         }
@@ -3502,14 +3568,27 @@ public sealed class OriginalGameplayOverlay
         }
 
         var window = Offset(CycleIndicator.ReelRect, 0, top);
-        int row = CycleIndicator.StripRow(ReelPosition, indicator.Count);
-        float height = (indicator.Count + 1) * CycleIndicator.Cell;
-        parts.Add(new Part(reel.Window, window));
-        parts.Add(new Part(
-            reel.Strip,
-            Inset(window, 1, 1),
-            new Vector4(0f, row / height, 1f, CycleIndicator.Symbol / height)));
-        parts.Add(new Part(reel.Drum, window));
+        if (indicator.Count == 4)
+        {
+            string seasonKey = $"lcd_season:{indicator.Index}";
+            if (!_indicatorImages.TryGetValue(seasonKey, out var seasonImg))
+            {
+                seasonImg = SimsVectorUiKit.ToOverlayImage(SimsVectorUiKit.RenderLcdGreenSeasonIcon(indicator.Index, CycleIndicator.Width, scale: 4));
+                _indicatorImages[seasonKey] = seasonImg;
+            }
+            parts.Add(new Part(seasonImg, window));
+        }
+        else
+        {
+            int row = CycleIndicator.StripRow(ReelPosition, indicator.Count);
+            float height = (indicator.Count + 1) * CycleIndicator.Cell;
+            parts.Add(new Part(reel.Window, window));
+            parts.Add(new Part(
+                reel.Strip,
+                Inset(window, 1, 1),
+                new Vector4(0f, row / height, 1f, CycleIndicator.Symbol / height)));
+            parts.Add(new Part(reel.Drum, window));
+        }
         if (spin.Frame < CycleIndicator.SpinFrames)
         {
             spin.Frame += 1;
@@ -3673,7 +3752,7 @@ public sealed class OriginalGameplayOverlay
             {
                 if (simChanged)
                 {
-                    _motiveBarStates[index].Reset(current[index], nowMs);
+                    _motiveBarStates[index].Reset(current[index], nowMs, InterfaceEffects);
                     _motiveArrowsStates[index].Reset(hasTracker: trackers is not null, nowMs: nowMs);
                     if (trackers is not null)
                     {
@@ -3682,7 +3761,7 @@ public sealed class OriginalGameplayOverlay
                 }
                 else
                 {
-                    _motiveBarStates[index].SetValue(current[index], nowMs);
+                    _motiveBarStates[index].SetValue(current[index], nowMs, InterfaceEffects);
                     if (didSample && trackers is not null)
                     {
                         _motiveArrowsStates[index].Update(trackers[index].Rate, nowMs, InterfaceEffects);
@@ -3955,13 +4034,12 @@ public sealed class OriginalGameplayOverlay
             return part;
         }
 
-        double height = Math.Max(1.0, Math.Round(part.Rect.Height * progress, MidpointRounding.AwayFromZero));
-        float fraction = (float)Math.Min(1.0, Math.Max(0.0, height / part.Rect.Height));
+        double lift = (1.0 - progress) * 2.0;
         return new Part(
             part.Image,
-            new CGRect(part.Rect.X, part.Rect.Y + part.Rect.Height - height, part.Rect.Width, height),
-            new Vector4(part.UV.X, part.UV.Y + part.UV.W * (1f - fraction), part.UV.Z, part.UV.W * fraction),
-            part.Opacity);
+            new CGRect(part.Rect.X, part.Rect.Y + lift, part.Rect.Width, part.Rect.Height),
+            part.UV,
+            part.Opacity * (float)Math.Clamp(progress, 0.0, 1.0));
     }
 
     private static Image? TryBitmap(Func<string, Image> loader, string asset)

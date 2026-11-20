@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# Builds a standalone Apple Silicon app bundle: dist/The Sims Native.app
+# Builds a standalone Apple Silicon app bundle: dist/Plumbob Engine.app
 # It contains the unified self-contained .NET 9 + SDL3 client and in-process simulation engine, with zero game assets.
 # Players choose their own installed game folder on first launch.
 #   tools/package_release.command [VERSION]
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
-version="${1:-0.4.1}"
+version="${1:-0.5.0}"
 build="$(date +%Y%m%d%H%M)"
 dist="$root/dist"
-target_app="$dist/The Sims Native.app"
+target_app="$dist/Plumbob Engine.app"
 work="$root/.package-staging/release-$build"
-app="$work/The Sims Native.app"
+app="$work/Plumbob Engine.app"
 publish_dir="$work/publish"
 export DOTNET_CLI_HOME="${DOTNET_CLI_HOME:-$root/runtime/dotnet}"
 export NUGET_PACKAGES="${NUGET_PACKAGES:-$root/runtime/nuget}"
@@ -19,10 +19,8 @@ mkdir -p "$DOTNET_CLI_HOME" "$NUGET_PACKAGES"
 rm -rf "$app" "$publish_dir"
 mkdir -p "$dist" "$work" "$publish_dir"
 
-if [[ ! -f "$root/native/SimsSDL/obj/project.assets.json" ]] || ! grep -q "osx-arm64" "$root/native/SimsSDL/obj/project.assets.json"; then
-  dotnet restore "$root/native/SimsSDL/SimsSDL.csproj" -r osx-arm64 \
-    -p:EnableWindowsTargeting=true -p:NuGetAudit=false --disable-build-servers -nologo
-fi
+dotnet restore "$root/native/SimsSDL/SimsSDL.csproj" -r osx-arm64 \
+  -p:EnableWindowsTargeting=true -p:NuGetAudit=false --disable-build-servers -nologo
 
 dotnet clean "$root/native/SimsSDL/SimsSDL.csproj" -c Release -p:EnableWindowsTargeting=true --disable-build-servers -nologo >/dev/null
 dotnet publish "$root/native/SimsSDL/SimsSDL.csproj" -c Release -r osx-arm64 --self-contained true \
@@ -40,6 +38,17 @@ if [[ ! -d "$publish_dir/Shaders" ]]; then
   exit 1
 fi
 cp -R "$publish_dir/Shaders" "$app/Contents/Resources/Shaders"
+mkdir -p "$app/Contents/Resources/Packs"
+for pack_name in lighting seasons; do
+  pack_src="$root/packs/$pack_name"
+  if [[ ! -f "$pack_src/pack.json" ]]; then
+    echo "error: missing bundled pack at $pack_src" >&2
+    exit 1
+  fi
+  cp -R "$pack_src" "$app/Contents/Resources/Packs/$pack_name"
+  rm -rf "$app/Contents/Resources/Packs/$pack_name/shaders-hlsl"
+  find "$app/Contents/Resources/Packs/$pack_name" -name '.DS_Store' -delete
+done
 if [[ -f "$root/dist/sims1-icon.icns" ]]; then
   cp "$root/dist/sims1-icon.icns" "$app/Contents/Resources/AppIcon.icns"
 fi
@@ -90,9 +99,9 @@ game_args=(--platform macos)
 if [[ -d "$root/runtime/game" ]]; then game_args+=(--game "$root/runtime/game"); fi
 if [[ -n "${SIMS_GAME_DIR:-}" ]]; then game_args+=(--game "$SIMS_GAME_DIR"); fi
 python3 "$root/tools/checks/check_release_bundle.py" "$app" "${game_args[@]}"
-if [[ -e "$target_app" ]]; then mv "$target_app" "$work/previous-The Sims Native.app"; fi
+if [[ -e "$target_app" ]]; then mv "$target_app" "$work/previous-Plumbob Engine.app"; fi
 mv "$app" "$target_app"
-zip_path="$dist/The-Sims-Native-macOS-arm64.zip"
+zip_path="$dist/Plumbob-Engine-macOS-arm64.zip"
 rm -f "$zip_path"
 if command -v ditto >/dev/null 2>&1; then
   ditto -c -k --sequesterRsrc --keepParent "$target_app" "$zip_path"

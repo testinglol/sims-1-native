@@ -559,8 +559,83 @@ public sealed class OriginalNeighborhoodOverlay
         [20] = "%s\r\n%s\r\nThis is a Residential lot. You cannot visit here.",
         [21] = "%s\r\n%s\r\nThis is a Community lot. Please click here to visit.",
         [22] = "No Name",
-        [23] = "No Description"
+        [23] = "No Description",
+        [28] = "%s\r\n%s\r\nThis is a private Creepy Hollow lot. You cannot visit here.",
+        [29] = "%s\r\n%s\r\nCost: %s   MagiCoins: %s\r\nPick or create a family and move them in to play.",
+        [31] = "%s\r\n%s\r\nCost: %s   MagiCoins: %s\r\nThis could be the house of your dreams, or other people's nightmares! You have enough Simoleons and MagiCoins to move in.",
+        [34] = "The %s Family\r\nNet Worth: %s  MagiCoins: %s\r\nFriends: %d",
+        [35] = "The %s Family\r\nNet Worth: %s  MagiCoins: %s\r\nFriends: %d\r\nClick to evict this family.",
+        [36] = "%s\r\n%s\r\nCost: %s   MagiCoins: %s\r\nThe %s family has %s MagiCoins. They don't have enough MagiCoins to move in.",
+        [37] = "%s\r\n%s\r\nCost: %s   MagiCoins: %s\r\nThe %s family has %s MagiCoins. They don't have enough MagiCoins or Simoleons to move in.",
+        [38] = "%s\r\n%s\r\nCost: %s   MagiCoins: %s\r\nThe %s family only has %s. They can't afford this house."
     };
+
+    private sealed class ModeTravelFilter
+    {
+        public IReadOnlyList<int> Masks { get; }
+        public IReadOnlyList<int> Positions { get; }
+        public int AvailableMask { get; }
+        public int SelectedMask { get; private set; }
+
+        public ModeTravelFilter(IReadOnlyList<int> masks, IReadOnlyList<int> positions, IReadOnlyList<int> communityFlags, int savedMask)
+        {
+            Masks = masks;
+            Positions = positions;
+            int available = 0;
+            for (int i = 0; i < communityFlags.Count; i++)
+                available |= communityFlags[i];
+            AvailableMask = available;
+            if (masks.Contains(savedMask) && (available == 0 || (available & savedMask) != 0))
+            {
+                SelectedMask = savedMask;
+            }
+            else
+            {
+                int firstEnabled = masks[0];
+                for (int i = 0; i < masks.Count; i++)
+                {
+                    if ((available & masks[i]) != 0)
+                    {
+                        firstEnabled = masks[i];
+                        break;
+                    }
+                }
+                SelectedMask = firstEnabled;
+            }
+        }
+
+        public bool IsEnabled(int index) =>
+            index >= 0 && index < Masks.Count && (AvailableMask & Masks[index]) != 0;
+
+        public void Select(int index)
+        {
+            if (IsEnabled(index))
+                SelectedMask = Masks[index];
+        }
+
+        public bool Marks(bool community, int flags) => community && (flags & SelectedMask) != 0;
+    }
+
+    private sealed record FilterButtonSpec(int Mask, string ButtonName, string MarkerName);
+
+    private sealed class NessieState
+    {
+        public bool Active;
+        public double StartedAt;
+        public double LastRollSecond = -1.0;
+        public float StartX;
+        public float StartY;
+        public float StopX;
+    }
+
+    private sealed class CarAgent
+    {
+        public float X;
+        public float Y;
+        public float Dx;
+        public float Dy;
+        public int SpriteIndex;
+    }
 
     public OriginalGameplayOverlay.Image Background { get; }
     private readonly OriginalGameplayOverlay.Image _outerFill;
@@ -602,11 +677,21 @@ public sealed class OriginalNeighborhoodOverlay
     private readonly OriginalGameplayOverlay.Image? _rolloverBackground;
     private OriginalGameplayOverlay.Image? _banner;
     private bool _builtVectorBanner;
-    private NeighborhoodLotFilter? _travelFilter;
+    private ModeTravelFilter? _travelFilter;
     private int? _hoveredTravelFilter;
     private readonly OriginalGameplayOverlay.Image? _filterToolbar;
     private readonly List<OriginalGameplayOverlay.Image> _filterButtons = [];
     private readonly Dictionary<int, OriginalGameplayOverlay.Image> _filterMarkers = [];
+    private readonly IReadOnlyList<int> _filterMasks = [];
+    private readonly IReadOnlyList<int> _filterPositions = [];
+    private readonly List<OriginalGameplayOverlay.Image> _nessieFrames = [];
+    private readonly NessieState _nessie = new();
+    private readonly List<OriginalGameplayOverlay.Image> _carFrames = [];
+    private readonly List<CarAgent> _cars = [];
+    private bool _carsActive;
+    private int _carsSpeed = 1;
+    private double _carsStartedAt;
+    private readonly List<OriginalGameplayOverlay.Image> _balloonFrames = [];
     private Dictionary<BannerAction, OriginalGameplayOverlay.Image> _bannerButtons = [];
     private readonly Dictionary<BannerAction, string> _bannerTooltips;
     private readonly HashSet<BannerAction> _installedBannerActions;
@@ -621,6 +706,7 @@ public sealed class OriginalNeighborhoodOverlay
     public bool EvictMode { get; private set; }
     public OriginalFamilyPickerOverlay.Family? MovingInFamily { get; private set; }
     public bool RezoneMode { get; private set; }
+    public Action<string>? PlaySound { get; set; }
 
     public OriginalNeighborhoodOverlay(
         GameContent content,
@@ -692,30 +778,130 @@ public sealed class OriginalNeighborhoodOverlay
             }
         }
 
-        if (manifest.Mode == 4)
+        if (manifest.Mode is 2 or 3 or 4 or 5 or 7)
         {
-            _filterToolbar = TryBannerImage("UIGraphics/NghUI/filter_toolbar_Unleashed.bmp");
-            string[] filterNames = ["DogCat", "SmallAnimal", "Shopping", "Gardening", "Food", "Recreation", "Lodging"];
-            foreach (string name in filterNames)
+            string toolbarPrimary = manifest.Mode switch
             {
-                if (TryBannerImage($"UIGraphics/NghUI/Filter{name}Btn.bmp") is { } buttonImg)
-                    _filterButtons.Add(buttonImg);
-            }
+                5 => "UIGraphics/NghUI/filter_toolbar_Studiotown.bmp",
+                _ => "UIGraphics/NghUI/filter_toolbar_Unleashed.bmp"
+            };
+            _filterToolbar = TryBannerImage(toolbarPrimary) ?? TryBannerImage("UIGraphics/NghUI/filter_toolbar.bmp");
 
-            (int Mask, string Name)[] markerSpecs =
-            [
-                (16, "filterdogcat"),
-                (32, "filtersmallanimal"),
-                (8, "filtershopping"),
-                (4, "filtergardening"),
-                (2, "filterfood"),
-                (64, "filterpark"),
-                (1, "filterlodging")
-            ];
-            foreach (var (mask, name) in markerSpecs)
+            FilterButtonSpec[] specs = manifest.Mode switch
             {
-                if (TryBannerImage($"UIGraphics/CPanel/{name}.bmp") is { } markerImg)
-                    _filterMarkers[mask] = markerImg;
+                5 =>
+                [
+                    new(0x20, "SmallAnimal", "FilterSmallAnimal"),
+                    new(0x08, "Shopping", "FilterShopping"),
+                    new(0x04, "Gardening", "FilterGardening"),
+                    new(0x02, "Food", "FilterFood"),
+                    new(0x40, "Recreation", "FilterPark"),
+                    new(0x80, "Spa", "FilterSpa"),
+                    new(0x100, "Movie", "FilterMovie"),
+                    new(0x200, "Model", "FilterModel"),
+                    new(0x400, "Music", "FilterMusic")
+                ],
+                7 =>
+                [
+                    new(0x1000, "Rides", "FilterRides"),
+                    new(0x20, "SmallAnimal", "FilterSmallAnimal"),
+                    new(0x08, "Shopping", "FilterShopping"),
+                    new(0x04, "Gardening", "FilterGardening"),
+                    new(0x02, "Food", "FilterFood"),
+                    new(0x40, "Recreation", "FilterPark"),
+                    new(0x800, "Magic", "FilterMagic")
+                ],
+                _ =>
+                [
+                    new(0x10, "DogCat", "FilterDogCat"),
+                    new(0x20, "SmallAnimal", "FilterSmallAnimal"),
+                    new(0x08, "Shopping", "FilterShopping"),
+                    new(0x04, "Gardening", "FilterGardening"),
+                    new(0x02, "Food", "FilterFood"),
+                    new(0x40, "Recreation", "FilterPark"),
+                    new(0x01, "Lodging", "FilterLodging")
+                ]
+            };
+
+            _filterMasks = specs.Select(static s => s.Mask).ToArray();
+            _filterPositions = manifest.Mode == 5
+                ? [175, 225, 275, 325, 375, 425, 475, 525, 575]
+                : [225, 275, 325, 375, 425, 475, 525];
+
+            foreach (var spec in specs)
+            {
+                if (TryBannerImage($"UIGraphics/NghUI/Filter{spec.ButtonName}Btn.bmp") is { } buttonImg)
+                    _filterButtons.Add(buttonImg);
+                if (TryBannerImage($"UIGraphics/CPanel/{spec.MarkerName}.bmp") is { } markerImg)
+                    _filterMarkers[spec.Mask] = markerImg;
+            }
+        }
+
+        if (manifest.Mode is 1 or 2 or 3 or 4)
+        {
+            foreach (int idx in new[] { 1, 2, 3 })
+            {
+                var frame = TryBannerImage($"UIGraphics/Nbhd/ness0{idx}.bmp")
+                    ?? TryBannerImage($"UIGraphics/Community/ness0{idx}.bmp");
+                if (frame is not { } validFrame)
+                {
+                    _nessieFrames.Clear();
+                    break;
+                }
+                _nessieFrames.Add(validFrame);
+            }
+        }
+        else if (manifest.Mode == 5)
+        {
+            for (int i = 0; i < 18; i++)
+            {
+                if (TryBannerImage($"UIGraphics/Studiotown/Nhood_superstar_car{i}.bmp") is { } carImg)
+                    _carFrames.Add(carImg);
+                else
+                {
+                    _carFrames.Clear();
+                    break;
+                }
+            }
+        }
+        else if (manifest.Mode == 7)
+        {
+            for (int i = 1; i <= 16; i++)
+            {
+                OriginalGameplayOverlay.Image? loadedBalloon = null;
+                try
+                {
+                    var bitmap = new SimsBitmap(content.Read($"UIGraphics/Magicland/Nhood_balloon{i}.bmp"));
+                    if (bitmap.Width == 64 && bitmap.Height == 64)
+                    {
+                        var padded = new byte[66 * 66 * 4];
+                        for (int p = 0; p < padded.Length; p += 4)
+                        {
+                            padded[p] = 255;
+                            padded[p + 1] = 0;
+                            padded[p + 2] = 255;
+                            padded[p + 3] = 255;
+                        }
+                        for (int y = 0; y < 64; y++)
+                            Buffer.BlockCopy(bitmap.Rgba, y * 64 * 4, padded, ((y + 1) * 66 + 1) * 4, 64 * 4);
+                        loadedBalloon = OriginalGameplayOverlay.CreateImage(device, 66, 66, padded, magenta: true);
+                    }
+                    else
+                    {
+                        loadedBalloon = OriginalGameplayOverlay.CreateImage(device, bitmap.Width, bitmap.Height, bitmap.Rgba, magenta: true);
+                    }
+                }
+                catch
+                {
+                    loadedBalloon = null;
+                }
+                if (loadedBalloon is { } balloonImg)
+                    _balloonFrames.Add(balloonImg);
+                else
+                {
+                    _balloonFrames.Clear();
+                    break;
+                }
             }
         }
 
@@ -1125,19 +1311,86 @@ public sealed class OriginalNeighborhoodOverlay
         HoveredHouse = bestHouse;
     }
 
+    private bool IsCommunityLot(Manifest.Entry entry) =>
+        entry.Community == true
+        || (!entry.Residential && (
+            (Mode == 2 && entry.House is >= 21 and <= 30) ||
+            (Mode == 3 && entry.House is >= 40 and <= 49) ||
+            (Mode == 5 && entry.House is >= 81 and <= 89)));
+
     public void EnableTravelFilter()
     {
-        if (Mode != 4 || _filterToolbar is null || _filterButtons.Count != 7)
+        if (Mode is not (2 or 3 or 4 or 5 or 7) ||
+            _filterToolbar is null ||
+            _filterMasks.Count == 0 ||
+            _filterButtons.Count != _filterMasks.Count)
+        {
             return;
+        }
 
         int[] communityFlags = _entries
-            .Where(static e => e.Community == true)
+            .Where(IsCommunityLot)
             .Select(static e => e.FilterFlags ?? 0)
             .ToArray();
-        _travelFilter = new NeighborhoodLotFilter(communityFlags, _savedTravelFilter);
+        _travelFilter = new ModeTravelFilter(_filterMasks, _filterPositions, communityFlags, _savedTravelFilter);
     }
 
     public int? TravelFilterMode => _travelFilter?.SelectedMask;
+    public int AvailableTravelFilterMask => _travelFilter?.AvailableMask ?? 0;
+
+    public bool TriggerNessie(double? time = null)
+    {
+        if (Mode is not (1 or 2 or 3 or 4) || _nessieFrames.Count != 3 || _nessie.Active)
+            return false;
+        _nessie.Active = true;
+        _nessie.StartedAt = time ?? MonotonicNowSeconds();
+        if (Mode is 1 or 4)
+        {
+            _nessie.StartX = 0x76;
+            _nessie.StartY = 0x207;
+            _nessie.StopX = 0x3c;
+        }
+        else
+        {
+            _nessie.StartX = 0x213;
+            _nessie.StartY = 0x1b6;
+            _nessie.StopX = 0x159;
+        }
+        PlaySound?.Invoke("nessie_sfx");
+        return true;
+    }
+
+    public bool TriggerCars(int speed = 1, int count = 1)
+    {
+        if (Mode != 5 || _carFrames.Count == 0 || _carsActive)
+            return false;
+        _carsActive = true;
+        _carsSpeed = Math.Clamp(speed, 1, 2);
+        _carsStartedAt = MonotonicNowSeconds();
+        _cars.Clear();
+        int clampedCount = Math.Clamp(count, 1, 20);
+        // 6 lanes matching FUN_00567c7e (00567c7e.c:24-53)
+        float[] startXs = [806f, 806f, 806f, 606f, 606f, 606f];
+        float[] startYs = [468f, 480f, 492f, 538f, 574f, 610f];
+        float[] dxs = [-24f, -24f, -24f, 24f, 24f, 24f];
+        float[] dys = [8f, 8f, 8f, -8f, -8f, -8f];
+        for (int lane = 0; lane < 6; lane++)
+        {
+            for (int c = 0; c < clampedCount; c++)
+            {
+                float step = c * 1.5f;
+                _cars.Add(new CarAgent
+                {
+                    X = startXs[lane] + dxs[lane] * step,
+                    Y = startYs[lane] + dys[lane] * step,
+                    Dx = dxs[lane],
+                    Dy = dys[lane],
+                    SpriteIndex = (lane * 3 + c) % _carFrames.Count
+                });
+            }
+        }
+        return true;
+    }
 
     public bool ClickTravelFilter(CGPoint point, CGSize canvas, float uiScale = 1f)
     {
@@ -1156,7 +1409,7 @@ public sealed class OriginalNeighborhoodOverlay
         var (left, top, factor) = Transform(canvas, uiScale);
         double chromeTop = TopChromeY(top);
         var logical = new CGPoint((point.X - left) / factor, (point.Y - chromeTop) / factor);
-        var positions = NeighborhoodLotFilter.Positions;
+        var positions = _travelFilter.Positions;
         for (int i = 0; i < positions.Count; i++)
         {
             if (new CGRect(positions[i], 20, 50, 52).Contains(logical))
@@ -1318,7 +1571,7 @@ public sealed class OriginalNeighborhoodOverlay
     {
         if (FindEntry(house) is not { } entry)
             return null;
-        return entry.Community == true ? 2 : entry.Residential ? 1 : null;
+        return IsCommunityLot(entry) ? 2 : entry.Residential ? 1 : null;
     }
 
     public int? Price(int house) => FindEntry(house)?.Price;
@@ -1346,7 +1599,7 @@ public sealed class OriginalNeighborhoodOverlay
         if (FindEntry(house) is not { } entry)
             return null;
 
-        LotPopupIndex.Zoning zoning = entry.Community == true
+        LotPopupIndex.Zoning zoning = IsCommunityLot(entry)
             ? LotPopupIndex.Zoning.Community
             : entry.Residential
                 ? LotPopupIndex.Zoning.Residential
@@ -1391,10 +1644,76 @@ public sealed class OriginalNeighborhoodOverlay
         string Template(int idx) =>
             _strings.NeighborhoodRollover(idx, RolloverFallbacks.GetValueOrDefault(idx, string.Empty));
 
+        string address = OriginalUIStrings.Format(StreetTemplate(entry), [entry.House.ToString(CultureInfo.InvariantCulture)]);
+        if (entry.House is >= 90 and <= 92)
+        {
+            string lotName = entry.PopupName ?? Template(22);
+            string description = (entry.PopupDescription ?? Template(23)) + "\n ";
+            string cost = OriginalUIStrings.Simoleons(price);
+            string magiCost = (entry.House == 91 ? 150 : 100).ToString(CultureInfo.InvariantCulture);
+
+            string magicBody;
+            if (entry.Occupied)
+            {
+                string familyName = entry.FamilyName ?? string.Empty;
+                string netWorth = OriginalUIStrings.Simoleons(entry.FamilyNetWorth ?? 0);
+                string familyMagiCoins = (entry.FamilyCashBalance ?? 0).ToString(CultureInfo.InvariantCulture);
+                string friends = (entry.FamilyFriends ?? 0).ToString(CultureInfo.InvariantCulture);
+                int occIdx = popupMode == LotPopupIndex.Mode.Evict ? 35 : 34;
+                magicBody = OriginalUIStrings.Format(Template(occIdx), [familyName, netWorth, familyMagiCoins, friends]);
+                if (popupMode == LotPopupIndex.Mode.Visit)
+                    magicBody += "\r\n" + OriginalUIStrings.Format(Template(28), [string.Empty, string.Empty]).TrimStart('\r', '\n');
+            }
+            else if (popupMode == LotPopupIndex.Mode.Visit)
+            {
+                magicBody = OriginalUIStrings.Format(Template(28), [lotName, description]);
+            }
+            else if (popupMode == LotPopupIndex.Mode.Rezone)
+            {
+                magicBody = OriginalUIStrings.Format(Template(19), [lotName, description]);
+            }
+            else if (popupMode == LotPopupIndex.Mode.Evict)
+            {
+                magicBody = OriginalUIStrings.Format(Template(entry.LotHasHouse == true ? 10 : 11), []);
+            }
+            else if (MovingInFamily is { } magicFam)
+            {
+                int requiredMagiCoins = entry.House == 91 ? 150 : 100;
+                bool hasSimoleons = price <= magicFam.Budget;
+                int famMagiCoins = magicFam.MagiCoins ?? 0;
+                bool hasMagiCoins = famMagiCoins >= requiredMagiCoins;
+                if (hasSimoleons && hasMagiCoins)
+                {
+                    magicBody = OriginalUIStrings.Format(Template(31), [lotName, description, cost, magiCost]);
+                }
+                else if (hasSimoleons)
+                {
+                    magicBody = OriginalUIStrings.Format(Template(36),
+                        [lotName, description, cost, magiCost, magicFam.Name, famMagiCoins.ToString(CultureInfo.InvariantCulture)]);
+                }
+                else if (hasMagiCoins)
+                {
+                    magicBody = OriginalUIStrings.Format(Template(38),
+                        [lotName, description, cost, magiCost, magicFam.Name, OriginalUIStrings.Simoleons(magicFam.Budget)]);
+                }
+                else
+                {
+                    magicBody = OriginalUIStrings.Format(Template(37),
+                        [lotName, description, cost, magiCost, magicFam.Name, famMagiCoins.ToString(CultureInfo.InvariantCulture)]);
+                }
+            }
+            else
+            {
+                magicBody = OriginalUIStrings.Format(Template(29), [lotName, description, cost, magiCost]);
+            }
+
+            return address + "\n\n" + magicBody;
+        }
+
         var lot = new LotPopupText.Lot(
             entry.House,
             zoning,
-            OriginalUIStrings.Format(StreetTemplate(entry), [entry.House.ToString(CultureInfo.InvariantCulture)]),
+            address,
             entry.PopupName ?? Template(22),
             entry.PopupDescription ?? Template(23),
             OriginalUIStrings.Simoleons(price),
@@ -1885,6 +2204,92 @@ public sealed class OriginalNeighborhoodOverlay
         // Renders single-frame scenery overlay animations above house graphics.
         AppendAnimations(multiFrame: false);
 
+        if (Mode is 1 or 4 && !_nessie.Active && _nessieFrames.Count == 3)
+        {
+            double wholeSecond = Math.Floor(now);
+            if (wholeSecond > _nessie.LastRollSecond)
+            {
+                _nessie.LastRollSecond = wholeSecond;
+                if (Random.Shared.Next(1000) == 1)
+                    TriggerNessie(now);
+            }
+        }
+
+        if (_nessie.Active && _nessieFrames.Count == 3)
+        {
+            double elapsed = Math.Max(0.0, now - _nessie.StartedAt);
+            double tick = elapsed * 10.0; // 100ms per animation step
+            float swimTicks = Math.Max(1f, (_nessie.StartX - _nessie.StopX) / 2f);
+            OriginalGameplayOverlay.Image? nessImg = null;
+            float nx = _nessie.StartX;
+            float ny = _nessie.StartY;
+            if (tick < 1.0)
+            {
+                nessImg = _nessieFrames[0];
+            }
+            else if (tick < 2.0)
+            {
+                nessImg = _nessieFrames[1];
+            }
+            else if (tick < 2.0 + swimTicks)
+            {
+                float s = (float)(tick - 2.0);
+                nx = _nessie.StartX - 2f * s;
+                ny = _nessie.StartY + s;
+                nessImg = _nessieFrames[2];
+            }
+            else if (tick < 3.0 + swimTicks)
+            {
+                nx = _nessie.StopX;
+                ny = _nessie.StartY + swimTicks;
+                nessImg = _nessieFrames[1];
+            }
+            else if (tick < 4.0 + swimTicks)
+            {
+                nx = _nessie.StopX;
+                ny = _nessie.StartY + swimTicks;
+                nessImg = _nessieFrames[0];
+            }
+            else
+            {
+                _nessie.Active = false;
+            }
+
+            if (nessImg is { } validNess)
+            {
+                items.Add(new DrawItem(
+                    validNess,
+                    new CGRect(left + nx * factor, top + ny * factor, validNess.Size.Width * factor, validNess.Size.Height * factor)));
+            }
+        }
+
+        if (Mode == 5 && _carsActive && _carFrames.Count > 0)
+        {
+            double dt = Math.Max(0.0, now - _carsStartedAt) * _carsSpeed;
+            foreach (var car in _cars)
+            {
+                float cx = ((car.X + (float)(car.Dx * dt)) % 920f + 920f) % 920f - 60f;
+                float cy = ((car.Y + (float)(car.Dy * dt)) % 680f + 680f) % 680f - 40f;
+                var carImg = _carFrames[car.SpriteIndex % _carFrames.Count];
+                items.Add(new DrawItem(
+                    carImg,
+                    new CGRect(left + cx * factor, top + cy * factor, carImg.Size.Width * factor, carImg.Size.Height * factor)));
+            }
+        }
+
+        if (Mode == 7 && _balloonFrames.Count == 16)
+        {
+            double angle = Math.Max(0.0, now - _startedAt) * 0.15;
+            double bx = 400.0 + 250.0 * Math.Cos(angle);
+            double by = 260.0 + 110.0 * Math.Sin(angle);
+            int dirFrame = ((int)Math.Floor((angle % (2.0 * Math.PI)) / (2.0 * Math.PI) * 16.0)) % 16;
+            var balloonImg = _balloonFrames[dirFrame];
+            items.Add(new DrawItem(
+                balloonImg,
+                new CGRect(left + (bx - balloonImg.Size.Width / 2.0) * factor, top + (by - balloonImg.Size.Height / 2.0) * factor,
+                    balloonImg.Size.Width * factor, balloonImg.Size.Height * factor)));
+        }
+
         if (_travelFilter is { } activeFilter && _filterMarkers.TryGetValue(activeFilter.SelectedMask, out var marker))
         {
             ReadOnlySpan<int> pulseFrames = [0, 1, 2, 2, 1, 0];
@@ -1892,7 +2297,7 @@ public sealed class OriginalNeighborhoodOverlay
             foreach (var house in _houses)
             {
                 var entry = house.Entry;
-                if (!activeFilter.Marks(entry.Community == true, entry.FilterFlags ?? 0))
+                if (!activeFilter.Marks(IsCommunityLot(entry), entry.FilterFlags ?? 0))
                     continue;
                 double yOffset = entry.House == 23 ? 10 : 70;
                 items.Add(new DrawItem(
@@ -1950,9 +2355,9 @@ public sealed class OriginalNeighborhoodOverlay
                 toolbar,
                 new CGRect(left, chromeTop, toolbar.Size.Width * factor, toolbar.Size.Height * factor)));
 
-            var masks = NeighborhoodLotFilter.Masks;
-            var positions = NeighborhoodLotFilter.Positions;
-            for (int index = 0; index < masks.Count && index < _filterButtons.Count; index++)
+            var masks = toolbarFilter.Masks;
+            var positions = toolbarFilter.Positions;
+            for (int index = 0; index < masks.Count && index < _filterButtons.Count && index < positions.Count; index++)
             {
                 var sheet = _filterButtons[index];
                 float frame = !toolbarFilter.IsEnabled(index) ? 3f
@@ -2049,13 +2454,11 @@ public sealed class OriginalNeighborhoodOverlay
             return;
         }
 
-        double clippedHeight = Math.Max(1.0, Math.Round(rect.Height * progress, MidpointRounding.AwayFromZero));
-        double fraction = Math.Clamp(clippedHeight / rect.Height, 0.0, 1.0);
+        double lift = (1.0 - progress) * 2.0 * tipScale;
         outItems.Add(new DrawItem(
             tip.Image,
-            new CGRect(rect.MinX, rect.MaxY - clippedHeight, rect.Width, clippedHeight),
-            opacity: 1f,
-            uv: new Vector4(0f, (float)(1.0 - fraction), 1f, (float)fraction)));
+            new CGRect(rect.MinX, rect.MinY + lift, rect.Width, rect.Height),
+            opacity: (float)Math.Clamp(progress, 0.0, 1.0)));
     }
 
     private void AppendRolloverItems(double left, double top, double factor, List<DrawItem> outItems)

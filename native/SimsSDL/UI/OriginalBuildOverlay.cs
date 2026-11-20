@@ -39,9 +39,13 @@ public sealed class OriginalBuildOverlay
     private readonly UIDevice _device;
     private readonly SimsBitmapFont _tooltipFont;
     private readonly OriginalGameplayOverlay.Image _universal;
+    private readonly OriginalGameplayOverlay.Image _vectorUniversal;
+    private OriginalGameplayOverlay.Image ActiveUniversal => SimsBitmapFont.SharpTextEnabled ? _vectorUniversal : _universal;
     private readonly OriginalGameplayOverlay.Image _patch;
     private readonly OriginalGameplayOverlay.Image[] _buttons;
     private readonly OriginalGameplayOverlay.Image _frame;
+    private readonly OriginalGameplayOverlay.Image _vectorFrame;
+    private OriginalGameplayOverlay.Image ActiveFrame => SimsBitmapFont.SharpTextEnabled ? _vectorFrame : _frame;
     private readonly OriginalGameplayOverlay.Image _unknown;
     private readonly OriginalGameplayOverlay.Image _previous;
     private readonly OriginalGameplayOverlay.Image _next;
@@ -103,32 +107,58 @@ public sealed class OriginalBuildOverlay
             return OriginalGameplayOverlay.CreateImage(device, pixels.Width, pixels.Height, pixels.Rgba, magenta: true);
         }
 
+        OriginalGameplayOverlay.Image LoadVectorTool(string path, string vectorKey)
+        {
+            var pixels = new SimsBitmap(content.Read("UIGraphics/cpanel/" + path));
+            if (SimsBitmapFont.SharpTextEnabled)
+            {
+                int w1x = Math.Max(1, pixels.Width / 4);
+                int h1x = Math.Max(1, pixels.Height);
+                if (SimsVectorUiKit.TryRenderBuildToolStrip(vectorKey, w1x, h1x, scale: 4) is { } vec)
+                    return SimsVectorUiKit.ToOverlayImage(vec);
+            }
+            return OriginalGameplayOverlay.CreateImage(device, pixels.Width, pixels.Height, pixels.Rgba, magenta: true);
+        }
+
+        OriginalGameplayOverlay.Image LoadVectorPreview(string path, string vectorKey)
+        {
+            var pixels = new SimsBitmap(content.Read("UIGraphics/cpanel/" + path));
+            if (SimsBitmapFont.SharpTextEnabled &&
+                SimsVectorUiKit.TryRenderBuildPopupPreview(vectorKey, pixels.Width, pixels.Height, scale: 4) is { } vec)
+            {
+                return SimsVectorUiKit.ToOverlayImage(vec);
+            }
+            return OriginalGameplayOverlay.CreateImage(device, pixels.Width, pixels.Height, pixels.Rgba, magenta: true);
+        }
+
         var targa = new SimsTarga(content.Read("UIGraphics/cpanel/Backgrounds/UniversalBack.tga"));
         _universal = OriginalGameplayOverlay.CreateImage(device, targa.Width, targa.Height, targa.Rgba);
+        try { _vectorUniversal = SimsVectorUiKit.ToOverlayImage(SimsVectorUiKit.RenderFittedPanel("universalback", scale: 8)); } catch { _vectorUniversal = _universal; }
         _patch = LoadBitmap("Backgrounds/BuildPatch.bmp");
 
         _buttons = new OriginalGameplayOverlay.Image[OriginalBuildLayout.Assets.Count];
         for (int i = 0; i < OriginalBuildLayout.Assets.Count; i++)
-            _buttons[i] = LoadBitmap("Buttons/ToolBtn" + OriginalBuildLayout.Assets[i] + ".bmp");
+            _buttons[i] = LoadVectorTool("Buttons/ToolBtn" + OriginalBuildLayout.Assets[i] + ".bmp", OriginalBuildLayout.Assets[i]);
 
         _frame = LoadBitmap("Catalog/ThumbTemplate.bmp");
+        _vectorFrame = SimsVectorUiKit.ToOverlayImage(SimsVectorUiKit.RenderThumbTemplateStrip(45, scale: 4));
         _unknown = LoadBitmap("CatalogUnknown.bmp");
         _previous = LoadBitmap("Buttons/ScrollLeft.bmp");
         _next = LoadBitmap("Buttons/ScrollRight.bmp");
 
         _terrainModeIcons =
         [
-            LoadBitmap("Build/TerrainDownIcon.BMP"),
-            LoadBitmap("Build/TerrainLevelIcon.BMP"),
-            LoadBitmap("Build/TerrainUpIcon.BMP"),
-            LoadBitmap("HDBuild/TerrainGrassIcon.BMP")
+            LoadVectorTool("Build/TerrainDownIcon.BMP", "TerrainDownIcon"),
+            LoadVectorTool("Build/TerrainLevelIcon.BMP", "TerrainLevelIcon"),
+            LoadVectorTool("Build/TerrainUpIcon.BMP", "TerrainUpIcon"),
+            LoadVectorTool("HDBuild/TerrainGrassIcon.BMP", "TerrainGrassIcon")
         ];
         _terrainModePreviews =
         [
-            LoadBitmap("Build/PopupTerrainDown.bmp"),
-            LoadBitmap("Build/PopupTerrainLevel.bmp"),
-            LoadBitmap("Build/PopupTerrainUp.BMP"),
-            LoadBitmap("HDBuild/popupGrass.bmp")
+            LoadVectorPreview("Build/PopupTerrainDown.bmp", "PopupTerrainDown"),
+            LoadVectorPreview("Build/PopupTerrainLevel.bmp", "PopupTerrainLevel"),
+            LoadVectorPreview("Build/PopupTerrainUp.BMP", "PopupTerrainUp"),
+            LoadVectorPreview("HDBuild/popupGrass.bmp", "popupGrass")
         ];
 
         _poolToolIcon = LoadBitmap("Build/PoolToolIcon.bmp");
@@ -144,13 +174,13 @@ public sealed class OriginalBuildOverlay
             LoadBitmap("Build/roofsteep.bmp")
         ];
         _roofPatternTemplate = LoadBitmap("Build/roofpatterntemplate.bmp");
-        _roofPitchPreview = LoadBitmap("Build/popuproofpitch.bmp");
+        _roofPitchPreview = LoadVectorPreview("Build/popuproofpitch.bmp", "popuproofpitch");
         _roofPatternFallbackPreview = LoadBitmap("Build/popuproofpattern.bmp");
 
         _historyIcons =
         [
-            LoadBitmap("Buttons/Undo.bmp"),
-            LoadBitmap("Buttons/Redo.bmp")
+            LoadVectorTool("Buttons/Undo.bmp", "Undo"),
+            LoadVectorTool("Buttons/Redo.bmp", "Redo")
         ];
     }
 
@@ -329,7 +359,13 @@ public sealed class OriginalBuildOverlay
             throw new ContentError(dimensionMessage);
         }
 
-        return OriginalGameplayOverlay.CreateImage(_device, bitmap.Width, bitmap.Height, bitmap.Rgba, magenta: true);
+        return OriginalGameplayOverlay.CreateImage(
+            _device,
+            bitmap.Width,
+            bitmap.Height,
+            bitmap.Rgba,
+            magenta: !bitmap.HasAlpha,
+            decontaminateEdges: bitmap.HasAlpha);
     }
 
     private static string? ResolveRootFile(string resolvedRoot, string file)
@@ -819,7 +855,7 @@ public sealed class OriginalBuildOverlay
         double top = canvas.Height - 183;
         var result = new List<OriginalGameplayOverlay.Part>
         {
-            new(_universal, new CGRect(0, top, _universal.Size.Width, _universal.Size.Height)),
+            new(ActiveUniversal, new CGRect(0, top, _universal.Size.Width, _universal.Size.Height)),
             new(_patch, new CGRect(113, top + 51, _patch.Size.Width, _patch.Size.Height))
         };
 
@@ -877,8 +913,14 @@ public sealed class OriginalBuildOverlay
                 bool chosen = (selectedObject ?? SelectedObjectGUID) is { } targetGuid && item.Guid == targetGuid;
                 bool hovered = HoveredPoint is { } hp && Contains(rect, hp);
                 float state = chosen ? 1f : hovered ? 2f : 0f;
-                result.Add(new OriginalGameplayOverlay.Part(_frame, rect, new Vector4(state / 4f, 0f, 0.25f, 1f)));
-                result.Add(Fit(IconAt(index, item.Icon, highlighted: chosen || hovered), rect));
+                result.Add(new OriginalGameplayOverlay.Part(ActiveFrame, rect, new Vector4(state / 4f, 0f, 0.25f, 1f)));
+                OriginalGameplayOverlay.Part objThumbPart = SimsBitmapFont.SharpTextEnabled
+                    && index < _previews.Count
+                    && _previews[index] is { } hdObjPreview
+                    && item.Preview is not null
+                    ? Icon(hdObjPreview, item.Preview, _unknown)
+                    : IconAt(index, item.Icon, highlighted: chosen || hovered);
+                result.Add(Fit(objThumbPart, rect));
                 if (hovered && ObjectTool != OriginalBuildObjectTool.Hand
                     && PriceTooltip(item.Price, budget is { } b && item.Price > b) is { } tip)
                 {
@@ -977,8 +1019,15 @@ public sealed class OriginalBuildOverlay
                 else
                 {
                     float state = chosen ? 1f : hovered ? 2f : 0f;
-                    result.Add(new OriginalGameplayOverlay.Part(_frame, rect, new Vector4(state / 4f, 0f, 0.25f, 1f)));
-                    result.Add(Fit(IconAt(index, item.Icon, highlighted: chosen || hovered), rect));
+                    result.Add(new OriginalGameplayOverlay.Part(ActiveFrame, rect, new Vector4(state / 4f, 0f, 0.25f, 1f)));
+                    OriginalGameplayOverlay.Part buildThumbPart = SimsBitmapFont.SharpTextEnabled
+                        && item.Guid is not null
+                        && index < _previews.Count
+                        && _previews[index] is { } hdBuildPreview
+                        && item.Preview is not null
+                        ? Icon(hdBuildPreview, item.Preview, _unknown)
+                        : IconAt(index, item.Icon, highlighted: chosen || hovered);
+                    result.Add(Fit(buildThumbPart, rect));
                 }
 
                 if (hovered && !ShowsRoofPanel && PriceTooltip(item.Price, budget is { } b && item.Price > b) is { } tip)

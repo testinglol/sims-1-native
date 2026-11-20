@@ -199,7 +199,8 @@ internal sealed partial class LiveController
             return;
         }
 
-        string key = $"{Renderer.ViewLevel}:{(int)Renderer.Zoom}:{tile.X}:{tile.Y}";
+        int cutawayZoom = (int)Renderer.Zoom.AssetZoom();
+        string key = $"{Renderer.ViewLevel}:{cutawayZoom}:{tile.X}:{tile.Y}";
         if (string.Equals(_lastCutawayTile, key, StringComparison.Ordinal))
         {
             _desiredCutaway = null;
@@ -215,7 +216,7 @@ internal sealed partial class LiveController
                 {
                     ["x"] = tile.X,
                     ["y"] = tile.Y,
-                    ["zoom"] = (int)Renderer.Zoom,
+                    ["zoom"] = cutawayZoom,
                 }) is not null)
             {
                 _lastCutawayTile = key;
@@ -223,7 +224,7 @@ internal sealed partial class LiveController
         }
         else
         {
-            _desiredCutaway = (key, tile.X, tile.Y, (int)Renderer.Zoom, CurrentUptime() * 1000.0);
+            _desiredCutaway = (key, tile.X, tile.Y, cutawayZoom, CurrentUptime() * 1000.0);
         }
     }
 
@@ -318,6 +319,17 @@ internal sealed partial class LiveController
         if (DialogKey(key))
         {
             return true;
+        }
+
+        if (key is Key.Character { Value: "c" } && IsCheatShortcutHeld())
+        {
+            ToggleCheatConsole();
+            return true;
+        }
+
+        if (Ui.CheatConsole.Visible)
+        {
+            return HandleCheatConsoleKeyDown(key);
         }
 
         if (Ui.Album.Visible)
@@ -960,6 +972,12 @@ internal sealed partial class LiveController
             return;
         }
 
+        if (Ui.GameDialog is null && Ui.CheatConsole.Visible)
+        {
+            Ui.CheatConsole.TextInput(text);
+            return;
+        }
+
         if (Ui.GameDialog is null && Ui.ModsOverlay is { EditingOrderNumber: true } modsTextOverlay)
         {
             modsTextOverlay.TextInput(text);
@@ -1004,6 +1022,7 @@ internal sealed partial class LiveController
 
     public bool AcceptsText =>
         (Ui.Album.Visible && Ui.Album.EditingCaption)
+        || (Ui.GameDialog is null && Ui.CheatConsole.Visible)
         || (Ui.ModsOverlay?.EditingOrderNumber == true)
         || Ui.HouseholdCreation is not null
         || (Ui.GameDialog?.AcceptsTextInput == true
@@ -1121,6 +1140,31 @@ internal sealed partial class LiveController
         OpenPluginPanel(panels[next].PackID, panels[next].Description);
     }
 
+    private bool TryTogglePluginPanelById(string panelId)
+    {
+        if (Ui.PluginPanel is { } open && string.Equals(open.Description.Id, panelId, StringComparison.OrdinalIgnoreCase))
+        {
+            PlayUISound("ui_click");
+            Ui.PluginPanel = null;
+            return true;
+        }
+
+        List<(string PackID, PanelDescription Description)> panels = PluginPanels;
+        foreach (var (packId, description) in panels)
+        {
+            if (string.Equals(description.Id, panelId, StringComparison.OrdinalIgnoreCase))
+            {
+                DismissMenu();
+                Ui.SoundOptions.Dismiss();
+                PlayUISound("ui_click");
+                OpenPluginPanel(packId, description);
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static int? FindPanelIndex(
         List<(string PackID, PanelDescription Description)> panels,
         string packID,
@@ -1234,6 +1278,12 @@ internal sealed partial class LiveController
         }
 
         _pluginPanelValues = updated;
+        if (updated.TryGetValue("local.lighting", out var lightingPackPanels)
+            && lightingPackPanels.TryGetValue("lighting-settings", out var lightingValues))
+        {
+            Ui.OptionsPanel.HasLightingSettings = true;
+            Ui.OptionsPanel.UpdateLightingValues(lightingValues);
+        }
         if (Ui.PluginPanel is { } openPanel)
         {
             Dictionary<string, string>? values =

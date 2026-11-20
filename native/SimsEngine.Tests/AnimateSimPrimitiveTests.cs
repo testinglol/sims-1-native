@@ -1061,7 +1061,7 @@ public sealed class AnimateSimPrimitiveTests
         Assert.Null(person.CarryAnimationPlayback);
         Assert.Equal(6, person.CarryPracticeMode);
         Assert.Equal(-1, person.CarryPracticeCachedState);
-        Assert.True(person.ReachAnimationActive);
+        Assert.False(person.ReachAnimationActive);
         Assert.True(person.AnimatorPracticeScaleEnabled);
     }
 

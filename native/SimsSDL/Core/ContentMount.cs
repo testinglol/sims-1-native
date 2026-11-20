@@ -705,6 +705,8 @@ public sealed partial class GameContent
             ["resources"] = resources,
             ["schemaVersion"] = report.SchemaVersion
         };
+        if (report.CoreFingerprint is not null)
+            metadata["coreFingerprint"] = report.CoreFingerprint;
 
         return SerializeSortedJson(metadata);
     }

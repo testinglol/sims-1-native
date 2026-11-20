@@ -152,6 +152,10 @@ public interface IPluginContext
     void SetSimSuitOverride(short simId, int? suitCategory) =>
         throw new NotSupportedException("Suit overrides need API 4");
 
+    /// <summary>API4: waters outdoor flowers and garden plots on the active lot, returning the number of plants refreshed.</summary>
+    int WaterOutdoorPlants() =>
+        throw new NotSupportedException("Plant watering needs API 4");
+
     /// <summary>Writes a diagnostic line to the simulation log.</summary>
     void Log(string message);
 }

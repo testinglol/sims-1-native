@@ -228,6 +228,7 @@ public static class MakeNewCharacterPrimitive
         neighbor.PersonData[(int)PersonData.PersonAge] = age < 0 && me is XPerson src ? src[PersonData.PersonAge] : age;
         neighbor.PersonData[(int)PersonData.Gender] = age < 0 && me is XPerson srcG ? srcG[PersonData.Gender] : gender;
         neighbor.PersonData[65] = (short)resolvedGenderMode;
+        world.ClearRemovedNeighbor(neighborId);
         world.Neighbors[neighborId] = neighbor;
         world.NeighborWalkOrder[slot] = neighbor;
         return neighborId;

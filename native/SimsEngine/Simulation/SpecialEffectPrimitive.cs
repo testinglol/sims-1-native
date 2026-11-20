@@ -17,7 +17,11 @@ public static class SpecialEffectPrimitive
         var ticks = world.PrimitiveTicks;
         if (!ticks.TryGetValue(frame, out var tick))
         {
-            if (host is null) world.GlobalObjectTableEffectWords[StartIndex] = StartValue;
+            if (host is null)
+            {
+                world.Globals[StartIndex] = StartValue;
+                world.GlobalObjectTableEffectWords[StartIndex] = StartValue;
+            }
             else host.SetEffectWord(StartIndex, StartValue);
             ticks[frame] = Starting;
             return PrimitiveResult.Stop;

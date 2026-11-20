@@ -15,23 +15,30 @@ using SimsEngine.World;
 
 namespace SimsSimulation;
 
-internal sealed class SimulationServer
+internal sealed partial class SimulationServer
 {
-    private sealed record SavedDialogSnapshot(string Token, short OwnerId, short? IconId, byte Kind, string Title,
+    internal sealed record SavedDialogSnapshot(string Token, short OwnerId, short? IconId, byte Kind, string Title,
         string Message, string? Yes, string? No, string? Cancel, bool Blocking, bool AwaitsResponse, int State,
         bool Visible, ushort ImageBitmapId, byte? BookMode = null);
 
-    private sealed record SaveRuntimeMetadata(int Version, int Speed, PersonAnimationRuntimeSnapshot[]? PersonAnimations = null,
-        string? LotSha256 = null, SavedDialogSnapshot[]? Dialogs = null, int? Budget = null);
+    internal sealed record SaveRuntimeMetadata(int Version, int Speed, PersonAnimationRuntimeSnapshot[]? PersonAnimations = null,
+        string? LotSha256 = null, SavedDialogSnapshot[]? Dialogs = null, int? Budget = null,
+        IReadOnlyList<int>? RestrictedActivePersonKeys = null, SavedSuspendedHomeLot? SuspendedHome = null,
+        int? ClockTicks = null, int? ClockDay = null);
 
-    private sealed record SavedSuspendedHomeLot(short HomeHouse, ushort? HomeFamilyChunkId, string LotState,
+    internal sealed record SavedSuspendedHomeLot(short HomeHouse, ushort? HomeFamilyChunkId, string LotState,
         SaveRuntimeMetadata Runtime, int Speed);
 
-    private sealed record SaveEnvelope(int SchemaVersion, string Engine, string PackFingerprint, short House, long Updates,
+    internal sealed record SaveEnvelope(int SchemaVersion, string Engine, string PackFingerprint, short House, long Updates,
         string State, SaveCompatibility.PackRecord[]? Packs = null,
         Dictionary<string, PluginHost.PluginSaveRecord>? Plugins = null, int Neighborhood = 1,
         SaveRuntimeMetadata? Runtime = null, string? NeighborhoodState = null,
-        SavedSuspendedHomeLot? SuspendedHome = null);
+        SavedSuspendedHomeLot? SuspendedHome = null,
+        IReadOnlyList<int>? RestrictedActivePersonKeys = null,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        ConnectedNeighborhoodSaveState? ConnectedNeighborhood = null,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        string? CorePackFingerprint = null);
 
     private static readonly JsonSerializerOptions Json = new()
     {
@@ -58,6 +65,9 @@ internal sealed class SimulationServer
     private IffFile? lot;
     private ObjectRegistry? registry;
     private SuspendedHomeLot? suspendedHomeLot;
+    private (ushort FamilyChunkId, int VacationHouse)? committedVacationState;
+    private int? lastTravelNeighborhoodMode;
+    private readonly Dictionary<uint, IffFile> refreshedPersonFiles = new();
 
     private sealed record SuspendedHomeLot(short HomeHouse, ushort? HomeFamilyChunkId, byte[] LotBytes,
         SaveRuntimeMetadata Runtime, int Speed);
@@ -113,6 +123,8 @@ internal sealed class SimulationServer
     private readonly bool profile_ = Environment.GetEnvironmentVariable("SIMS_PROFILE") is not null;
     private TimeSpan tickTime;
     private TimeSpan animationTime;
+    private double maxTickMs;
+    private long profileWindowStart;
     private int animationsTimed;
     private double nextAnimation;
     private int ticksTimed;
@@ -124,11 +136,13 @@ internal sealed class SimulationServer
     private PluginHost? plugins;
     private PluginWorld? pluginWorld;
     private readonly string packFingerprint;
+    private readonly string? corePackFingerprint;
     private readonly string? explicitInstallRoot;
     private HitAudioRuntime? audio;
     private SimOutfits? engineOutfits;
     private SeasonalOutfitService? seasonalOutfits;
     private (int House, int Minute, int? Suit) cachedOutdoorSuit = (-1, -1, null);
+    private string? lastCheatCommand;
 
     private void ResetSeasonalOutfits()
     {
@@ -139,6 +153,7 @@ internal sealed class SimulationServer
     private IffFile? initialValuationLot;
     private bool lotValuationEdited;
     internal Action<SceneExporter.DirectAnimationFrame>? DirectAnimationSink { get; set; }
+    internal Action<short, SceneExporter.DirectAnimationFrame>? AdjacentDirectAnimationSink { get; set; }
     private static bool IsExplicitNativeEnv =>
         string.Equals(Environment.GetEnvironmentVariable("SIMS_ENGINE")?.Trim(), "native", StringComparison.OrdinalIgnoreCase);
 
@@ -168,9 +183,20 @@ internal sealed class SimulationServer
         this.loadError = loadError;
         this.language = language;
         var metadata = Path.Combine(game, ".pack-stack.json");
-        packFingerprint = File.Exists(metadata)
-            ? JsonDocument.Parse(File.ReadAllText(metadata)).RootElement.GetProperty("fingerprint").GetString() ?? "unmounted-base-1.90"
-            : "unmounted-base-1.90";
+        if (File.Exists(metadata))
+        {
+            using var metadataDoc = JsonDocument.Parse(File.ReadAllText(metadata));
+            packFingerprint = metadataDoc.RootElement.GetProperty("fingerprint").GetString() ?? "unmounted-base-1.90";
+            corePackFingerprint = metadataDoc.RootElement.TryGetProperty("coreFingerprint", out var coreProp) &&
+                                  coreProp.ValueKind == JsonValueKind.String
+                ? coreProp.GetString()
+                : null;
+        }
+        else
+        {
+            packFingerprint = "unmounted-base-1.90";
+            corePackFingerprint = null;
+        }
         audio = new HitAudioRuntime(Path.Combine(session, "audio"), profile, Write, game)
         {
             SuppressActiveDuplicates = true
@@ -213,6 +239,7 @@ internal sealed class SimulationServer
     {
         targetWorld.TutorialFlash = (kind, value, on) =>
         {
+            if (!ReferenceEquals(world, targetWorld)) return;
             switch (kind)
             {
                 case TutorialFlashKind.ImageButton:
@@ -310,15 +337,16 @@ internal sealed class SimulationServer
         return null;
     }
 
-    private void OnNeighborInventoryChanged(short neighborId, AvatarInventory inventory) =>
-        PersistNeighborhoodStateImmediately();
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<SimulationWorld, Action<short, AvatarInventory>> neighborInventoryHandlers = new();
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<SimulationWorld, object> attachedNoticeWorlds = new();
 
     private void AttachNoticeListener(SimulationWorld target)
     {
         target.PlaySoundEvent = (name, owner, pan, zoom) =>
         {
-            if (audio is null) return false;
+            if (!ReferenceEquals(world, target) || audio is null) return false;
             char? voiceCode = null;
+            int? pianoSkill = null;
             if (target.ObjectById(owner) is XPerson person)
             {
                 if ((person[PersonData.RenderDisplayFlags] & 0x0C) != 0 &&
@@ -337,24 +365,111 @@ internal sealed class SimulationServer
                             : gender == 2
                                 ? 'k'
                                 : null;
+                pianoSkill = person[PersonData.CreativitySkill] / 100;
             }
 
-            var played = audio.PlayForSimulationObject(name, owner, pan, zoom, voiceCode);
+            var played = audio.PlayForSimulationObject(name, owner, pan, zoom, voiceCode, pianoSkill);
             if (played) target.PositionalSoundOwners.Add(owner);
             return played;
         };
         target.StopOwnerSounds = owner =>
         {
-            audio?.RemoveOwner(owner);
+            if (ReferenceEquals(world, target)) audio?.RemoveOwner(owner);
             target.PositionalSoundOwners.Remove(owner);
         };
-        target.AnimationSound = HandleAnimationSound;
-        target.PersistNeighborhoodStateImmediately = PersistNeighborhoodStateImmediately;
-        target.NeighborInventoryChanged -= OnNeighborInventoryChanged;
-        target.NeighborInventoryChanged += OnNeighborInventoryChanged;
+        target.AnimationSound = (ownerId, cue) =>
+        {
+            if (ReferenceEquals(world, target)) HandleAnimationSound(ownerId, cue);
+        };
+        target.PictureInPicture ??= pictureInPicture;
+        target.PersistNeighborhoodStateImmediately = () =>
+        {
+            if (ReferenceEquals(world, target)) PersistNeighborhoodStateImmediately();
+        };
+        target.PersistLotSimulationStateImmediately = () =>
+        {
+            if (!ReferenceEquals(world, target) || lot is null) return;
+            var updatedLot = target.WriteSavedSimulationStateTo(lot);
+            lot = updatedLot;
+            if (house > 0)
+            {
+                var lotPath = Path.Combine(Neighborhoods.UserData(profile), "Houses", $"House{house:D2}.iff");
+                if (File.Exists(lotPath))
+                    WriteReplace(lotPath, updatedLot.Bytes);
+            }
+        };
+        target.LiveLotValuationProvider = () => target.SavedSimulationState is { } s
+            ? (ReferenceEquals(world, target) ? CurrentLotValuation(s) : (s.Field0xA0, s.Field0xA4))
+            : (0, 0);
+        WorldBootstrap.WireNeighborhoodDelegates(target, () => ReferenceEquals(world, target) ? neighborhood : null);
+        WorldBootstrap.SyncFamilyBridgeState(
+            target,
+            (target.FamilyBudget as FamilyBudget)?.ActiveFamily,
+            (target.FamilyBudget as FamilyBudget)?.FamilyChunkId);
+        target.ReleaseGenericSimsCall03PrimaryHandle = _ =>
+        {
+            target.DismissVisibleDialogRecords();
+            if (ReferenceEquals(world, target) && !HasBlockingDialog(target) && dialogResumeSpeed > 0)
+            {
+                SetSimulationSpeed(dialogResumeSpeed);
+                dialogResumeSpeed = 0;
+            }
+        };
+        target.ReleaseGenericSimsCall03SecondaryHandle = _ =>
+        {
+            target.DismissVisibleDialogRecords();
+        };
+        if (neighborInventoryHandlers.TryGetValue(target, out var prevInventoryHandler))
+            target.NeighborInventoryChanged -= prevInventoryHandler;
+        Action<short, AvatarInventory> inventoryHandler = (_, _) =>
+        {
+            if (ReferenceEquals(world, target))
+            {
+                PersistNeighborhoodStateImmediately();
+            }
+            else if (ConnectedNeighborhoodEnabled &&
+                     lotPool.LiveSessions.Values.FirstOrDefault(s => ReferenceEquals(s.World, target)) is { } bgSession)
+            {
+                bgSession.SaveDirty = true;
+            }
+        };
+        neighborInventoryHandlers.AddOrUpdate(target, inventoryHandler);
+        target.NeighborInventoryChanged += inventoryHandler;
+        if (attachedNoticeWorlds.TryGetValue(target, out _))
+            return;
+        attachedNoticeWorlds.Add(target, new object());
         target.AddNoticeListener(new SimulationNoticeListener((message, value) =>
         {
+            if (!ReferenceEquals(world, target))
+            {
+                if (ConnectedNeighborhoodEnabled &&
+                    lotPool.LiveSessions.Values.FirstOrDefault(s => ReferenceEquals(s.World, target)) is { } bgSession)
+                {
+                    if (message is 0x88 or 0xda or 0xdb or 0xe4 or 0xee) bgSession.SaveDirty = true;
+                    if (message == 0xe4)
+                    {
+                        var bgSelected = value == 0
+                            ? null
+                            : target.WalkOrder.OfType<XPerson>().FirstOrDefault(person => person.RequestKey == value || person.Id == value);
+                        if (value == 0 || bgSelected is not null)
+                        {
+                            bgSession.SelectedSim = bgSelected?.Id ?? (short)0;
+                            SyncSelectedSimFlags(target, bgSession.SelectedSim);
+                        }
+                    }
+                }
+                return false;
+            }
             if (message is 0x88 or 0xda or 0xdb or 0xe4 or 0xee) saveDirty = true;
+            if (message == 0x20000000)
+            {
+                if (RefreshPendingPersonPortraits())
+                {
+                    saveDirty = true;
+                    Write(new { type = "state", state = State() });
+                }
+                return true;
+            }
             if (message == 0xe4)
             {
                 var selected = value == 0
@@ -419,13 +534,19 @@ internal sealed class SimulationServer
 
     /// <summary>Persists neighborhood state so that neighbor records and family projections are immediately
     /// visible across subsequent lot loads.</summary>
-    private void PersistNeighborhoodStateImmediately()
+    private void PersistNeighborhoodStateImmediately() =>
+        PersistNeighborhoodStateImmediatelyCore(commitVacationField: false);
+
+    private void PersistNeighborhoodStateImmediatelyCore(bool commitVacationField)
     {
         plugins?.CommitNeighborhood();
         if (world is null || neighborhood is null || neighborhoodPath is null) return;
 
+        RefreshPendingPersonPortraits();
         world.SaveAllPersistentPersonData();
-        var updated = world.WriteSavedNeighborRelationshipsTo(neighborhood);
+        var updated = ConnectedNeighborhoodEnabled
+            ? MergeWorldNeighborRecordsIntoNeighborhood(world, neighborhood, CollectGloballyRemovedNeighbors())
+            : world.WriteSavedNeighborRelationshipsTo(neighborhood);
         var famiType = ResourceType.Parse("FAMI");
 
         if (world.DirtyRelationshipFamilies.Count > 0)
@@ -482,8 +603,16 @@ internal sealed class SimulationServer
                 family = family.WithValue(valueState.Field0x9C + furnishingsValue + (int)(architectureValue * (world.ArchitectureValueMultiplier ?? 0.7f)));
                 familyBudget.ActiveFamily = family;
             }
+            var diskFamily = family;
+            if (!commitVacationField &&
+                committedVacationState is { } committed &&
+                committed.FamilyChunkId == familyChunkId &&
+                diskFamily.Field0x13C != committed.VacationHouse)
+            {
+                diskFamily = diskFamily.WithFields(field0x13C: committed.VacationHouse);
+            }
             updated = updated.WithAddedOrReplacedChunk(famiType, familyChunkId,
-                family.Write(familyChunkId));
+                diskFamily.Write(familyChunkId));
         }
         if (world.NeighborhoodFamilies is NeighborhoodFamilies families)
             foreach (var (chunkId, changedFamily) in families.Changed)
@@ -515,7 +644,7 @@ internal sealed class SimulationServer
             }
         }
         var ngbhSwap = existingNgbhChunk is not null && existingNgbhChunk.Data.Span.Length > 0 && existingNgbhChunk.Data.Span[0] != 0;
-        var ngbhBytes = existingNgbh is not null
+        var ngbhBytes = existingNgbh is not null && (existingNgbh.Version >= 0x40 || inventories.Count == 0)
             ? existingNgbh.WithData(world.NeighborhoodData).WithInventories(inventories).Write(ngbhSwap)
             : NeighborhoodData.Write(world.NeighborhoodData, inventories, 0x49, ngbhSwap);
         updated = updated.WithAddedOrReplacedChunk(ngbhType, 1, ngbhBytes);
@@ -565,6 +694,8 @@ internal sealed class SimulationServer
 
         WriteReplace(neighborhoodPath, updated.Bytes);
         neighborhood = updated;
+        if (ConnectedNeighborhoodEnabled)
+            SyncAllLiveWorldsFromNeighborhood(globallyRemovedNeighbors);
     }
 
     /// <summary>Redirects lot entry to a family's vacation lot when their active vacation destination is
@@ -580,7 +711,10 @@ internal sealed class SimulationServer
             {
                 if (chunk.Id == 0) continue;
                 var family = Family.Read(ngh, chunk);
-                if (requestedHouse is > 0 and < 20 && family.HouseNumber == requestedHouse && family.Field0x13C > 0)
+                if ((requestedHouse is (> 0 and < 20) or (>= 90 and <= 92)) &&
+                    !Neighborhoods.IsCommunityLot(userData, requestedHouse) &&
+                    family.HouseNumber == requestedHouse &&
+                    family.Field0x13C > 0)
                 {
                     var vacHouse = checked((short)family.Field0x13C);
                     var vacPath = Path.Combine(userData, "Houses", $"House{vacHouse:D2}.iff");
@@ -598,9 +732,10 @@ internal sealed class SimulationServer
         return (requestedHouse, null);
     }
 
-    private static void HydrateTypeAttributesFromNeighborhood(SimulationWorld targetWorld, IffFile? lotFile, IffFile? neighborhoodFile)
+    private static void HydrateTypeAttributesFromNeighborhood(SimulationWorld targetWorld, IffFile? lotFile, IffFile? neighborhoodFile,
+        bool overwriteExisting = false)
     {
-        if (neighborhoodFile is null || lotFile?.Find(ResourceType.Parse("TATT"), 1) is not null) return;
+        if (neighborhoodFile is null || (!overwriteExisting && lotFile?.Find(ResourceType.Parse("TATT"), 1) is not null)) return;
         if (neighborhoodFile.Find(ResourceType.Parse("TATT"), 1) is not { } tattChunk) return;
         var attributesByGuid = TypeAttributes.Read(neighborhoodFile, tattChunk).AttributesByGuid;
         foreach (var obj in targetWorld.Objects.Values)
@@ -619,7 +754,9 @@ internal sealed class SimulationServer
         {
             if (house == 0)
             {
-                return new SimulationServer(output, session, profile, game, 0, null, null, null, null, loadError: null, language, installRoot: installRoot);
+                var emptyServer = new SimulationServer(output, session, profile, game, 0, null, null, null, null, loadError: null, language, installRoot: installRoot);
+                emptyServer.InitializeConnectedNeighborhoodFromPacks();
+                return emptyServer;
             }
             var userData = Neighborhoods.UserData(profile);
             var (effectiveHouse, redirectedFamilyChunkId) = ResolveVacationRedirect(userData, house);
@@ -640,13 +777,24 @@ internal sealed class SimulationServer
             }
             RestorePersonAnimationRuntime(setup.World, runtime.PersonAnimations);
             RestoreDialogRecords(setup.World, runtime.Dialogs);
+            if (runtime.ClockTicks is { } clockTicks)
+                setup.World.Clock.RestoreProgress(clockTicks, runtime.ClockDay ?? 0);
             var server = new SimulationServer(output, session, profile, game, house, setup.World, setup.Lot,
                 setup.Registry, setup.Global, null, language, setup.NeighborhoodPath, setup.Neighborhood, setup.ActiveFamilyChunkId,
                 installRoot: installRoot);
-            if (setup.ActiveFamily is { Members.Count: > 0 } activeFamily &&
-                !setup.World.WalkOrder.OfType<XPerson>().Any(p => activeFamily.Members.Contains(unchecked((uint)(p.TypeRecord?.Key ?? 0)))))
+            server.RestoreTravelRuntimeState(setup.World, userData, house, setup.ActiveFamilyChunkId, setup.ActiveFamily, runtime);
+            server.ClampAwayLotEditingState();
+            if (setup.ActiveFamily is { Members.Count: > 0 } activeFamily)
             {
-                server.EnsureSelectedHouseholdMember(activeFamily, server.LotWidth / 2, server.LotHeight / 2);
+                var expectedKeys = (setup.World.FamilyBudget as FamilyBudget)?.RestrictedActivePersonKeys
+                    ?? activeFamily.Members.Select(static m => unchecked((int)m)).ToArray();
+                if (!setup.World.WalkOrder.OfType<XPerson>().Any(p => expectedKeys.Contains(p.TypeRecord?.Key ?? 0)))
+                {
+                    server.EnsureSelectedHouseholdMember(activeFamily, server.LotWidth / 2, server.LotHeight / 2);
+                }
+            }
+            if (setup.World.ObjectById(server.selectedSim) is not XPerson)
+            {
                 server.selectedSim = server.DefaultSelectedSimId();
                 SyncSelectedSimFlags(setup.World, server.selectedSim);
             }
@@ -657,6 +805,7 @@ internal sealed class SimulationServer
             server.InitializeFameCallbackTarget(setup.World);
             if (setup.Global is { } global) setup.World.AutonomyHost = new AutonomyHost(setup.World, global, house, () => server.speed == 0, server.ScoreAutonomyChoice);
             server.InitializeViewLevelFromSelectedSim();
+            server.InitializeConnectedNeighborhoodFromPacks();
             return server;
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException or ResourceFormatException)
@@ -692,12 +841,14 @@ internal sealed class SimulationServer
             simless = world is not null && world[SimulationGlobal.SimlessBuildMode] != 0,
             loadError,
             commands = new[] { "state", "audio", "audioEvent", "audioStopOwner", "audioEnded", "audioVolume", "audioState", "modeMusic", "speed", "blockSimulator", "tutorialInfo", "uiButton", "relationshipPopup", "tutorialPanelCheck", "step", "scene", "stream", "sceneAck", "selectSim", "setMotive", "menu", "groundMenu", "groundInteract", "interact", "catalog", "catalogPage", "buildCatalogPage", "previewObject", "buildCursor", "pieHeadPreview", "buyObject", "sellObject", "moveObject", "architecture", "architectureBatch", "roof", "undo", "redo", "cancelAction", "dialogResponse", "genericSimsCallPersonPicker", "appearanceCatalog", "appearancePreview", "createHousehold", "moveInFamily", "neighborhood", "saveBackups", "restoreBackup", "outfitChoices", "outfitPreview", "freeWill", "cheat", "pictureInPicture", "walls", "cutaway", "roofs", "cameraOrientation", "level", "view", "viewScrolling", "cursorObjectCreated", "tutorialResetState", "save", "load", "travelFilter", "plugins", "pluginPanels", "pluginAction", "warmup", "openLot", "closeLot", "quit" }
+                .Concat(ConnectedNeighborhoodCommandNames)
                 .Concat(testFixtureEnabled ? ["setTestPersonTile", "testTileContents"] : []).ToArray(),
         });
         if (world is not null)
         {
             var initialExport = Stopwatch.GetTimestamp();
             Export();
+            Write(new { type = "state", state = State() });
             if (profile_) Console.Error.WriteLine($"Native load: first scene export {Stopwatch.GetElapsedTime(initialExport).TotalMilliseconds:F0} ms");
         }
         System.Threading.Channels.ChannelReader<string> reader;
@@ -738,6 +889,7 @@ internal sealed class SimulationServer
         }
         var lastDialogToken = DialogTokens();
         var hadActivePluginEnvironment = false;
+        object? lastPluginEnvironment = null;
         string? pending = null;
         while (running)
         {
@@ -758,16 +910,22 @@ internal sealed class SimulationServer
                 if (!simulatorBlocked && speed > 0 && world is not null)
                 {
                     var tickInterval = TickIntervalSeconds(speed);
-                    var maxBatchTicks = speed >= 10 ? 24 : speed >= 3 ? 6 : 2;
+                    var maxBatchTicks = speed >= 10 ? 48 : speed >= 3 ? 6 : 2;
                     var batchTicks = 0;
                     var batchStartHouse = house;
-                    var batchDeadline = now + (streaming ? 0.005 : 0.014);
+                    var batchDeadline = now + (streaming ? (speed >= 10 ? 0.011 : 0.005) : 0.014);
                     while (now >= nextUpdate && batchTicks < maxBatchTicks && !simulatorBlocked && speed > 0 && pending is null && !reader.TryPeek(out _))
                     {
                         var started = Stopwatch.GetTimestamp();
                         if (AdvanceOneTick()) { updates++; plugins?.Tick(updates); }
-                        tickTime += Stopwatch.GetElapsedTime(started);
-                        ticksTimed++;
+                        if (profile_)
+                        {
+                            var elapsed = Stopwatch.GetElapsedTime(started);
+                            tickTime += elapsed;
+                            var ms = elapsed.TotalMilliseconds;
+                            if (ms > maxTickMs) maxTickMs = ms;
+                            ticksTimed++;
+                        }
                         batchTicks++;
                         nextUpdate += tickInterval;
                         now = watch.Elapsed.TotalSeconds;
@@ -800,7 +958,8 @@ internal sealed class SimulationServer
                 var currentCutawaySimKey = CutawaySimKey();
                 if (currentCutawaySimKey != exportedCutawaySimKey)
                 {
-                    if (!SceneExporter.CutawayMaskMatches(world, animationState, revision, viewLevel, wallMode, cameraOrientation,
+                    ResolveFocusedHousePrivacy(out var maskWallMode, out _, out _);
+                    if (!SceneExporter.CutawayMaskMatches(world, animationState, revision, viewLevel, maskWallMode, cameraOrientation,
                             cutawayTile, cutawayRooms, CutawaySimTile(), cutawayZoom))
                         Export();
                     else
@@ -816,34 +975,49 @@ internal sealed class SimulationServer
                 var subTickAlpha = currentTickInterval > 0 && nextUpdate > now
                     ? (float)Math.Clamp(1.0 - (nextUpdate - now) / currentTickInterval, 0.0, 0.999)
                     : 0f;
+                ResolveFocusedHousePrivacy(out var effWallMode, out var effRoofsVisible, out var hideInteriorPeople);
                 if (DirectAnimationSink is { } directSink)
                 {
                     if (SceneExporter.AnimationDirect(lot, world, registry, game, SceneDirectory, house, revision, animationState, ++animationSequence, updates,
-                            viewLevel, wallMode, cameraOrientation, cutawayTile, roofsVisible, cutawayRooms: cutawayRooms, cutawaySim: CutawaySimTile(), cutawayZoom: cutawayZoom, showLoweredPortals: doorWindowBuildToolActive, subTickAlpha: subTickAlpha) is { } directFrame)
+                            viewLevel, effWallMode, cameraOrientation, cutawayTile, effRoofsVisible, cutawayRooms: cutawayRooms, cutawaySim: CutawaySimTile(), cutawayZoom: cutawayZoom, showLoweredPortals: doorWindowBuildToolActive, subTickAlpha: subTickAlpha, hideInteriorPeople: hideInteriorPeople) is { } directFrame)
                         directSink(directFrame);
+                    EmitAdjacentDirectAnimations(subTickAlpha);
                 }
                 else if (SceneExporter.Animation(lot, world, registry, game, SceneDirectory, house, revision, animationState, ++animationSequence, updates,
-                        viewLevel, wallMode, cameraOrientation, cutawayTile, roofsVisible, cutawayRooms: cutawayRooms, cutawaySim: CutawaySimTile(), cutawayZoom: cutawayZoom, showLoweredPortals: doorWindowBuildToolActive, subTickAlpha: subTickAlpha) is { } frame)
+                        viewLevel, effWallMode, cameraOrientation, cutawayTile, effRoofsVisible, cutawayRooms: cutawayRooms, cutawaySim: CutawaySimTile(), cutawayZoom: cutawayZoom, showLoweredPortals: doorWindowBuildToolActive, subTickAlpha: subTickAlpha, hideInteriorPeople: hideInteriorPeople) is { } frame)
                 {
                     Write(new { type = "animation", frame });
                 }
                 if (plugins is not null)
                 {
                     var currentEnv = plugins.Environment(house);
-                    if (currentEnv is not null || hadActivePluginEnvironment)
+                    if ((currentEnv is not null || hadActivePluginEnvironment) && !Equals(currentEnv, lastPluginEnvironment))
                     {
                         hadActivePluginEnvironment = currentEnv is not null;
+                        lastPluginEnvironment = currentEnv;
                         Write(new { type = "environment", updates, environment = currentEnv });
                     }
                 }
-                animationTime += Stopwatch.GetElapsedTime(started);
-                if (profile_ && ++animationsTimed == 120)
+                if (profile_)
                 {
-                    Console.Error.WriteLine($"Native profile: animation {animationTime.TotalMilliseconds / animationsTimed:F1} ms/frame");
-                    animationTime = TimeSpan.Zero;
-                    animationsTimed = 0;
+                    if (profileWindowStart == 0) profileWindowStart = started;
+                    animationTime += Stopwatch.GetElapsedTime(started);
+                    if (++animationsTimed == 120)
+                    {
+                        var windowSec = Math.Max(Stopwatch.GetElapsedTime(profileWindowStart).TotalSeconds, 1e-6);
+                        var avgTick = ticksTimed > 0 ? tickTime.TotalMilliseconds / ticksTimed : 0.0;
+                        var ticksPerSec = ticksTimed / windowSec;
+                        Console.Error.WriteLine(
+                            $"Native profile (speed {speed}): animation {animationTime.TotalMilliseconds / animationsTimed:F2} ms/frame, ticks {ticksTimed} ({ticksPerSec:F0}/s, avg {avgTick:F2} ms, max {maxTickMs:F1} ms)");
+                        animationTime = TimeSpan.Zero;
+                        animationsTimed = 0;
+                        tickTime = TimeSpan.Zero;
+                        ticksTimed = 0;
+                        maxTickMs = 0;
+                        profileWindowStart = Stopwatch.GetTimestamp();
+                    }
                 }
-                nextAnimation = now + 1.0 / 120;
+                nextAnimation = now + (speed >= 10 ? 1.0 / 60 : 1.0 / 120);
             }
             if (now >= nextScene && streaming)
             {
@@ -875,14 +1049,21 @@ internal sealed class SimulationServer
             var sleepSeconds = nextDeadline - afterWork;
             if (sleepSeconds > 0.0015 && !reader.TryPeek(out _))
             {
-                var sleepMs = Math.Clamp((int)(sleepSeconds * 1000.0), 1, 15);
-                var readTask = reader.WaitToReadAsync().AsTask();
-                if (!readTask.IsCompleted)
+                if (sleepSeconds < 0.004)
                 {
-                    using var delayCts = new CancellationTokenSource();
-                    var delayTask = Task.Delay(sleepMs, delayCts.Token);
-                    var completed = await Task.WhenAny(readTask, delayTask);
-                    if (completed == readTask) delayCts.Cancel();
+                    Thread.Sleep(1);
+                }
+                else
+                {
+                    var sleepMs = Math.Clamp((int)(sleepSeconds * 1000.0), 1, 15);
+                    var readTask = reader.WaitToReadAsync().AsTask();
+                    if (!readTask.IsCompleted)
+                    {
+                        using var delayCts = new CancellationTokenSource();
+                        var delayTask = Task.Delay(sleepMs, delayCts.Token);
+                        var completed = await Task.WhenAny(readTask, delayTask);
+                        if (completed == readTask) delayCts.Cancel();
+                    }
                 }
             }
             else
@@ -1109,6 +1290,8 @@ internal sealed class SimulationServer
                 streaming = (request.TryGetProperty("enabled", out var streamValue) || request.TryGetProperty("value", out streamValue)) && streamValue.ValueKind == JsonValueKind.True;
                 nextAnimation = 0;
                 result = new { enabled = streaming, framesPerSecond = 120 };
+                if (streaming && world is not null)
+                    Write(new { type = "state", state = State() });
                 break;
             case "scene":
                 var exportedPath = Export();
@@ -1260,6 +1443,11 @@ internal sealed class SimulationServer
                 result = State();
                 break;
             case "selectSim":
+                if (ConnectedNeighborhoodEnabled && TrySelectConnectedSim(request, out var connectedSelectResult))
+                {
+                    result = connectedSelectResult!;
+                    break;
+                }
                 var requestedSim = request.TryGetProperty("objectID", out var simValue) && simValue.ValueKind == JsonValueKind.Number && simValue.TryGetInt16(out var sim)
                     ? sim : throw new ArgumentException("objectID must be a person object ID.");
                 if (world?.ObjectById(requestedSim) is not XPerson)
@@ -1287,7 +1475,7 @@ internal sealed class SimulationServer
                     ? v : throw new ArgumentException("motive value required.");
                 if (!Enum.TryParse<Motive>(motiveName, true, out var motiveEnum))
                     throw new ArgumentException($"Unknown motive: {motiveName}");
-                actor[motiveEnum] = motiveValue;
+                actor[motiveEnum] = Math.Clamp(motiveValue, -100f, 100f);
                 if (motiveEnum == Motive.Mood && speed == 0) RefreshDynamicOrExport();
                 result = State();
                 break;
@@ -1375,7 +1563,10 @@ internal sealed class SimulationServer
                         plugin = entry.PackId,
                         entry = entry.Entry,
                     });
-                result = nativeEntries.Concat(pluginEntries).ToArray();
+                var doorEntries = ConnectedNeighborhoodEnabled && TryGetConnectedDoorMenuEntries(actor, target, out var connectedDoorEntries)
+                    ? connectedDoorEntries
+                    : [];
+                result = nativeEntries.Concat(doorEntries).Concat(pluginEntries).ToArray();
                 break;
             }
             case "groundMenu":
@@ -1418,6 +1609,11 @@ internal sealed class SimulationServer
             case "groundInteract":
             {
                 var actor = SelectedPerson();
+                if (ConnectedNeighborhoodEnabled)
+                {
+                    world?.CancelSyntheticDirectPositionRouteFor(actor);
+                    CancelCrossLotTransitForPerson(actor, cancelRoutes: true);
+                }
                 if (request.TryGetProperty("plugin", out var groundPack) && groundPack.ValueKind == JsonValueKind.String)
                 {
                     if (!IsHouseholdPerson(actor)) throw new InvalidOperationException("Plugin menu entries are for household Sims");
@@ -1463,6 +1659,11 @@ internal sealed class SimulationServer
             case "interact":
             {
                 var actor = SelectedPerson();
+                if (ConnectedNeighborhoodEnabled)
+                {
+                    world?.CancelSyntheticDirectPositionRouteFor(actor);
+                    CancelCrossLotTransitForPerson(actor, cancelRoutes: true);
+                }
                 var clicked = RequestObject(request, "objectID");
                 var target = InteractionMenus.Target(world!, clicked);
                 if (request.TryGetProperty("plugin", out var menuPack))
@@ -1478,6 +1679,12 @@ internal sealed class SimulationServer
                 var param0 = request.TryGetProperty("param0", out var parameterValue) && parameterValue.TryGetInt16(out var parsedParameter) ? parsedParameter : (short)0;
                 var global = request.TryGetProperty("global", out var globalValue) && globalValue.ValueKind == JsonValueKind.True;
                 if (global) throw new NotSupportedException("Global interaction choices are not yet represented by the native menu engine.");
+                if (ConnectedNeighborhoodEnabled && interactionId == ConnectedKnockDoorInteractionId &&
+                    TryPerformConnectedDoorKnock(actor, target))
+                {
+                    result = State();
+                    break;
+                }
                 var choice = InteractionMenus.Read(world!, actor, clicked).FirstOrDefault(candidate =>
                     MenuIndex(candidate) == interactionId && candidate.Parameters[0] == param0 &&
                     (plugins is null || pluginWorld is null || plugins.AllowInteraction(actor.Id, pluginWorld.Describe(target),
@@ -1517,7 +1724,7 @@ internal sealed class SimulationServer
                 if (request.TryGetProperty("subsort", out var subsortValue))
                     subsort = subsortValue.TryGetInt32(out var parsedSubsort)
                         ? parsedSubsort : throw new ArgumentException("subsort must be an integer from 0 through 7");
-                result = ObjectCatalog.Page(registry, language, category, offset, count, SceneDirectory, room, subsort, game);
+                result = ObjectCatalog.Page(registry, language, category, offset, count, SceneDirectory, room, subsort, game, CurrentCatalogLotType());
                 var requestedDoorWindowTool = editingView && category is 8 or 9;
                 if (doorWindowBuildToolActive != requestedDoorWindowTool)
                 {
@@ -1563,7 +1770,7 @@ internal sealed class SimulationServer
             {
                 EnsureLotEditingAllowed();
                 RemoveTileCursor();
-                var item = BuyObject(request);
+                var item = BuyObject(request, out var boughtPrice);
                 saveDirty = true;
                 Export();
                 result = new
@@ -1571,7 +1778,7 @@ internal sealed class SimulationServer
                     bought = true,
                     objectID = item.Id,
                     guid = unchecked((uint)(item.TypeRecord?.Key ?? 0)),
-                    price = item.Definition[(int)ObjdField.Price],
+                    price = boughtPrice,
                     budget = world!.FamilyBudget!.ReadFamilyBudget(),
                 };
                 break;
@@ -1632,12 +1839,22 @@ internal sealed class SimulationServer
                 if (!ReferenceEquals(actor, requestedActor)) throw new ArgumentException("Action belongs to another Sim");
                 var token = request.TryGetProperty("token", out var tokenValue) && tokenValue.ValueKind == JsonValueKind.String
                     ? tokenValue.GetString() : null;
+                if (ConnectedNeighborhoodEnabled && TryHandleCancelConnectedTransitAction(actor, token))
+                {
+                    result = State();
+                    break;
+                }
                 var prefix = $"native-{actor.Id}-";
                 if (token is null || !token.StartsWith(prefix, StringComparison.Ordinal) ||
                     !int.TryParse(token.AsSpan(prefix.Length), out var sequence))
                     throw new ArgumentException("Action is no longer cancellable");
                 if (!world!.CancelInteractionAction(actor, sequence))
                     throw new ArgumentException("Action is no longer cancellable");
+                if (ConnectedNeighborhoodEnabled)
+                {
+                    world.CancelSyntheticDirectPositionRouteFor(actor);
+                    CancelCrossLotTransitForPerson(actor, cancelRoutes: true);
+                }
                 result = State();
                 break;
             }
@@ -1794,6 +2011,12 @@ internal sealed class SimulationServer
                             throw new InvalidOperationException($"Neighborhood {Neighborhoods.Current} is not installed in this profile");
                         this.neighborhood = null;
                         this.neighborhoodPath = null;
+                        globallyRemovedNeighbors.Clear();
+                        world?.ClearAllRemovedNeighbors();
+                        foreach (var live in lotPool.LiveSessions.Values)
+                            live.World.ClearAllRemovedNeighbors();
+                        if (ConnectedNeighborhoodEnabled && world is null)
+                            ClearConnectedNeighborhoodPoolOnClose();
                         if (registry is not null)
                             registry = registry.WithRefreshedPeople(Path.Combine(nghDir, "Characters"));
                     }
@@ -1805,10 +2028,25 @@ internal sealed class SimulationServer
                     var installRoot = ResolveInstallRoot();
                     foreach (var singleEdit in editSpec.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
                         NeighborhoodEdits.Apply(singleEdit, installRoot, profile, language, neighborhoodMode);
+                    globallyRemovedNeighbors.Clear();
+                    world?.ClearAllRemovedNeighbors();
+                    foreach (var live in lotPool.LiveSessions.Values)
+                        live.World.ClearAllRemovedNeighbors();
+                    var nghDiskPath = Path.Combine(Neighborhoods.UserData(profile), "Neighborhood.iff");
                     if (world is null)
                     {
                         this.neighborhood = null;
                         this.neighborhoodPath = null;
+                    }
+                    else if (File.Exists(nghDiskPath))
+                    {
+                        this.neighborhoodPath = nghDiskPath;
+                        this.neighborhood = IffFile.Open(nghDiskPath);
+                        if (ConnectedNeighborhoodEnabled)
+                        {
+                            SyncAllLiveWorldsFromNeighborhood(globallyRemovedNeighbors);
+                            neighborhoodManager.SyncFromUserData(Neighborhoods.UserData(profile), language);
+                        }
                     }
                     if (registry is not null)
                         registry = registry.WithRefreshedPeople(Path.Combine(Neighborhoods.UserData(profile), "Characters"));
@@ -1822,8 +2060,38 @@ internal sealed class SimulationServer
                 var webScenes = request.TryGetProperty("webScenes", out var webScenesValue) && webScenesValue.ValueKind == JsonValueKind.True;
                 var exportInstallRoot = ResolveInstallRoot();
                 NeighborhoodExport.GameRoot = game;
+                if (neighborhoodMode is 2 or 3 or 4 or 5 or 7)
+                    lastTravelNeighborhoodMode = neighborhoodMode;
                 result = NeighborhoodExport.Export(outputDirectory, neighborhoodMode, profile, language, dataRoot, exportInstallRoot,
                     includeRenderScenes: webScenes, existingRegistry: registry, mountRoot: game);
+                if (neighborhoodMode is 2 or 3 or 5 or 7)
+                {
+                    var manifestPath = Path.Combine(outputDirectory, "neighborhood.json");
+                    var slot = TravelFilterSlotForMode(neighborhoodMode);
+                    var fallback = neighborhoodMode is 5 or 7 ? 0x400 : 2;
+                    var filter = TravelFilter.Load(Neighborhoods.UserData(profile), slot, language, fallback);
+                    if (File.Exists(manifestPath) && JsonNode.Parse(File.ReadAllBytes(manifestPath)) is JsonObject manifestObj)
+                    {
+                        manifestObj["travelFilter"] = filter;
+                        if (neighborhoodMode is 2 or 3 or 5 && manifestObj["entries"] is JsonArray entriesArray)
+                        {
+                            foreach (var node in entriesArray)
+                            {
+                                if (node is not JsonObject entryObj) continue;
+                                var house = entryObj["house"]?.GetValue<int>() ?? 0;
+                                var residential = entryObj["residential"]?.GetValue<bool>() == true;
+                                var isExpansionCommunity = !residential && (
+                                    (neighborhoodMode == 2 && house is >= 21 and <= 30) ||
+                                    (neighborhoodMode == 3 && house is >= 40 and <= 49) ||
+                                    (neighborhoodMode == 5 && house is >= 81 and <= 89));
+                                if (isExpansionCommunity && entryObj["community"]?.GetValue<bool>() != true)
+                                    entryObj["community"] = true;
+                            }
+                        }
+                        WriteReplace(manifestPath, JsonSerializer.SerializeToUtf8Bytes(manifestObj, new JsonSerializerOptions { WriteIndented = true }));
+                        result = manifestObj;
+                    }
+                }
                 break;
             }
             case "saveBackups":
@@ -1890,25 +2158,168 @@ internal sealed class SimulationServer
             }
             case "cheat":
             {
-                var code = request.TryGetProperty("code", out var codeValue) && codeValue.ValueKind == JsonValueKind.String
+                var rawCode = request.TryGetProperty("code", out var codeValue) && codeValue.ValueKind == JsonValueKind.String
                     ? codeValue.GetString()?.Trim() : null;
-                if (string.Equals(code, "move_objects on", StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(code, "move_objects off", StringComparison.OrdinalIgnoreCase))
+                if (string.IsNullOrEmpty(rawCode))
                 {
-                    if (world is null) throw new InvalidOperationException("There is no loaded native lot.");
-                    var enabled = code!.EndsWith("on", StringComparison.OrdinalIgnoreCase);
-                    world.FindLocationWaterOverride = enabled;
-                    Export();
-                    result = new { applied = true, code = enabled ? "move_objects on" : "move_objects off", moveObjects = enabled };
+                    result = new { applied = false, code = "" };
                     break;
                 }
-                if (!string.Equals(code, "rosebud", StringComparison.OrdinalIgnoreCase))
-                    throw new ArgumentException("Unknown cheat code.");
-                if (world?.FamilyBudget is not FamilyBudget budget || budget.ActiveFamily is null)
-                    throw new InvalidOperationException("Rosebud requires an active family on a lot.");
-                budget.AlterFamilyBudget(0, -1000);
-                Export();
-                result = new { applied = true, code = "rosebud", amount = 1000, budget = budget.ReadFamilyBudget() };
+
+                string[] knownCheats =
+                [
+                    "rosebud", "klapaucius", "move_objects", "autonomy", "set_hour",
+                    "water_tool", "map_edit", "magic_tokens", "nessie", "cars", "help"
+                ];
+
+                var rawSegments = rawCode.Split(';')
+                    .Select(s => s.Trim())
+                    .Where(s => s.Length > 0)
+                    .ToArray();
+                if (rawSegments.Length == 0)
+                {
+                    result = new { applied = false, code = "" };
+                    break;
+                }
+
+                object? lastResult = null;
+                foreach (var rawSegment in rawSegments)
+                {
+                    var tokens = rawSegment.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                    if (tokens[0] == "!")
+                    {
+                        if (string.IsNullOrEmpty(lastCheatCommand))
+                            throw new ArgumentException("Sorry: No previous cheat.");
+                        if (tokens.Length == 1)
+                        {
+                            tokens = lastCheatCommand.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                        }
+                        else
+                        {
+                            var prevCmd = lastCheatCommand.Split(' ', StringSplitOptions.RemoveEmptyEntries)[0];
+                            tokens = [prevCmd, .. tokens[1..]];
+                        }
+                    }
+
+                    var segment = string.Join(' ', tokens);
+                    var cmd = tokens[0].ToLowerInvariant();
+                    switch (cmd)
+                    {
+                        case "rosebud":
+                        case "klapaucius":
+                        {
+                            if (world?.FamilyBudget is not FamilyBudget budget || budget.ActiveFamily is null)
+                                throw new InvalidOperationException("Rosebud requires an active family on a lot.");
+                            budget.AlterFamilyBudget(0, -1000);
+                            Export();
+                            lastResult = new { applied = true, code = cmd, amount = 1000, budget = budget.ReadFamilyBudget() };
+                            break;
+                        }
+                        case "move_objects":
+                        {
+                            if (tokens.Length != 2 ||
+                                (!string.Equals(tokens[1], "on", StringComparison.OrdinalIgnoreCase) &&
+                                 !string.Equals(tokens[1], "off", StringComparison.OrdinalIgnoreCase)))
+                                throw new ArgumentException("Cheat Error: Usage: move_objects <on|off>");
+                            if (world is null) throw new InvalidOperationException("There is no loaded native lot.");
+                            var enabled = string.Equals(tokens[1], "on", StringComparison.OrdinalIgnoreCase);
+                            world.FindLocationWaterOverride = enabled;
+                            Export();
+                            lastResult = new { applied = true, code = enabled ? "move_objects on" : "move_objects off", moveObjects = enabled };
+                            break;
+                        }
+                        case "autonomy":
+                        {
+                            if (tokens.Length != 2 || !int.TryParse(tokens[1], out var level) || level is < 0 or > 100)
+                                throw new ArgumentException("Cheat Error: Usage: autonomy <0-100>");
+                            if (world is null) throw new InvalidOperationException("There is no loaded native lot.");
+                            world.AutonomyForced = level > 0;
+                            Export();
+                            lastResult = new { applied = true, code = $"autonomy {level}", autonomy = level, freeWill = world.AutonomyForced };
+                            break;
+                        }
+                        case "set_hour":
+                        {
+                            if (tokens.Length != 2 || !int.TryParse(tokens[1], out var parsedHour) || parsedHour is < 1 or > 24)
+                                throw new ArgumentException("Cheat Error: Usage: set_hour <1-24>");
+                            if (world is null) throw new InvalidOperationException("There is no loaded native lot.");
+                            var normalizedHour = parsedHour == 24 ? 0 : parsedHour;
+                            world.Clock.Restore(normalizedHour, world.Clock.Minute, world.Clock.Second);
+                            world[SimulationGlobal.Hour] = checked((short)world.Clock.Hour);
+                            world[SimulationGlobal.Minute] = checked((short)world.Clock.Minute);
+                            world[SimulationGlobal.Second] = checked((short)world.Clock.Second);
+                            Export();
+                            lastResult = new { applied = true, code = $"set_hour {parsedHour}", hour = world.Clock.Hour };
+                            break;
+                        }
+                        case "water_tool":
+                        {
+                            if (tokens.Length > 1)
+                                throw new ArgumentException("Cheat Error: Usage: water_tool");
+                            lastResult = new { applied = true, code = "water_tool" };
+                            break;
+                        }
+                        case "map_edit":
+                        {
+                            if (tokens.Length != 2 ||
+                                (!string.Equals(tokens[1], "on", StringComparison.OrdinalIgnoreCase) &&
+                                 !string.Equals(tokens[1], "off", StringComparison.OrdinalIgnoreCase)))
+                                throw new ArgumentException("Cheat Error: Usage: map_edit <on|off>");
+                            var enabled = string.Equals(tokens[1], "on", StringComparison.OrdinalIgnoreCase);
+                            lastResult = new { applied = true, code = enabled ? "map_edit on" : "map_edit off", mapEdit = enabled };
+                            break;
+                        }
+                        case "magic_tokens":
+                        {
+                            if (tokens.Length > 2)
+                                throw new ArgumentException("Cheat Error: Usage: magic_tokens [0-10000]");
+                            var amount = 1000;
+                            if (tokens.Length == 2 && (!int.TryParse(tokens[1], out amount) || amount is < 0 or > 10000))
+                                throw new ArgumentException("Cheat Error: Usage: magic_tokens [0-10000]");
+                            var targetPerson = SelectedPerson();
+                            if (world is null || targetPerson is null)
+                                throw new InvalidOperationException("magic_tokens requires a selected Sim on a loaded lot.");
+                            var neighborId = targetPerson[PersonData.NeighborId];
+                            var inv = world.NeighborInventory(neighborId);
+                            inv.Add(7, unchecked((int)NeighborhoodExport.MagiCoinTokenGuid), checked((short)amount));
+                            Export();
+                            lastResult = new { applied = true, code = "magic_tokens", amount, neighborId };
+                            break;
+                        }
+                        case "nessie":
+                        {
+                            Write(new { type = "neighborhoodCheat", code = "nessie" });
+                            lastResult = new { applied = true, code = "nessie" };
+                            break;
+                        }
+                        case "cars":
+                        {
+                            var carSpeed = tokens.Length >= 2 && int.TryParse(tokens[1], out var parsedSpeed) && parsedSpeed is >= 1 and <= 2 ? parsedSpeed : 1;
+                            var carCount = tokens.Length >= 3 && int.TryParse(tokens[2], out var parsedCount) && parsedCount > 0 ? Math.Min(parsedCount, 40) : 1;
+                            Write(new { type = "neighborhoodCheat", code = "cars", speed = carSpeed, count = carCount });
+                            lastResult = new { applied = true, code = "cars", speed = carSpeed, count = carCount };
+                            break;
+                        }
+                        case "help":
+                        {
+                            if (tokens.Length > 2)
+                                throw new ArgumentException("Cheat Error: Usage: help [search]");
+                            var filter = tokens.Length == 2 ? tokens[1] : null;
+                            var matches = string.IsNullOrEmpty(filter)
+                                ? knownCheats
+                                : knownCheats.Where(c => c.Contains(filter, StringComparison.OrdinalIgnoreCase)).ToArray();
+                            var text = matches.Length > 0
+                                ? string.Join(", ", matches)
+                                : "Sorry, no cheats match the search string.";
+                            lastResult = new { applied = true, code = segment, cheats = matches, message = text };
+                            break;
+                        }
+                        default:
+                            throw new ArgumentException("Sorry: No such cheat.");
+                    }
+                    lastCheatCommand = segment;
+                }
+                result = lastResult;
                 break;
             }
             case "pictureInPicture":
@@ -1945,9 +2356,10 @@ internal sealed class SimulationServer
             case "modeMusic":
             {
                 var mode = request.GetProperty("mode").GetString()!;
-                // Mode music changes stop active background tracks without killing global ambient audio,
-                // pausing lot ambience in Buy, Build, and Options modes while playing it in Live mode.
-                audio!.StopGroup("MUSIC");
+                // Mode music changes stop active background tracks without killing in-world object music
+                // or global ambient audio, pausing lot ambience in Buy, Build, and Options modes while
+                // playing it in Live mode.
+                audio!.StopModeMusic();
                 var isLive = mode.Equals("live", StringComparison.OrdinalIgnoreCase);
                 audio.SetMusicModeActive(!isLive);
                 var track = ModeMusic(mode);
@@ -1999,7 +2411,8 @@ internal sealed class SimulationServer
                         house = envelope.House;
                     var removePacks = request.TryGetProperty("removePacks", out var removeValue) && removeValue.ValueKind == JsonValueKind.True;
                     compatibility = SaveCompatibility.Check(envelope.PackFingerprint, envelope.Packs,
-                        packFingerprint, plugins?.MigratedPacks ?? [], removePacks);
+                        packFingerprint, plugins?.MigratedPacks ?? [], removePacks,
+                        envelope.CorePackFingerprint, corePackFingerprint);
                     var removedPackIds = compatibility.Removed
                         .Select(item => item.Split('@', 2)[0])
                         .ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -2035,10 +2448,7 @@ internal sealed class SimulationServer
                     objectMigrations: compatibility?.Objects,
                     stripMissingObjects: compatibility?.Migrated == true,
                     existingRegistry: registry);
-                suspendedHomeLot = envelope?.SuspendedHome is { } restoredHome
-                    ? new SuspendedHomeLot(restoredHome.HomeHouse, restoredHome.HomeFamilyChunkId,
-                        Convert.FromBase64String(restoredHome.LotState), restoredHome.Runtime, restoredHome.Speed)
-                    : null;
+                refreshedPersonFiles.Clear();
                 setup.World.AutonomyForced = world?.AutonomyForced;
                 ResetSeasonalOutfits();
                 lot = setup.Lot;
@@ -2065,6 +2475,8 @@ internal sealed class SimulationServer
                     : runtime.PersonAnimations;
                 RestorePersonAnimationRuntime(world, animationsToRestore);
                 RestoreDialogRecords(world, runtime.Dialogs);
+                if (runtime.ClockTicks is { } loadedClockTicks)
+                    world.Clock.RestoreProgress(loadedClockTicks, runtime.ClockDay ?? 0);
                 if (viewerScale != 0) world[SimulationGlobal.ZoomLevelSML] = viewerScale;
                 // Entering a house resets the viewer mode to Live, overriding any mode saved in the lot
                 // file.
@@ -2075,6 +2487,11 @@ internal sealed class SimulationServer
                 neighborhoodPath = setup.NeighborhoodPath;
                 neighborhood = setup.Neighborhood;
                 activeFamilyChunkId = setup.ActiveFamilyChunkId;
+                if (activeFamilyChunkId is null && !world.WalkOrder.OfType<XPerson>().Any(p => p[PersonData.FamilyNumber] > 0))
+                    world[SimulationGlobal.SimlessBuildMode] = 1;
+                else if (activeFamilyChunkId is not null)
+                    world[SimulationGlobal.SimlessBuildMode] = 0;
+                RestoreTravelRuntimeState(world, userData, house, activeFamilyChunkId, setup.ActiveFamily, runtime, envelope);
                 HydrateTypeAttributesFromNeighborhood(world, lot, neighborhood);
                 world.UiTextFile ??= registry?.UiText;
                 AttachTutorialFlash(world);
@@ -2092,7 +2509,10 @@ internal sealed class SimulationServer
                 lastRunningSpeed = runtime.Speed;
                 dialogResumeSpeed = HasBlockingDialog(world) && runtime.Speed > 0 ? runtime.Speed : 0;
                 AttachNoticeListener(setup.World);
+                RestoreConnectedNeighborhoodFromEnvelope(envelope, userData);
                 audio?.Reset();
+                if (audio?.Enabled == true)
+                    audio.PlayLotAmbience(house);
                 Export();
                 if (compatibility is { Migrated: true } && setup.LotMigration is { } lotMigration)
                 {
@@ -2118,18 +2538,31 @@ internal sealed class SimulationServer
                 break;
             }
             case "travelFilter":
-                TravelFilter.Save(Neighborhoods.UserData(profile), TravelFilter.Unleashed,
+            {
+                var filterMode = request.TryGetProperty("mode", out var modeValue) && modeValue.ValueKind == JsonValueKind.Number
+                    ? modeValue.GetInt32()
+                    : (lastTravelNeighborhoodMode ?? 4);
+                var slot = TravelFilterSlotForMode(filterMode);
+                TravelFilter.Save(Neighborhoods.UserData(profile), slot,
                     request.GetProperty("filter").GetInt32(), language);
-                result = new { saved = true };
+                result = new { saved = true, mode = filterMode, slot };
                 break;
+            }
             case "plugins": result = new { plugins = plugins?.Statuses ?? [], panels = plugins?.Panels ?? [] }; break;
             case "pluginPanels": result = new { panels = plugins?.PanelState() ?? [] }; break;
             case "pluginAction":
                 result = (plugins ?? throw new InvalidOperationException("No pack plugins are loaded.")).PanelAction(
                     request.GetProperty("packId").GetString() ?? "", request.GetProperty("panelId").GetString() ?? "", request.GetProperty("action").GetString() ?? "");
                 break;
-            case "quit": running = false; result = new { quit = true }; break;
-            default: error = $"native engine does not implement '{op}'"; break;
+            case "quit":
+                ReconcileCommittedVacationFieldOnDisk();
+                running = false;
+                result = new { quit = true };
+                break;
+            default:
+                if (TryHandleConnectedNeighborhoodCommand(request, op, out result, out error)) break;
+                error = $"native engine does not implement '{op}'";
+                break;
         }
         if (error is not null) Write(new { type = "response", id, operation = op, ok = false, error });
         else Write(new { type = "response", id, operation = op, ok = true, result });
@@ -2139,6 +2572,12 @@ internal sealed class SimulationServer
     private object SaveLotToSlot(string slot, bool isCanonical, bool saveLot)
     {
         if (world is null || lot is null) throw new InvalidOperationException("There is no native lot to save.");
+        RefreshPendingPersonPortraits();
+        if (ConnectedNeighborhoodEnabled)
+        {
+            world.CancelSyntheticDirectPositionRoutes();
+            world.SaveAllPersistentPersonData();
+        }
         UpdatePreSaveState(world, lot);
         if (world.SavedSimulationState is { } savedSimi)
         {
@@ -2149,7 +2588,11 @@ internal sealed class SimulationServer
         var saved = world.WriteSavedSimulationStateTo(withObjects);
         Directory.CreateDirectory(Saves);
         var saveSpeed = speed > 0 ? speed : lastRunningSpeed;
-        var runtimeMetadata = CaptureRuntimeMetadata(world, saved.Bytes.Span, saveSpeed);
+        var savedSuspendedHome = suspendedHomeLot is { } suspendedHome
+            ? new SavedSuspendedHomeLot(suspendedHome.HomeHouse, suspendedHome.HomeFamilyChunkId,
+                Convert.ToBase64String(suspendedHome.LotBytes), suspendedHome.Runtime, suspendedHome.Speed)
+            : null;
+        var runtimeMetadata = CaptureRuntimeMetadata(world, saved.Bytes.Span, saveSpeed, savedSuspendedHome);
         var runtimeJson = JsonSerializer.SerializeToUtf8Bytes(runtimeMetadata, Json);
         WriteReplace(SavePath(slot), saved.Bytes);
         WriteReplace(SaveRuntimePath(slot), runtimeJson);
@@ -2165,7 +2608,8 @@ internal sealed class SimulationServer
             // 40–49) only save when an active family is present.
             var ordinarySimulationMode = world[SimulationGlobal.SimlessBuildMode] == 0;
             var directNeighborhoodSave = ordinarySimulationMode &&
-                (house is >= 20 and <= 30 or >= 81 and <= 89 or >= 93 and <= 98 ||
+                ((ConnectedNeighborhoodEnabled && IsVisitingAwayLot) ||
+                 house is >= 20 and <= 30 or >= 81 and <= 89 or >= 93 and <= 98 ||
                  (house is >= 40 and <= 49
                      ? activeFamilyChunkId is null or 0
                      : Neighborhoods.IsCommunityLot(neighborhoodUserData, house)));
@@ -2182,9 +2626,28 @@ internal sealed class SimulationServer
                 lotSkipped = "away";
             }
         }
+        if (lotWritten && activeFamilyChunkId is { } famId && world.FamilyBudget is FamilyBudget fb && fb.ActiveFamily is { } fam)
+        {
+            var committedVac = house is >= 40 and <= 49 ? house : 0;
+            if (fam.Field0x13C != committedVac)
+                fb.ActiveFamily = fam.WithFields(field0x13C: committedVac);
+            committedVacationState = (famId, committedVac);
+        }
+        lot = saved;
+        if (ConnectedNeighborhoodEnabled && neighborhood is null)
+        {
+            var userData = Neighborhoods.UserData(profile);
+            var nghFallback = Path.Combine(userData, "Neighborhood.iff");
+            if (File.Exists(nghFallback))
+            {
+                neighborhoodPath ??= nghFallback;
+                neighborhood = IffFile.Open(nghFallback);
+            }
+        }
+        var connectedState = CaptureConnectedNeighborhoodSaveState(saveLot);
         if (neighborhood is not null && neighborhoodPath is not null)
         {
-            PersistNeighborhoodStateImmediately();
+            PersistNeighborhoodStateImmediatelyCore(commitVacationField: lotWritten);
         }
         else
         {
@@ -2199,16 +2662,13 @@ internal sealed class SimulationServer
         Directory.CreateDirectory(Path.GetDirectoryName(envelopePath)!);
         var backup = File.Exists(envelopePath) ? SaveCompatibility.Backup(profile, storageSlot, envelopePath) : null;
         var nghBytesForSave = !isCanonical && neighborhood is not null ? Convert.ToBase64String(neighborhood.Bytes.Span) : null;
-        var savedSuspendedHome = suspendedHomeLot is { } suspendedHome
-            ? new SavedSuspendedHomeLot(suspendedHome.HomeHouse, suspendedHome.HomeFamilyChunkId,
-                Convert.ToBase64String(suspendedHome.LotBytes), suspendedHome.Runtime, suspendedHome.Speed)
-            : null;
         var envelope = new SaveEnvelope(2, "native-simsengine-v0", packFingerprint, house, updates,
             Convert.ToBase64String(saved.Bytes.Span),
             plugins?.MigratedPacks.Select(pack => new SaveCompatibility.PackRecord(pack.Id, pack.Version)).ToArray() ?? [],
-            plugins?.Save() ?? [], Neighborhoods.Current, runtimeMetadata, nghBytesForSave, savedSuspendedHome);
+            plugins?.Save() ?? [], Neighborhoods.Current, runtimeMetadata with { SuspendedHome = null },
+            nghBytesForSave, savedSuspendedHome, runtimeMetadata.RestrictedActivePersonKeys, connectedState,
+            CorePackFingerprint: corePackFingerprint);
         WriteReplace(envelopePath, JsonSerializer.SerializeToUtf8Bytes(envelope, Json));
-        lot = saved;
         ResetLotValuationBaseline();
         saveDirty = false;
         return new { slot, path = envelopePath, saved = true, bytes = saved.Bytes.Length, backup, updates, canonical = isCanonical, lot = lotWritten, lotSkipped };
@@ -2222,6 +2682,10 @@ internal sealed class SimulationServer
             SaveLotToSlot("manual", isCanonical: false, saveLot: true);
             saved = true;
         }
+        else
+        {
+            ReconcileCommittedVacationFieldOnDisk();
+        }
         RemoveTileCursor();
         ResetSeasonalOutfits();
         audio?.Reset();
@@ -2233,6 +2697,8 @@ internal sealed class SimulationServer
         neighborhood = null;
         neighborhoodPath = null;
         suspendedHomeLot = null;
+        committedVacationState = null;
+        refreshedPersonFiles.Clear();
         simulationError = null;
         saveDirty = false;
         simulatorBlocked = false;
@@ -2267,6 +2733,9 @@ internal sealed class SimulationServer
         editingView = false;
         doorWindowBuildToolActive = false;
         roofsVisible = false;
+        pendingAutonomousReturnHomes.Clear();
+        globallyRemovedNeighbors.Clear();
+        if (ConnectedNeighborhoodEnabled) ClearConnectedNeighborhoodPoolOnClose();
         return new { closed = true, saved, house = 0 };
     }
 
@@ -2316,10 +2785,18 @@ internal sealed class SimulationServer
         AttachNoticeListener(world);
         RestorePersonAnimationRuntime(world, runtime.PersonAnimations);
         RestoreDialogRecords(world, runtime.Dialogs);
-        if (setup.ActiveFamily is { Members.Count: > 0 } activeFamily &&
-            !world.WalkOrder.OfType<XPerson>().Any(p => activeFamily.Members.Contains(unchecked((uint)(p.TypeRecord?.Key ?? 0)))))
+        if (runtime.ClockTicks is { } openedClockTicks)
+            world.Clock.RestoreProgress(openedClockTicks, runtime.ClockDay ?? 0);
+        RestoreTravelRuntimeState(world, userData, house, activeFamilyChunkId, setup.ActiveFamily, runtime);
+        ClampAwayLotEditingState();
+        if (setup.ActiveFamily is { Members.Count: > 0 } activeFamily)
         {
-            memberInstantiation = EnsureSelectedHouseholdMember(activeFamily, spawnCenter?.X ?? LotWidth / 2, spawnCenter?.Y ?? LotHeight / 2);
+            var expectedKeys = (world.FamilyBudget as FamilyBudget)?.RestrictedActivePersonKeys
+                ?? activeFamily.Members.Select(static m => unchecked((int)m)).ToArray();
+            if (!world.WalkOrder.OfType<XPerson>().Any(p => expectedKeys.Contains(p.TypeRecord?.Key ?? 0)))
+            {
+                memberInstantiation = EnsureSelectedHouseholdMember(activeFamily, spawnCenter?.X ?? LotWidth / 2, spawnCenter?.Y ?? LotHeight / 2);
+            }
         }
         selectedSim = DefaultSelectedSimId();
         SyncSelectedSimFlags(world, selectedSim);
@@ -2336,10 +2813,12 @@ internal sealed class SimulationServer
             var (_, _, _, _, moveInstantiation) = MoveInFamilyCore(famId, spawnCenter?.X ?? LotWidth / 2, spawnCenter?.Y ?? LotHeight / 2);
             memberInstantiation = moveInstantiation;
             if (world is not null) world[SimulationGlobal.SimlessBuildMode] = 0;
+            if (ConnectedNeighborhoodEnabled) RegisterOpenedLotInPool();
         }
         else
         {
             InitializeViewLevelFromSelectedSim();
+            if (ConnectedNeighborhoodEnabled) RegisterOpenedLotInPool();
             Export();
         }
         if (audio?.Enabled == true)
@@ -2457,6 +2936,13 @@ internal sealed class SimulationServer
                 world.PendingLotSwitch = null;
                 if (TryApplyPendingLotSwitch(world, pendingLotSwitch)) return true;
             }
+            if (ConnectedNeighborhoodEnabled)
+                ProcessPendingAutonomousReturnHomes();
+            if (RefreshPendingPersonPortraits())
+            {
+                saveDirty = true;
+                Write(new { type = "state", state = State() });
+            }
             if (selectedSim == 0 &&
                 (PanelPeople().FirstOrDefault(p => IsHouseholdPerson(p) && IsControllableHuman(p))
                  ?? PanelPeople().FirstOrDefault(IsHouseholdPerson)) is { } arrivedPerson)
@@ -2486,6 +2972,7 @@ internal sealed class SimulationServer
                 SetSimulationSpeed(0, blockingDialog: true);
                 Export();
             }
+            if (ConnectedNeighborhoodEnabled) TickConnectedNeighborhoodSessions();
             return true;
         }
         catch (Exception error) when (error is not OperationCanceledException and not OutOfMemoryException)
@@ -2643,7 +3130,23 @@ internal sealed class SimulationServer
         }
     }
 
-    private XObject BuyObject(JsonElement request)
+    private CatalogLotType CurrentCatalogLotType()
+    {
+        if (world is null || world[SimulationGlobal.SimlessBuildMode] == 0)
+            return CatalogLotType.Residential;
+        var userData = Path.GetDirectoryName(neighborhoodPath) ?? Neighborhoods.UserData(profile);
+        return house switch
+        {
+            >= 21 and <= 31 => CatalogLotType.Downtown,
+            >= 40 and <= 49 => CatalogLotType.Vacation,
+            >= 81 and <= 89 => CatalogLotType.StudioTown,
+            >= 93 and <= 99 => CatalogLotType.MagicTown,
+            _ when house > 0 && Neighborhoods.IsCommunityLot(userData, house) => CatalogLotType.Community,
+            _ => CatalogLotType.Residential,
+        };
+    }
+
+    private XObject BuyObject(JsonElement request, out int catalogPrice)
     {
         var current = world ?? throw new InvalidOperationException("There is no loaded native lot.");
         if (speed != 0) throw new InvalidOperationException("Pause the simulation before editing objects");
@@ -2654,10 +3157,11 @@ internal sealed class SimulationServer
         var guid = request.TryGetProperty("guid", out var guidValue) && guidValue.TryGetUInt32(out var parsedGuid)
             ? parsedGuid : throw new ArgumentException("guid must be an unsigned 32-bit object GUID");
         var entry = registry?.Find(guid) ?? throw new ArgumentException("Object is not in the loaded catalog");
-        if (!ObjectCatalog.TryGetEntry(entry, language, out var catalogItem) || catalogItem is null)
-            throw new ArgumentException("Object is not a supported residential catalog item");
+        if (!ObjectCatalog.TryGetEntry(entry, language, CurrentCatalogLotType(), out var catalogItem) || catalogItem is null)
+            throw new ArgumentException("Object is not a supported catalog item");
 
         var price = catalogItem.Price;
+        catalogPrice = price;
         var isFireplace = entry.Definition[ObjdField.RoomSort] == 0 && entry.Definition[ObjdField.BuildModeType] == 5;
         if (!isFireplace && price > budget.ReadFamilyBudget()) throw new InvalidOperationException("Insufficient family funds");
         var x = Coordinate(request, "x");
@@ -2777,7 +3281,8 @@ internal sealed class SimulationServer
         var item = current.ObjectById(id);
         if (item is null || (item is XPerson && !current.CanSellObject(item))) throw new ArgumentException("Object cannot be sold");
         if (!current.CanSellObject(item)) throw new InvalidOperationException("Object cannot be sold");
-        var lead = MultiTileMembers(current, item).FirstOrDefault() ?? item;
+        var soldMembers = MultiTileMembers(current, item);
+        var lead = soldMembers.FirstOrDefault() ?? item;
         var spawnGuid = ResolveCatalogSpawnGuid(lead);
         var leadPosition = lead.Position;
         var leadDirectionFlag = (byte)(1 << (lead[ObjectData.Direction] & 6));
@@ -2787,6 +3292,8 @@ internal sealed class SimulationServer
         var buildMode = ObjectBuildModeType(item);
         var portalEdits = CapturePortalWallEdits(current, item, resetToDefault: true);
         var baseRefund = current.SellObject(item);
+        foreach (var member in soldMembers) audio?.RemoveOwner(member.Id);
+        audio?.RemoveOwner(item.Id);
         ApplyPortalWallEdits(portalEdits);
         var refund = SimulationWorld.HandResaleValue(baseRefund, buildMode);
         budget.AlterFamilyBudget(buildMode == 0 ? 6 : 7, -refund);
@@ -2877,7 +3384,17 @@ internal sealed class SimulationServer
     private void ApplyPortalWallEdits(IReadOnlyList<(int Level, int OwnerX, int OwnerY, byte Bit, byte Style)> edits)
     {
         if (edits.Count == 0 || lot is not { } currentLot) return;
-        var anyChanged = false;
+        currentLot = ApplyPortalWallEditsToLot(currentLot, edits, out var anyChanged);
+        lot = currentLot;
+        if (anyChanged && world is { } activeWorld) RefreshWorldRoomMaps(activeWorld, currentLot);
+    }
+
+    private static IffFile ApplyPortalWallEditsToLot(
+        IffFile currentLot,
+        IEnumerable<(int Level, int OwnerX, int OwnerY, byte Bit, byte Style)> edits,
+        out bool anyChanged)
+    {
+        anyChanged = false;
         foreach (var group in edits.GroupBy(edit => edit.Level))
         {
             var chunkId = (ushort)(group.Key == 1 ? 2 : 102);
@@ -2899,8 +3416,7 @@ internal sealed class SimulationServer
                 anyChanged = true;
             }
         }
-        lot = currentLot;
-        if (anyChanged && world is { } activeWorld) RefreshWorldRoomMaps(activeWorld, currentLot);
+        return currentLot;
     }
 
     private sealed class UnconstrainedFamilyBudget : IFamilyBudget
@@ -3087,7 +3603,7 @@ internal sealed class SimulationServer
     /// <summary>Tracks committed build tool operations and financial charges against expense category 7.
     /// Undoing an action is refused if the refund reversal exceeds available household funds, and loading a
     /// lot or committing Buy-mode edits clears history.</summary>
-    private interface IBuildHistoryEntry
+    internal interface IBuildHistoryEntry
     {
         int Charge { get; }
     }
@@ -3097,7 +3613,12 @@ internal sealed class SimulationServer
         public short CurrentId { get; set; } = currentId;
     }
 
-    private sealed record ArchitectureEdit(IffFile Before, IffFile After, int Charge, string? StrokeId = null) : IBuildHistoryEntry;
+    private sealed record DemolishedOpeningRecord(BuildObjectToken Token, uint Guid, ObjectPosition Position,
+        byte DirectionFlag, short SavedCurrentValue,
+        IReadOnlyList<(int Level, int OwnerX, int OwnerY, byte Bit, byte Style)> ResetWallEdits);
+
+    private sealed record ArchitectureEdit(IffFile Before, IffFile After, int Charge, string? StrokeId = null,
+        IReadOnlyList<DemolishedOpeningRecord>? DemolishedOpenings = null) : IBuildHistoryEntry;
     private sealed record BuildBuyEdit(BuildObjectToken Token, uint Guid, ObjectPosition Position, byte DirectionFlag,
         int Charge, IffFile? LotBefore, IffFile? LotAfter) : IBuildHistoryEntry;
     private sealed record BuildMoveEdit(BuildObjectToken Token, ObjectPosition OldPosition, byte OldDirectionFlag,
@@ -3239,9 +3760,36 @@ internal sealed class SimulationServer
         switch (edit)
         {
             case ArchitectureEdit arch:
+                if (!undo && arch.DemolishedOpenings is { Count: > 0 } redoDemolish)
+                {
+                    foreach (var rec in redoDemolish)
+                    {
+                        if (current.ObjectById(rec.Token.CurrentId) is { } portal)
+                        {
+                            current.DemolishObject(portal, runCleanup: true);
+                            liveTokens.Remove(rec.Token.CurrentId);
+                        }
+                    }
+                }
                 lot = undo ? arch.Before : arch.After;
                 lotValuationEdited = true;
                 RefreshWorldRoomMaps(current, lot);
+                if (undo && arch.DemolishedOpenings is { Count: > 0 } undoRestore)
+                {
+                    foreach (var rec in undoRestore)
+                    {
+                        ApplyPortalWallEdits(rec.ResetWallEdits);
+                        var created = CreateAndPlaceBuildObject(current, rec.Guid, rec.Position, rec.DirectionFlag, null);
+                        var lead = MultiTileMembers(current, created).FirstOrDefault() ?? created;
+                        lead[ObjectData.CurrentValue] = rec.SavedCurrentValue;
+                        rec.Token.CurrentId = lead.Id;
+                        liveTokens[lead.Id] = rec.Token;
+                    }
+                    lot = arch.Before;
+                    RefreshWorldRoomMaps(current, lot);
+                }
+                if (arch.DemolishedOpenings is { Count: > 0 })
+                    FlushPendingLotUpdates(current);
                 if (charge != 0) budget.AlterFamilyBudget(7, charge);
                 break;
             case BuildBuyEdit buy:
@@ -3612,6 +4160,19 @@ internal sealed class SimulationServer
             var walls = LotWalls.Read(currentLot, wallLevel);
             var wallFloors = LotFloors.Read(currentLot, wallLevel);
             var wallTool = new WallTool(current, walls, LotTerrain.Read(currentLot), wallCatalog, budget, LotPool.Read(currentLot), LotTiles.Read(currentLot), LotWater.Read(currentLot), wallFloors);
+            var beforePortals = current.WalkOrder
+                .Where(item => item is not XPerson &&
+                               item.Definition[(int)ObjdField.Type] == 8 &&
+                               item.Position.Height == wallLevel &&
+                               (item.MultiTileMasterId == 0 || item.MultiTileMasterId == item.Id))
+                .Select(lead => (
+                    Lead: lead,
+                    Guid: ResolveCatalogSpawnGuid(lead),
+                    Position: lead.Position,
+                    DirectionFlag: (byte)(1 << (lead[ObjectData.Direction] & 6)),
+                    SavedCurrentValue: lead[ObjectData.CurrentValue],
+                    ResetWallEdits: CapturePortalWallEdits(current, lead, resetToDefault: true)))
+                .ToArray();
             var segments = 0;
             var wallInsufficient = false;
             if (command == "WALL_STROKE")
@@ -3645,8 +4206,43 @@ internal sealed class SimulationServer
             var wallCharge = wallTool.Commit();
             if (segments > 0)
             {
+                List<DemolishedOpeningRecord>? demolishedOpenings = null;
+                foreach (var portal in beforePortals)
+                {
+                    if (current.ObjectById(portal.Lead.Id) is not null) continue;
+                    if (!liveTokens.Remove(portal.Lead.Id, out var token))
+                        token = new BuildObjectToken(portal.Lead.Id);
+                    demolishedOpenings ??= [];
+                    demolishedOpenings.Add(new DemolishedOpeningRecord(
+                        token, portal.Guid, portal.Position, portal.DirectionFlag, portal.SavedCurrentValue,
+                        portal.ResetWallEdits));
+                }
+                if (demolishedOpenings is { Count: > 0 })
+                {
+                    FlushPendingLotUpdates(current);
+                    foreach (var rec in demolishedOpenings)
+                    {
+                        foreach (var (editLevel, ownerX, ownerY, bit, style) in rec.ResetWallEdits)
+                        {
+                            if (editLevel != wallLevel) continue;
+                            var cell = walls[ownerX, ownerY];
+                            if ((cell[0] & bit) == 0) continue;
+                            var styleIndex = bit == 1 ? 2 : 3;
+                            if (cell[styleIndex] != style) cell[styleIndex] = style;
+                        }
+                    }
+                }
                 var updated = wallFloors.WriteTo(walls.WriteTo(currentLot));
-                undoStack.Push(new ArchitectureEdit(currentLot, updated, wallCharge));
+                if (demolishedOpenings is { Count: > 0 })
+                {
+                    var crossLevelEdits = demolishedOpenings
+                        .SelectMany(rec => rec.ResetWallEdits)
+                        .Where(edit => edit.Level != wallLevel)
+                        .ToArray();
+                    if (crossLevelEdits.Length > 0)
+                        updated = ApplyPortalWallEditsToLot(updated, crossLevelEdits, out _);
+                }
+                undoStack.Push(new ArchitectureEdit(currentLot, updated, wallCharge, DemolishedOpenings: demolishedOpenings));
                 redoStack.Clear();
                 lot = updated;
                 lotValuationEdited = true;
@@ -3765,8 +4361,8 @@ internal sealed class SimulationServer
         if (cursor && guid is not (0x439u or 0x2F39B7A6u)) throw new ArgumentException("Invalid build cursor");
         var entry = registry?.Find(guid) ?? throw new ArgumentException("Object is not in the loaded catalog");
         ObjectCatalogEntry? catalogItem = null;
-        if (!cursor && existing is null && (!ObjectCatalog.TryGetEntry(entry, language, out catalogItem) || catalogItem is null))
-            throw new ArgumentException("Object is not a supported residential catalog item");
+        if (!cursor && existing is null && (!ObjectCatalog.TryGetEntry(entry, language, CurrentCatalogLotType(), out catalogItem) || catalogItem is null))
+            throw new ArgumentException("Object is not a supported catalog item");
 
         var tileX = Coordinate(request, "x");
         var tileY = Coordinate(request, "y");
@@ -3959,8 +4555,11 @@ internal sealed class SimulationServer
                                 var seg = tileX >= 0 && tileX < LotWalls.Size && tileY >= 0 && tileY < LotWalls.Size
                                     ? (previewWalls[tileX, tileY][0] & 0x30)
                                     : 0;
-                                if (seg == 0x10) { edge = 0x10; side = cameraOrientation is 1 or 2 ? 2 : 4; }
-                                else if (seg == 0x20) { edge = 0x20; side = cameraOrientation is 1 or 2 ? 1 : 3; }
+                                if (seg is 0x10 or 0x20)
+                                {
+                                    edge = seg;
+                                    (_, side) = SceneExporter.DiagonalFacingSlotAndSide(seg, cameraOrientation);
+                                }
                                 else { edge = 1 << cursorWallDir; side = 0; }
                             }
                             if (cursorFill)
@@ -4105,7 +4704,9 @@ internal sealed class SimulationServer
         registry = registry?.WithRefreshedPeople(Path.Combine(userData, "Characters")) ?? registry;
         var lotPath = Path.Combine(userData, "Houses", $"House{house:D2}.iff");
         var setup = WorldBootstrap.Load(game, lotPath, language, () => true, house,
-            autonomyForced: autonomyForced, activeFamilyChunkId: familyChunkId, existingRegistry: registry);
+            autonomyForced: autonomyForced, activeFamilyChunkId: familyChunkId, existingRegistry: registry,
+            neighborhoodManager: ConnectedNeighborhoodEnabled ? neighborhoodManager : null,
+            connectedNeighborhoodEnabled: ConnectedNeighborhoodEnabled);
         lot = setup.Lot;
         ClearBuildHistory();
         world = setup.World;
@@ -4128,14 +4729,16 @@ internal sealed class SimulationServer
         world.PlaySoundEvent = (name, owner, pan, zoom) =>
         {
             char? voiceCode = null;
+            int? pianoSkill = null;
             if (world.ObjectById(owner) is XPerson person)
             {
                 var age = person[PersonData.PersonAge];
                 var gender = person[PersonData.Gender];
                 voiceCode = PersonAgeCategory.IsChild(age) ? 'k' : ((gender & 1) != 0 ? 'f' : 'm');
+                pianoSkill = person[PersonData.CreativitySkill] / 100;
             }
 
-            var played = audio!.PlayForSimulationObject(name, owner, pan, zoom, voiceCode);
+            var played = audio!.PlayForSimulationObject(name, owner, pan, zoom, voiceCode, pianoSkill);
             if (played) world.PositionalSoundOwners.Add(owner);
             return played;
         };
@@ -4159,8 +4762,22 @@ internal sealed class SimulationServer
         lastRunningSpeed = 1;
         dialogResumeSpeed = HasBlockingDialog(world) ? 1 : 0;
         AttachNoticeListener(setup.World);
+        if (audio?.Enabled == true)
+            audio.PlayLotAmbience(house);
+        if (ConnectedNeighborhoodEnabled)
+        {
+            world.Neighborhood = neighborhoodManager;
+            AttachConnectedNeighborhoodHooks(world);
+            neighborhoodManager.TrackingEnabled = true;
+            neighborhoodManager.SyncFromUserData(userData, language);
+            neighborhoodManager.SyncFromWorld(world, house, activeLotIds: CollectActivePoolLotIds());
+            SeedFocusedSessionIntoPool();
+            if (lot is not null && house > 0 && connectedOptions.EnableAdjacentLotRendering)
+                PrewarmAdjacentNeighborhoodParallel();
+        }
         InitializeViewLevelFromSelectedSim();
         Export();
+        Write(new { type = "state", state = State() });
         return memberInstantiation;
     }
 
@@ -4170,9 +4787,12 @@ internal sealed class SimulationServer
     {
         if (world is null || family is null) return "no-active-family";
         if (family.Members.Count == 0) return "empty-family";
+        var targetMemberGuids = (world.FamilyBudget as FamilyBudget)?.RestrictedActivePersonKeys is { Count: > 0 } restrictedKeys
+            ? restrictedKeys.Select(static k => unchecked((uint)k)).ToArray()
+            : family.Members.ToArray();
         short firstId = 0;
         string? status = null;
-        foreach (var guid in family.Members)
+        foreach (var guid in targetMemberGuids)
         {
             if (guid == 0) continue;
             var existing = world.WalkOrder.OfType<XPerson>().FirstOrDefault(person => person.TypeRecord?.Key == unchecked((int)guid));
@@ -4344,7 +4964,10 @@ internal sealed class SimulationServer
     /// <summary>Updates LotSize (global 23), LotHasHouse (global 22), FilterFlagsForTransitScreen (global
     /// 37), and active family FAMI flags (bit 0 for baby present, bit 1 for phone present, clearing bit 3)
     /// before saving.</summary>
-    private void UpdatePreSaveState(SimulationWorld current, IffFile currentLot)
+    private void UpdatePreSaveState(SimulationWorld current, IffFile currentLot) =>
+        UpdatePreSaveState(current, currentLot, activeFamilyChunkId);
+
+    private void UpdatePreSaveState(SimulationWorld current, IffFile currentLot, ushort? targetFamilyChunkId)
     {
         // Sets simulation global LotSize to the lot dimension (52 for House 5, 64 by default).
         if (current[SimulationGlobal.LotSize] <= 3)
@@ -4457,9 +5080,10 @@ internal sealed class SimulationServer
         current[SimulationGlobal.LotHasHouse] = (short)(hasArchitecture || hasBuildableObject ? 1 : 0);
         current[SimulationGlobal.FilterFlagsForTransitScreen] = unchecked((short)filterFlags);
 
-        if (activeFamilyChunkId is { } familyChunkId &&
+        if (targetFamilyChunkId is { } familyChunkId &&
             current.FamilyBudget is FamilyBudget budget &&
-            budget.ActiveFamily is { } activeFamily)
+            budget.ActiveFamily is { } activeFamily &&
+            (budget.FamilyChunkId == familyChunkId || budget.FamilyChunkId is null))
         {
             var flags = activeFamily.Flags & ~0xbu;
             if (hasBaby) flags |= 1u;
@@ -4756,6 +5380,10 @@ internal sealed class SimulationServer
             usedSlots.Add(nextSlot);
             usedNeighborIds.Add(nextNeighborId);
             memberNeighborIds.Add(nextNeighborId);
+            globallyRemovedNeighbors.Remove(nextNeighborId);
+            world?.ClearRemovedNeighbor(nextNeighborId);
+            foreach (var live in lotPool.LiveSessions.Values)
+                live.World.ClearRemovedNeighbor(nextNeighborId);
 
             // NBRS record version 0x49 stores 88 16-bit integers of serialized person data.
             var personData = new short[88];
@@ -4787,7 +5415,7 @@ internal sealed class SimulationServer
 
             var neighbor = new Neighbor(
                 Slot: nextSlot,
-                RecordVersion: 9,
+                RecordVersion: 10,
                 Name: member.Name,
                 Field0x1C: 0,
                 PersonData: personData,
@@ -4820,6 +5448,11 @@ internal sealed class SimulationServer
             if (neighborhoodPath is not null)
             {
                 WriteReplace(neighborhoodPath, neighborhood.Bytes);
+            }
+            if (ConnectedNeighborhoodEnabled)
+            {
+                SyncAllLiveWorldsFromNeighborhood(globallyRemovedNeighbors);
+                neighborhoodManager.SyncFromUserData(userDataPath, language);
             }
         }
 
@@ -4954,20 +5587,27 @@ internal sealed class SimulationServer
         (!string.IsNullOrEmpty(userData) && Neighborhoods.IsCommunityLot(userData, targetHouse));
 
     private short EffectiveHomeHouse =>
-        suspendedHomeLot?.HomeHouse ??
-        (world is not null && house > 0 && world[SimulationGlobal.SimlessBuildMode] == 0 && !IsVisitingAwayLot ? house : (short)0);
+        ConnectedNeighborhoodEnabled
+            ? EffectiveHomeHouseValue()
+            : suspendedHomeLot?.HomeHouse ??
+              (world is not null && house > 0 && world[SimulationGlobal.SimlessBuildMode] == 0 && !IsVisitingAwayLot ? house : (short)0);
 
     private bool IsVisitingAwayLot =>
-        world is not null &&
-        house != 0 &&
-        ((suspendedHomeLot is not null && suspendedHomeLot.HomeHouse != house) ||
-         (world[SimulationGlobal.SimlessBuildMode] == 0 &&
-          IsAwayLot(Path.GetDirectoryName(neighborhoodPath) ?? Neighborhoods.UserData(profile), house)));
+        ConnectedNeighborhoodEnabled
+            ? IsVisitingAwayLotValue()
+            : world is not null &&
+              house != 0 &&
+              ((suspendedHomeLot is not null && suspendedHomeLot.HomeHouse != house) ||
+               (world[SimulationGlobal.SimlessBuildMode] == 0 &&
+                IsAwayLot(Path.GetDirectoryName(neighborhoodPath) ?? Neighborhoods.UserData(profile), house)));
 
     private void EnsureLotEditingAllowed()
     {
         if (IsVisitingAwayLot)
             throw new InvalidOperationException("Buy and Build modes are disabled while visiting an away lot.");
+        if (world is { WorldLotListEntries.Count: > 0 } active &&
+            active.WorldLotListEntries.Any(item => ReferenceEquals(active.ObjectById(item.Id), item)))
+            throw new InvalidOperationException("Buy and Build modes are disabled during an active emergency.");
     }
 
     private void ClampAwayLotEditingState(bool forceAway = false)
@@ -4981,7 +5621,8 @@ internal sealed class SimulationServer
             world[SimulationGlobal.Mode] = viewerMode;
     }
 
-    private static SaveRuntimeMetadata CaptureRuntimeMetadata(SimulationWorld currentWorld, ReadOnlySpan<byte> lotBytes, int saveSpeed)
+    private static SaveRuntimeMetadata CaptureRuntimeMetadata(SimulationWorld currentWorld, ReadOnlySpan<byte> lotBytes, int saveSpeed,
+        SavedSuspendedHomeLot? suspendedHome = null)
     {
         var animations = currentWorld.Objects.Values.OfType<XPerson>().OrderBy(person => person.Id).Select(person =>
         {
@@ -5002,9 +5643,251 @@ internal sealed class SimulationServer
             record.Token, record.Owner.Id, record.Icon?.Id, record.Kind, record.Title, record.Message,
             record.Yes, record.No, record.Cancel, record.Blocking, record.AwaitsResponse, record.State,
             record.Visible, record.ImageBitmapId, record.BookMode)).ToArray();
-        return new SaveRuntimeMetadata(13, saveSpeed, animations,
+        var restrictedKeys = (currentWorld.FamilyBudget as FamilyBudget)?.RestrictedActivePersonKeys?.ToArray();
+        return new SaveRuntimeMetadata(14, saveSpeed, animations,
             Convert.ToHexString(SHA256.HashData(lotBytes)), savedDialogs,
-            currentWorld.FamilyBudget?.ReadFamilyBudget());
+            currentWorld.FamilyBudget?.ReadFamilyBudget(), restrictedKeys, suspendedHome,
+            currentWorld.Clock.Ticks, currentWorld.Clock.Day);
+    }
+
+    private static int TravelFilterSlotForMode(int mode) => mode switch
+    {
+        2 => 1,
+        3 => 2,
+        4 => 3,
+        5 => 4,
+        7 => 5,
+        _ => TravelFilter.Unleashed,
+    };
+
+    private static void SetInMemoryFamilyVacationField(SimulationWorld targetWorld, ushort familyChunkId, int vacationHouse)
+    {
+        if (targetWorld.FamilyBudget is FamilyBudget fb &&
+            fb.FamilyChunkId == familyChunkId &&
+            fb.ActiveFamily is { } fam &&
+            fam.Field0x13C != vacationHouse)
+        {
+            fb.ActiveFamily = fam.WithFields(field0x13C: vacationHouse);
+        }
+    }
+
+    private void ReconcileCommittedVacationFieldOnDisk()
+    {
+        if (committedVacationState is not { } committed ||
+            neighborhoodPath is null ||
+            !File.Exists(neighborhoodPath))
+        {
+            return;
+        }
+        try
+        {
+            var currentNgh = neighborhood ?? IffFile.Open(neighborhoodPath);
+            var famiType = ResourceType.Parse("FAMI");
+            if (currentNgh.Find(famiType, committed.FamilyChunkId) is not { } chunk) return;
+            var currentFam = Family.Read(currentNgh, chunk);
+            if (currentFam.Field0x13C == committed.VacationHouse) return;
+            var updated = currentNgh.WithAddedOrReplacedChunk(famiType, committed.FamilyChunkId,
+                currentFam.WithFields(field0x13C: committed.VacationHouse).Write(committed.FamilyChunkId));
+            WriteReplace(neighborhoodPath, updated.Bytes);
+            neighborhood = updated;
+        }
+        catch
+        {
+        }
+    }
+
+    private void RestoreTravelRuntimeState(SimulationWorld targetWorld, string userData, short loadedHouse,
+        ushort? loadedFamilyChunkId, Family? loadedFamily, SaveRuntimeMetadata runtime, SaveEnvelope? envelope = null)
+    {
+        var savedHome = envelope?.SuspendedHome ?? runtime.SuspendedHome;
+        if (savedHome is not null)
+        {
+            suspendedHomeLot = new SuspendedHomeLot(savedHome.HomeHouse, savedHome.HomeFamilyChunkId,
+                Convert.FromBase64String(savedHome.LotState), savedHome.Runtime, savedHome.Speed);
+        }
+        else if (loadedFamily is { HouseNumber: > 0 } fam &&
+                 loadedHouse != fam.HouseNumber &&
+                 IsAwayLot(userData, loadedHouse))
+        {
+            var homePath = Path.Combine(userData, "Houses", $"House{(short)fam.HouseNumber:D2}.iff");
+            if (File.Exists(homePath))
+            {
+                var homeBytes = File.ReadAllBytes(homePath);
+                var homeRuntime = ReadSavedRuntimeMetadata(CanonicalRuntimePath(homePath), homeBytes);
+                suspendedHomeLot = new SuspendedHomeLot((short)fam.HouseNumber, loadedFamilyChunkId,
+                    homeBytes, homeRuntime, homeRuntime.Speed);
+            }
+            else
+            {
+                suspendedHomeLot = null;
+            }
+        }
+        else
+        {
+            suspendedHomeLot = null;
+        }
+
+        if (targetWorld.FamilyBudget is FamilyBudget budget)
+        {
+            var restrictedKeys = envelope?.RestrictedActivePersonKeys ?? runtime.RestrictedActivePersonKeys;
+            if (restrictedKeys is { Count: > 0 })
+            {
+                budget.RestrictActivePersonKeys(restrictedKeys);
+            }
+            else if (runtime.Version < 14 &&
+                     suspendedHomeLot is not null &&
+                     loadedHouse is not (>= 40 and <= 49) &&
+                     budget.ActiveFamily is { Members.Count: > 1 } legacyFamily)
+            {
+                var presentKeys = legacyFamily.Members
+                    .Select(static m => unchecked((int)m))
+                    .Where(k => targetWorld.WalkOrder.OfType<XPerson>().Any(p => p.TypeRecord?.Key == k))
+                    .ToArray();
+                if (presentKeys.Length > 0 && presentKeys.Length < legacyFamily.Members.Count)
+                    budget.RestrictActivePersonKeys(presentKeys);
+            }
+        }
+
+        var diskField0x13C = loadedFamily?.Field0x13C ?? 0;
+        var diskNghPath = neighborhoodPath ?? Path.Combine(userData, "Neighborhood.iff");
+        if (loadedFamilyChunkId is { } checkChunkId && File.Exists(diskNghPath))
+        {
+            try
+            {
+                var diskNgh = IffFile.Open(diskNghPath);
+                if (diskNgh.Find(ResourceType.Parse("FAMI"), checkChunkId) is { } diskChunk)
+                    diskField0x13C = Family.Read(diskNgh, diskChunk).Field0x13C;
+            }
+            catch
+            {
+            }
+        }
+        committedVacationState = loadedFamilyChunkId is { } committedChunkId ? (committedChunkId, diskField0x13C) : null;
+
+        if (loadedHouse is >= 40 and <= 49 &&
+            suspendedHomeLot is not null &&
+            loadedFamilyChunkId is { } vacFamId &&
+            loadedFamily is { Field0x13C: 0 })
+        {
+            SetInMemoryFamilyVacationField(targetWorld, vacFamId, loadedHouse);
+        }
+    }
+
+    private bool RefreshPendingPersonPortraits()
+    {
+        if (registry is null || string.IsNullOrEmpty(game)) return false;
+        HashSet<uint>? candidates = null;
+        var drained = WardrobeSuitService.DrainPendingPortraitGuids(registry);
+        if (drained.Length > 0)
+            candidates = [.. drained];
+
+        if (registry.DirtyPeopleGuids.Count > 0)
+        {
+            foreach (var dirtyGuid in registry.DirtyPeopleGuids)
+            {
+                if (registry.Find(dirtyGuid) is { Scan: ObjectScan.People } dirtyEntry &&
+                    (!refreshedPersonFiles.TryGetValue(dirtyGuid, out var lastRefreshed) || !ReferenceEquals(lastRefreshed, dirtyEntry.File)))
+                {
+                    candidates ??= [];
+                    candidates.Add(dirtyGuid);
+                }
+            }
+        }
+        if (candidates is null || candidates.Count == 0) return false;
+
+        var refreshedAny = false;
+        var geometry = AvatarSceneGeometry.For(game, registry);
+        foreach (var guid in candidates)
+        {
+            if (registry.Find(guid) is not { Scan: ObjectScan.People } entry) continue;
+            var livePerson = world?.WalkOrder.OfType<XPerson>().FirstOrDefault(p => unchecked((uint)(p.TypeRecord?.Key ?? 0)) == guid);
+            var targetPerson = livePerson is { SavedCharacter: not null } ? livePerson : CreatePortraitPersonFromEntry(entry, language);
+            if (targetPerson is null) continue;
+
+            var savedPresentation = targetPerson.PresentationCharacter;
+            var savedOutfit = targetPerson[PersonData.CurrentOutfit];
+            try
+            {
+                targetPerson.PresentationCharacter = null;
+                targetPerson[PersonData.CurrentOutfit] = 0;
+                var headMeshes = geometry.BuildHeadMeshes(targetPerson, 1, 0, static (_, _) => 0, new LotCamera(0, 128, 128));
+                if (headMeshes.Count == 0) continue;
+                var updatedIff = SimPortrait.WithPortraits(entry.File, headMeshes);
+                registry.ReplaceEntryFile(guid, updatedIff, markDirty: true);
+                images?.SetRegistry(registry);
+                refreshedPersonFiles[guid] = updatedIff;
+                if (livePerson is not null && pieHead?.Sim == livePerson.Id)
+                    pieHead = null;
+                refreshedAny = true;
+            }
+            catch
+            {
+            }
+            finally
+            {
+                targetPerson.PresentationCharacter = savedPresentation;
+                targetPerson[PersonData.CurrentOutfit] = savedOutfit;
+            }
+        }
+        return refreshedAny;
+    }
+
+    private static XPerson? CreatePortraitPersonFromEntry(ObjectEntry entry, byte language)
+    {
+        var stringsId = entry.Definition[ObjdField.BodyStringsId];
+        var strChunk = stringsId == 0 ? null : entry.File.Find(ResourceType.Str, stringsId);
+        if (strChunk is null) return null;
+        var values = StringTable.Read(entry.File, strChunk).ForLanguage(language);
+        static string StrAt(IReadOnlyList<string> list, int oneBased) =>
+            oneBased >= 1 && oneBased <= list.Count ? list[oneBased - 1].Trim() : string.Empty;
+        static (string, string) Pair(string spec)
+        {
+            if (string.IsNullOrWhiteSpace(spec) || spec.Equals("NONE", StringComparison.OrdinalIgnoreCase))
+                return (string.Empty, string.Empty);
+            var comma = spec.IndexOf(',');
+            var mesh = (comma >= 0 ? spec[..comma] : spec).Trim();
+            var tex = comma >= 0 ? spec[(comma + 1)..].Trim() : string.Empty;
+            if (mesh.EndsWith(".apr", StringComparison.OrdinalIgnoreCase))
+                mesh = mesh[..^4];
+            return (mesh, tex);
+        }
+
+        var bodySpec = StrAt(values, 0x02);
+        if (bodySpec.Length == 0) return null;
+        var headSpec = StrAt(values, 0x03);
+        var leftHandSpec = StrAt(values, 0x12);
+        var rightHandSpec = StrAt(values, 0x13);
+        var genderRaw = StrAt(values, 0x0d).ToLowerInvariant();
+        var genderMode = genderRaw switch
+        {
+            "male" => 0,
+            "female" => 1,
+            "dogmale" or "dog_male" => 2,
+            "dogfemale" or "dog_female" => 3,
+            "catmale" or "cat_male" => 4,
+            "catfemale" or "cat_female" => 5,
+            _ => 0,
+        };
+        var isChild = StrAt(values, 0x01).Equals("child", StringComparison.OrdinalIgnoreCase);
+        var parts = Enumerable.Repeat((string.Empty, string.Empty), 5).ToArray();
+        parts[0] = Pair(bodySpec);
+        if (genderMode is < 2 or > 5)
+        {
+            parts[2] = Pair(leftHandSpec);
+            parts[3] = Pair(rightHandSpec);
+            parts[4] = Pair(headSpec);
+        }
+        var character = new PersonCharacter(0, 0, parts, [], [string.Empty, string.Empty, string.Empty], 3, new float[9]);
+        var person = new XPerson(1, new short[XObject.DefinitionCount])
+        {
+            TypeRecord = new TypeRecord(unchecked((int)entry.Guid)),
+            SavedCharacter = character,
+            Position = new ObjectPosition(64 * 16, 64 * 16, 1),
+            AnimatorBodyStringMode = (short)genderMode,
+        };
+        person[PersonData.PersonAge] = (short)(isChild ? 9 : 27);
+        person[ObjectData.Direction] = 3;
+        return person;
     }
 
     private (ushort? ChunkId, Family? Family) ResolveTravellingFamily(SimulationWorld sourceWorld,
@@ -5101,6 +5984,7 @@ internal sealed class SimulationServer
 
         targetWorld.BindPersonToNeighborRecord(person);
         if (!string.IsNullOrWhiteSpace(neighbor.Name) &&
+            !IsInternalUserLabel(neighbor.Name) &&
             !string.Equals(person.Name, neighbor.Name, StringComparison.Ordinal))
         {
             person.Name = neighbor.Name;
@@ -5240,10 +6124,32 @@ internal sealed class SimulationServer
                 destWorld.PersonTypeRecordSlots[key] = targetSlot;
             }
 
-            destWorld.InteractionScopes[targetSlot] = sourceScope;
+            XPerson? destBackedPerson = null;
             foreach (var obj in destWorld.WalkOrder)
             {
-                if (obj.TypeRecord?.Key == key) obj.InteractionScopeKey5CA = targetSlot;
+                if (obj.TypeRecord?.Key != key) continue;
+                obj.InteractionScopeKey5CA = targetSlot;
+                if (destBackedPerson is null && obj is XPerson p && p[PersonData.NeighborId] > 0)
+                    destBackedPerson = p;
+            }
+
+            if (destBackedPerson is not null)
+            {
+                var destNeighborId = destBackedPerson[PersonData.NeighborId];
+                var inventory = destWorld.NeighborInventory(destNeighborId);
+                inventory.FilterOut(2);
+                for (short i = 0; i < sourceScope.Count; i++)
+                {
+                    if (sourceScope.TryGet(i, out var entry) && entry.Value == 2)
+                        inventory.Add(entry.Value, entry.Mode, unchecked((short)entry.Result));
+                }
+                var backed = new InteractionScopeTable(() => destWorld.NeighborInventory(destNeighborId));
+                backed.AvatarObjects.AddRange(sourceScope.AvatarObjects);
+                destWorld.InteractionScopes[targetSlot] = backed;
+            }
+            else
+            {
+                destWorld.InteractionScopes[targetSlot] = sourceScope;
             }
         }
 
@@ -5256,6 +6162,8 @@ internal sealed class SimulationServer
 
     internal bool TryApplyPendingLotSwitch(SimulationWorld sourceWorld, SimulationWorld.LotSwitchRequest request)
     {
+        if (ConnectedNeighborhoodEnabled)
+            return TryApplyConnectedPendingLotSwitch(sourceWorld, request);
         var userData = Neighborhoods.UserData(profile);
         var (travellingFamilyChunkId, travellingFamily) = ResolveTravellingFamily(sourceWorld, request);
         var isReturnHome = request.RawTargetHouse == -1;
@@ -5303,12 +6211,13 @@ internal sealed class SimulationServer
         }
         PersistNeighborhoodStateImmediately();
 
-        if (travellingFamilyChunkId is { } familyChunkId)
+        int? pendingVacationField = null;
+        if (travellingFamilyChunkId is not null)
         {
-            if (!isReturnHome && targetHouse is >= 40 and <= 48)
-                UpdateFamilyVacationField(familyChunkId, targetHouse);
-            else if (isReturnHome && travellingFamily is { Field0x13C: not 0 })
-                UpdateFamilyVacationField(familyChunkId, 0);
+            if (!isReturnHome && targetHouse is >= 40 and <= 49)
+                pendingVacationField = targetHouse;
+            else if (isReturnHome)
+                pendingVacationField = 0;
         }
 
         var sourceSpeed = speed > 0 ? speed : lastRunningSpeed;
@@ -5337,6 +6246,7 @@ internal sealed class SimulationServer
         RemoveTileCursor();
         ResetSeasonalOutfits();
         audio?.Reset();
+        refreshedPersonFiles.Clear();
 
         registry = registry?.WithRefreshedPeople(Path.Combine(userData, "Characters")) ?? registry;
         var preloadedLot = returningHome is null ? null : new IffFile(returningHome.LotBytes, destPath);
@@ -5357,7 +6267,36 @@ internal sealed class SimulationServer
         neighborhoodPath = setup.NeighborhoodPath;
         neighborhood = setup.Neighborhood;
         activeFamilyChunkId = setup.ActiveFamilyChunkId;
-        HydrateTypeAttributesFromNeighborhood(world, lot, neighborhood);
+        HydrateTypeAttributesFromNeighborhood(world, lot, neighborhood, overwriteExisting: returningHome is not null);
+        if (travellingFamilyChunkId is { } resolvedFamilyChunkId && pendingVacationField is { } nextVacField)
+        {
+            SetInMemoryFamilyVacationField(world, resolvedFamilyChunkId, nextVacField);
+        }
+        if (!isReturnHome && targetHouse is >= 40 and <= 49)
+        {
+            var expectedFamilyNumber = (setup.ActiveFamily?.FamilyNumber is > 0 ? setup.ActiveFamily.FamilyNumber : 0);
+            if (expectedFamilyNumber == 0 && travellingFamilyChunkId is { } chunkIdNum)
+                expectedFamilyNumber = unchecked((short)chunkIdNum);
+            var allowedKeys = new HashSet<int>(travelScopeKeys);
+            if (setup.ActiveFamily is { Members.Count: > 0 } famMembers)
+                foreach (var memberGuid in famMembers.Members) allowedKeys.Add(unchecked((int)memberGuid));
+            if (request.PersonGuid != 0) allowedKeys.Add(request.PersonGuid);
+            var removedStale = false;
+            foreach (var loadedPerson in world.WalkOrder.OfType<XPerson>().ToArray())
+            {
+                var pFamily = loadedPerson[PersonData.FamilyNumber];
+                var pGuid = loadedPerson.TypeRecord?.Key ?? 0;
+                if (pFamily > 0 &&
+                    expectedFamilyNumber > 0 &&
+                    pFamily != expectedFamilyNumber &&
+                    !allowedKeys.Contains(pGuid))
+                {
+                    world.Remove(loadedPerson.Id);
+                    removedStale = true;
+                }
+            }
+            if (removedStale) world.RefreshNeighborInteractionManager();
+        }
         if (registry is not null)
             world.UiTextFile ??= registry.UiText;
         AttachTutorialFlash(world);
@@ -5474,7 +6413,7 @@ internal sealed class SimulationServer
         if (!File.Exists(path)) return new SaveRuntimeMetadata(1, 1);
         var metadata = JsonSerializer.Deserialize<SaveRuntimeMetadata>(File.ReadAllBytes(path), Json)
             ?? throw new InvalidDataException("Invalid native save runtime metadata.");
-        if (metadata.Version is not (1 or 2 or 3 or 4 or 5 or 6 or 7 or 8 or 9 or 10 or 11 or 12 or 13) || metadata.Speed is not (1 or 3 or 10) ||
+        if (metadata.Version is < 1 or > 14 || metadata.Speed is not (1 or 3 or 10) ||
             (metadata.Version == 1 && metadata.PersonAnimations is { Length: > 0 }))
             throw new InvalidDataException("Unsupported native save runtime metadata.");
         if (metadata.LotSha256 is { } expectedHash &&
@@ -5538,6 +6477,7 @@ internal sealed class SimulationServer
             };
             world.DialogRecords.Add(record);
         }
+        world.SyncGenericSimsCall03DialogHandle();
     }
 
     /// <summary>Selects mode music based on house number ranges and zoning categories, distinguishing
@@ -5767,6 +6707,9 @@ internal sealed class SimulationServer
         if (level == 1 && lot is not null && LotWater.Read(lot).IsWater(tx, ty, 1))
             return "footstep_puddle";
 
+        if (ResolveObjectSurfaceFootstepCue(world, tx, ty, level) is { } objectCue)
+            return objectCue;
+
         ushort floorPattern = 0;
         if (lot is not null && tx is >= 0 and < LotFloors.Size && ty is >= 0 and < LotFloors.Size)
         {
@@ -5793,6 +6736,51 @@ internal sealed class SimulationServer
         };
     }
 
+    private static string? ResolveObjectSurfaceFootstepCue(SimulationWorld? currentWorld, int tx, int ty, int level)
+    {
+        if (currentWorld is null) return null;
+
+        var bestPriority = 0;
+        void CheckObject(XObject item)
+        {
+            if (item is XPerson || item[ObjectData.ContainerId] != 0) return;
+            var guid = item.TypeRecord is { } tr
+                ? unchecked((uint)tr.Key)
+                : (uint)(ushort)item.Definition[(int)ObjdField.Guid1] | ((uint)(ushort)item.Definition[(int)ObjdField.Guid2] << 16);
+            var priority = guid switch
+            {
+                0x3E7470F6u or 0x5C67FC8Fu or 0x9BE030B9u => 10,
+                99999999u => 9,
+                0x63416BA1u => 8,
+                0x7F907075u or 0xBF62F653u => 7,
+                0x96E3398Du or 0xA2DAA08Cu or 0xC02B406Au or 0x65274A4Fu => 6,
+                _ => 0,
+            };
+            if (priority > bestPriority) bestPriority = priority;
+        }
+
+        foreach (var item in currentWorld.ObjectsAtTile(tx, ty, level))
+            CheckObject(item);
+
+        foreach (var item in currentWorld.WalkOrder)
+        {
+            if ((item.Position.X >> 4) == tx &&
+                (item.Position.Y >> 4) == ty &&
+                Math.Max(1, (int)item.Position.Height) == level)
+                CheckObject(item);
+        }
+
+        return bestPriority switch
+        {
+            10 => "footstep_puddle",
+            9 => "footstep_roach",
+            8 => "footstep_ash",
+            7 => "footstep_trash",
+            6 => "footstep_plant",
+            _ => null,
+        };
+    }
+
     private char GetFloorSoundCode(ushort pattern)
     {
         if (floorSoundCodes is null)
@@ -5811,10 +6799,8 @@ internal sealed class SimulationServer
                         var globals = IffFile.Open(floorPath);
                         for (ushort id = 1; id <= 29; id++)
                         {
-                            var chunk = globals.Find(ResourceType.Parse("SPR2"), (ushort)(id + 256))
-                                ?? globals.Find(ResourceType.Parse("SPR2"), id);
-                            if (chunk?.Label is { Length: > 0 } name)
-                                floorSoundCodes[id] = char.ToUpperInvariant(name[0]);
+                            if (ReadNonEmptyFloorSoundCode(globals, id, (ushort)(id + 256)) is { } code)
+                                floorSoundCodes[id] = code;
                         }
                     }
                     foreach (var (id, path) in FloorCatalog.DynamicFiles(gameData))
@@ -5822,9 +6808,8 @@ internal sealed class SimulationServer
                         try
                         {
                             var iff = IffFile.Open(path);
-                            var chunk = iff.Find(ResourceType.Parse("SPR2"), 257) ?? iff.Find(ResourceType.Parse("SPR2"), 1);
-                            if (chunk?.Label is { Length: > 0 } name)
-                                floorSoundCodes[(ushort)id] = char.ToUpperInvariant(name[0]);
+                            if (ReadNonEmptyFloorSoundCode(iff, 1, 257) is { } code)
+                                floorSoundCodes[(ushort)id] = code;
                         }
                         catch { }
                     }
@@ -5833,6 +6818,18 @@ internal sealed class SimulationServer
             catch { }
         }
         return floorSoundCodes.GetValueOrDefault(pattern, 'M');
+    }
+
+    private static char? ReadNonEmptyFloorSoundCode(IffFile iff, params ushort[] ids)
+    {
+        var spr2 = ResourceType.Parse("SPR2");
+        foreach (var id in ids)
+        {
+            var chunk = iff.Find(spr2, id);
+            if (chunk?.Label is { Length: > 0 } name)
+                return char.ToUpperInvariant(name[0]);
+        }
+        return null;
     }
 
     private object PhoneBook(SimulationDialogRecord record)
@@ -5934,7 +6931,10 @@ internal sealed class SimulationServer
     private uint PersonGuid(XPerson person) => unchecked((uint)(person.TypeRecord?.Key ??
         (world?.Neighbors.TryGetValue(person[PersonData.NeighborId], out var neighbor) == true ? neighbor.TypeRecordKey : 0)));
 
-    private bool IsHouseholdPerson(XPerson person) => ActiveFamily()?.Members.Contains(PersonGuid(person)) == true;
+    private bool IsHouseholdPerson(XPerson person) =>
+        ConnectedNeighborhoodEnabled && IsVisitingAwayLot
+            ? IsConnectedHouseholdPerson(person)
+            : ActiveFamily()?.Members.Contains(PersonGuid(person)) == true;
 
     private static bool IsControllableHuman(XPerson person) =>
         person[PersonData.Gender] < 2 && (person.AnimatorBodyStringMode & 6) == 0;
@@ -5956,6 +6956,24 @@ internal sealed class SimulationServer
     {
         if (world is null) return [];
         var people = world.WalkOrder.OfType<XPerson>().ToArray();
+        if (ConnectedNeighborhoodEnabled && IsVisitingAwayLot)
+        {
+            var homeOrder = (HomeFamily()?.Members ?? [])
+                .Select((guid, index) => (guid, index))
+                .ToDictionary(item => item.guid, item => item.index);
+            var hostOrder = (ActiveFamily()?.Members ?? [])
+                .Select((guid, index) => (guid, order: 1000 + index))
+                .ToDictionary(item => item.guid, item => item.order);
+            return people.OrderBy(person =>
+                {
+                    var guid = PersonGuid(person);
+                    if (homeOrder.TryGetValue(guid, out var homeIdx)) return homeIdx;
+                    if (hostOrder.TryGetValue(guid, out var hostIdx)) return hostIdx;
+                    return person[PersonData.PersonType] == 0 && IsControllableHuman(person) ? 2000 : int.MaxValue;
+                })
+                .ThenBy(person => person.Id)
+                .ToArray();
+        }
         var roster = ActiveFamily()?.Members ?? [];
         var order = roster.Select((guid, index) => (guid, index)).ToDictionary(item => item.guid, item => item.index);
         return people.OrderBy(person => order.GetValueOrDefault(PersonGuid(person), int.MaxValue))
@@ -6224,13 +7242,14 @@ internal sealed class SimulationServer
 
     private object State(bool includeArchitectureGrids = true, bool includeObjects = true)
     {
+        if (registry is not null) images?.SetRegistry(registry);
         if (includeObjects) lastStreamedObjectsSignature = ComputeObjectsSignature();
         var computedFamilyFriends = world is null ? (int?)null : FamilyFriends();
         var sharedValuation = world?.SavedSimulationState is { Version: >= 0x25 } savedValuation
             ? CurrentLotValuation(savedValuation)
             : ((int FurnishingsValue, int ArchitectureValue)?)null;
         var roof = lot is null ? ((string Style, float Pitch, int StyleIndex)?)null : RoofInfo(lot);
-        return new
+        var vanillaPayload = new
         {
         house,
         homeHouse = EffectiveHomeHouse,
@@ -6349,7 +7368,7 @@ internal sealed class SimulationServer
             hideHover = (person.Definition[91] & 4) != 0,
             // Resolves a Sim's display name using runtime-assigned names first, falling back to neighbor
             // record labels, and finally the catalog selector name.
-            name = !string.IsNullOrWhiteSpace(person.Name)
+            name = !string.IsNullOrWhiteSpace(person.Name) && !IsInternalUserLabel(person.Name)
                 ? person.Name
                 : world!.Neighbors.TryGetValue(person[PersonData.NeighborId], out var neighbor) && !IsInternalUserLabel(neighbor.Name)
                 ? neighbor.Name!
@@ -6361,7 +7380,7 @@ internal sealed class SimulationServer
             internalName = world!.Neighbors.TryGetValue(person[PersonData.NeighborId], out var neighborForId) && !string.IsNullOrWhiteSpace(neighborForId.Name)
                 ? neighborForId.Name
                 : null,
-            tooltipName = !string.IsNullOrWhiteSpace(person.Name)
+            tooltipName = !string.IsNullOrWhiteSpace(person.Name) && !IsInternalUserLabel(person.Name)
                 ? person.Name
                 : world!.Neighbors.TryGetValue(person[PersonData.NeighborId], out var tooltipNeighbor) && !IsInternalUserLabel(tooltipNeighbor.Name)
                     ? tooltipNeighbor.Name!
@@ -6415,6 +7434,7 @@ internal sealed class SimulationServer
         }).ToArray(),
         nativeEngine = true,
         };
+        return ConnectedNeighborhoodEnabled ? AppendConnectedNeighborhoodToState(vanillaPayload) : vanillaPayload;
     }
 
     private object? BudgetReport((int FurnishingsValue, int ArchitectureValue)? precomputedValuation = null)
@@ -6456,14 +7476,23 @@ internal sealed class SimulationServer
 
     /// <summary>Calculates live lot furnishings and architecture valuations, preserving saved SIMI values
     /// until modified by build, buy, depreciation, or breakage changes.</summary>
-    private (int FurnishingsValue, int ArchitectureValue) CurrentLotValuation(SimulationState saved)
+    private (int FurnishingsValue, int ArchitectureValue) CurrentLotValuation(SimulationState saved) =>
+        ComputeLotValuation(world, lot, initialObjectValuation, initialValuationLot, lotValuationEdited, saved);
+
+    private (int FurnishingsValue, int ArchitectureValue) ComputeLotValuation(
+        SimulationWorld? targetWorld,
+        IffFile? targetLot,
+        (int FurnishingsObjects, int ArchitectureObjects) baselineObjects,
+        IffFile? baselineLot,
+        bool edited,
+        SimulationState saved)
     {
-        var currentObjects = SumPlacedObjectValues(world);
-        var furnishingsDelta = currentObjects.FurnishingsObjects - initialObjectValuation.FurnishingsObjects;
-        var archObjectsDelta = currentObjects.ArchitectureObjects - initialObjectValuation.ArchitectureObjects;
-        var archLayerDelta = (lotValuationEdited || (lot is not null && initialValuationLot is not null && !ReferenceEquals(lot, initialValuationLot)))
-            && lot is not null && initialValuationLot is not null && !ReferenceEquals(lot, initialValuationLot)
-            ? SumArchitectureLayerValue(lot) - SumArchitectureLayerValue(initialValuationLot)
+        var currentObjects = SumPlacedObjectValues(targetWorld);
+        var furnishingsDelta = currentObjects.FurnishingsObjects - baselineObjects.FurnishingsObjects;
+        var archObjectsDelta = currentObjects.ArchitectureObjects - baselineObjects.ArchitectureObjects;
+        var archLayerDelta = (edited || (targetLot is not null && baselineLot is not null && !ReferenceEquals(targetLot, baselineLot)))
+            && targetLot is not null && baselineLot is not null && !ReferenceEquals(targetLot, baselineLot)
+            ? SumArchitectureLayerValue(targetLot) - SumArchitectureLayerValue(baselineLot)
             : 0;
         return (Math.Max(0, saved.Field0xA0 + furnishingsDelta),
                 Math.Max(0, saved.Field0xA4 + archObjectsDelta + archLayerDelta));
@@ -6625,12 +7654,16 @@ internal sealed class SimulationServer
         if (person.CurrentActionRecord is { Owner: not null, Secondary: not null } current)
             queued.Add(DescribeAction(current, person, true));
         var count = person.ActionQueueEnd - person.ActionQueueCurrent;
-        if (count is < 0 or > 8) return queued.ToArray();
-        for (var index = 0; index < count; index++)
+        if (count is >= 0 and <= 8)
         {
-            var action = person.ActionQueue[(person.ActionQueueCurrent + index) & 7];
-            if (action.Owner is not null && action.Secondary is not null) queued.Add(DescribeAction(action, person, false));
+            for (var index = 0; index < count; index++)
+            {
+                var action = person.ActionQueue[(person.ActionQueueCurrent + index) & 7];
+                if (action.Owner is not null && action.Secondary is not null) queued.Add(DescribeAction(action, person, false));
+            }
         }
+        if (ConnectedNeighborhoodEnabled && TryDescribeConnectedTransitAction(person) is { } transitAction)
+            queued.Add(transitAction);
         return queued.ToArray();
     }
 
@@ -6905,9 +7938,10 @@ internal sealed class SimulationServer
         revision++;
         animationSequence = 0;
         exportedCutawaySimKey = CutawaySimKey();
+        ResolveFocusedHousePrivacy(out var effWallMode, out var effRoofsVisible, out var hideInteriorPeople);
         var sceneDirectory = SceneDirectory;
         var scenePath = world is not null && lot is not null && registry is not null
-            ? SceneExporter.Export(lot, world, registry, game, sceneDirectory, house, revision, viewLevel, wallMode, cameraOrientation, cutawayTile, roofsVisible, animationState, cutawayRooms, cutawaySim: CutawaySimTile(), cutawayZoom: cutawayZoom, showLoweredPortals: doorWindowBuildToolActive)
+            ? SceneExporter.Export(lot, world, registry, game, sceneDirectory, house, revision, viewLevel, effWallMode, cameraOrientation, cutawayTile, effRoofsVisible, animationState, cutawayRooms, cutawaySim: CutawaySimTile(), cutawayZoom: cutawayZoom, showLoweredPortals: doorWindowBuildToolActive, hideInteriorPeople: hideInteriorPeople)
             : PlaceholderScene();
         plugins?.ExportEnvironment(Path.GetDirectoryName(scenePath)!, house);
         Write(new { type = "frame", revision, scene = scenePath, state = State() });
@@ -6916,24 +7950,25 @@ internal sealed class SimulationServer
 
     private void RefreshDynamicOrExport()
     {
+        ResolveFocusedHousePrivacy(out var effWallMode, out var effRoofsVisible, out var hideInteriorPeople);
         if (streaming && world is not null && lot is not null && registry is not null &&
             animationState.Kept is not null && animationState.Revision == revision &&
-            SceneExporter.CutawayMaskMatches(world, animationState, revision, viewLevel, wallMode, cameraOrientation,
+            SceneExporter.CutawayMaskMatches(world, animationState, revision, viewLevel, effWallMode, cameraOrientation,
                 cutawayTile, cutawayRooms, CutawaySimTile(), cutawayZoom))
         {
             exportedCutawaySimKey = CutawaySimKey();
             if (DirectAnimationSink is { } directSink)
             {
                 if (SceneExporter.AnimationDirect(lot, world, registry, game, SceneDirectory, house, revision, animationState,
-                        ++animationSequence, updates, viewLevel, wallMode, cameraOrientation, cutawayTile, roofsVisible,
+                        ++animationSequence, updates, viewLevel, effWallMode, cameraOrientation, cutawayTile, effRoofsVisible,
                         cutawayRooms: cutawayRooms, cutawaySim: CutawaySimTile(), cutawayZoom: cutawayZoom,
-                        showLoweredPortals: doorWindowBuildToolActive) is { } directFrame)
+                        showLoweredPortals: doorWindowBuildToolActive, hideInteriorPeople: hideInteriorPeople) is { } directFrame)
                     directSink(directFrame);
             }
             else if (SceneExporter.Animation(lot, world, registry, game, SceneDirectory, house, revision, animationState,
-                    ++animationSequence, updates, viewLevel, wallMode, cameraOrientation, cutawayTile, roofsVisible,
+                    ++animationSequence, updates, viewLevel, effWallMode, cameraOrientation, cutawayTile, effRoofsVisible,
                     cutawayRooms: cutawayRooms, cutawaySim: CutawaySimTile(), cutawayZoom: cutawayZoom,
-                    showLoweredPortals: doorWindowBuildToolActive) is { } frame)
+                    showLoweredPortals: doorWindowBuildToolActive, hideInteriorPeople: hideInteriorPeople) is { } frame)
             {
                 Write(new { type = "animation", frame });
             }

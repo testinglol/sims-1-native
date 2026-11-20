@@ -92,8 +92,7 @@ public sealed class WallTool(SimulationWorld world, LotWalls walls, LotTerrain t
         {
             // Overwriting an opening style sells doors/windows and resets style to 1.
             if (diagonal || !OpeningStyles.Contains(record[bit == 1 ? 2 : 3])) return false;
-            var sold = SellOpening(x, y, bit);
-            if (sold == 0) return false;
+            if (!TrySellOpening(x, y, bit, out var sold)) return false;
             record[bit == 1 ? 2 : 3] = 1;
             Pending -= sold;
             return true;
@@ -157,14 +156,17 @@ public sealed class WallTool(SimulationWorld world, LotWalls walls, LotTerrain t
         {
             // Existing doors and windows must be sellable before modifying the wall edge.
             if (world.ObjectsAtTile(x, y, walls.Level).Any(item =>
-                    item is not XPerson && item.Definition[(int)ObjdField.Type] == 8 && !world.CanSellObject(item)))
+                    item is not XPerson && item.Definition[(int)ObjdField.Type] == 8 && !world.CanSellObject(item)) ||
+                EdgeObjects(x, y, bit, OpeningFlags).Any(item =>
+                    item.Definition[(int)ObjdField.Type] == 8 && !world.CanSellObject(item)))
                 return Fail(0x23);
             if (EdgeObjects(x, y, bit, OpeningFlags).Any(item => item.Definition[(int)ObjdField.Type] != 8))
                 return Fail(0xb);
         }
         var style = record[diagonal ? 3 : bit == 1 ? 2 : 3];
-        var objectRefund = !diagonal && OpeningStyles.Contains(style) ? SellOpening(x, y, bit) : 0;
-        if (objectRefund > 0) record[bit == 1 ? 2 : 3] = 1;
+        var objectRefund = 0;
+        if (!diagonal && OpeningStyles.Contains(style) && TrySellOpening(x, y, bit, out objectRefund))
+            record[bit == 1 ? 2 : 3] = 1;
         var refund = unchecked((int)(objectRefund + catalog.Price(style) * RefundFactor));
         if (diagonal)
         {
@@ -186,15 +188,77 @@ public sealed class WallTool(SimulationWorld world, LotWalls walls, LotTerrain t
     }
 
     /// <summary>Sells the door or window occupying the specified wall edge, along with its multi-tile
-    /// group, returning 80% depreciated value rounded to the nearest integer.</summary>
-    private int SellOpening(int x, int y, int bit)
+    /// group, returning whether an opening was sold and its 80% depreciated value rounded to the nearest integer.</summary>
+    private bool TrySellOpening(int x, int y, int bit, out int refund)
     {
         var item = world.ObjectsAtTile(x, y, walls.Level).FirstOrDefault(candidate => candidate is not XPerson &&
-            candidate.Definition[(int)ObjdField.Type] == 8 && OpensOn(candidate, bit));
-        if (item is null || !world.CanSellObject(item)) return 0;
-        var refund = unchecked((int)(world.ObjectSaleValue(item) * RefundFactor + 0.5));
-        world.DemolishObject(item);
-        return refund;
+            candidate.Definition[(int)ObjdField.Type] == 8 && OpensOn(candidate, bit))
+            ?? EdgeObjects(x, y, bit, OpeningFlags).FirstOrDefault(candidate =>
+                candidate.Definition[(int)ObjdField.Type] == 8);
+        if (item is null || !world.CanSellObject(item))
+        {
+            refund = 0;
+            return false;
+        }
+        var portalWallEdges = CollectPortalWallEdges(item);
+        refund = unchecked((int)(world.ObjectSaleValue(item) * RefundFactor + 0.5));
+        world.DemolishObject(item, runCleanup: true);
+        ResetPortalWallEdges(portalWallEdges);
+        return true;
+    }
+
+    private List<(int OwnerX, int OwnerY, byte OwnerBit, int ExpectedStyle)> CollectPortalWallEdges(XObject item)
+    {
+        var edges = new List<(int OwnerX, int OwnerY, byte OwnerBit, int ExpectedStyle)>();
+        var members = world.MultiTileMembers(item);
+        var hasExplicitWallStyle = members.Any(member =>
+            member.Definition is { Length: > (int)ObjdField.WallStyle } &&
+            member.Definition[(int)ObjdField.WallStyle] != 0);
+        foreach (var member in members)
+        {
+            var expectedStyle = member.Definition is { Length: > (int)ObjdField.WallStyle }
+                ? member.Definition[(int)ObjdField.WallStyle]
+                : (short)0;
+            if (hasExplicitWallStyle && expectedStyle == 0) continue;
+            if (member.Position.Height != walls.Level) continue;
+            var tileX = member.Position.X >> 4;
+            var tileY = member.Position.Y >> 4;
+            if (tileX <= 0 || tileY <= 0 || tileX >= LotWalls.Size - 1 || tileY >= LotWalls.Size - 1) continue;
+            var flags = unchecked((ushort)member[ObjectData.WallPlacementFlags]);
+            var turns = (member[ObjectData.Direction] & 7) >> 1;
+            foreach (var (local, flag) in OpeningFlags)
+            {
+                if ((flags & flag) == 0) continue;
+                var wallBit = SimulationWorld.RotatePlacementWallBit(local, turns);
+                var (ownerX, ownerY, ownerBit) = wallBit switch
+                {
+                    1u => (tileX, tileY, (byte)1),
+                    2u => (tileX, tileY, (byte)2),
+                    4u => (tileX + 1, tileY, (byte)1),
+                    8u => (tileX, tileY + 1, (byte)2),
+                    _ => (-1, -1, (byte)0),
+                };
+                if (ownerBit == 0 || ownerX < 0 || ownerY < 0 || ownerX >= LotWalls.Size || ownerY >= LotWalls.Size)
+                    continue;
+                edges.Add((ownerX, ownerY, ownerBit, expectedStyle));
+            }
+        }
+        return edges;
+    }
+
+    private void ResetPortalWallEdges(List<(int OwnerX, int OwnerY, byte OwnerBit, int ExpectedStyle)> edges)
+    {
+        foreach (var (ownerX, ownerY, ownerBit, expectedStyle) in edges)
+        {
+            var cell = walls[ownerX, ownerY];
+            if ((cell[0] & ownerBit) == 0) continue;
+            var styleIndex = ownerBit == 1 ? 2 : 3;
+            if (OpeningStyles.Contains(cell[styleIndex]) ||
+                (expectedStyle > 0 && expectedStyle <= byte.MaxValue && cell[styleIndex] == (byte)expectedStyle))
+            {
+                cell[styleIndex] = 1;
+            }
+        }
     }
 
     private bool SegmentBlockedBySimOrInUseObject(int x, int y, int bit, bool diagonal)

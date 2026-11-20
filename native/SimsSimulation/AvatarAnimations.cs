@@ -330,85 +330,7 @@ internal static class AvatarAnimations
             var animation = work[index];
             {
                 var frameCount = animation.PlaybackFrameCount;
-                // Motion event timestamps are authored in milliseconds and trigger when matched against the
-                // truncated playback phase scaled by total duration.
-                var durationLimit = animation.Floats[0] > 0f ? (int)animation.Floats[0] : int.MaxValue;
-                List<AvatarAnimationEvent>? eventList = null;
-                List<AvatarAnimationSoundEvent>? soundList = null;
-                for (var m = 0; m < animation.Motions.Count; m++)
-                {
-                    var motionEvents = animation.Motions[m].Events;
-                    for (var e = 0; e < motionEvents.Count; e++)
-                    {
-                        var item = motionEvents[e];
-                        var timeMs = item.Time;
-                        if (timeMs < 0 || timeMs > durationLimit) continue;
-                        string? packAudio = null;
-                        string? packCue = null;
-                        string? packResource = null;
-                        string? packAudioLoop = null;
-                        string? packAudioStop = null;
-                        for (var p = 0; p < item.Properties.Count; p++)
-                        {
-                            var property = item.Properties[p];
-                            var propName = property.Name;
-                            if (propName.Equals("xevt", StringComparison.OrdinalIgnoreCase))
-                            {
-                                if (short.TryParse(property.Value, System.Globalization.NumberStyles.Integer,
-                                        System.Globalization.CultureInfo.InvariantCulture, out var xevtValue))
-                                {
-                                    eventList ??= [];
-                                    eventList.Add(new AvatarAnimationEvent(timeMs, xevtValue));
-                                }
-                            }
-                            else if (propName.Equals("sound", StringComparison.OrdinalIgnoreCase) ||
-                                     propName.Equals("selectedsound", StringComparison.OrdinalIgnoreCase) ||
-                                     propName.Equals("deselectedsound", StringComparison.OrdinalIgnoreCase) ||
-                                     propName.Equals("footstep", StringComparison.OrdinalIgnoreCase) ||
-                                     propName.Equals("interruptable", StringComparison.OrdinalIgnoreCase) ||
-                                     propName.Equals("interruptible", StringComparison.OrdinalIgnoreCase) ||
-                                     propName.Equals("lefthand", StringComparison.OrdinalIgnoreCase) ||
-                                     propName.Equals("righthand", StringComparison.OrdinalIgnoreCase) ||
-                                     propName.Equals("censor", StringComparison.OrdinalIgnoreCase) ||
-                                     propName.Equals("dress", StringComparison.OrdinalIgnoreCase) ||
-                                     propName.Equals("undress", StringComparison.OrdinalIgnoreCase))
-                            {
-                                var cue = property.Value.Trim();
-                                if (cue.Length > 0)
-                                {
-                                    soundList ??= [];
-                                    soundList.Add(new AvatarAnimationSoundEvent(timeMs, "", propName.ToLowerInvariant(), cue, false, false));
-                                }
-                            }
-                            else if (propName.Equals("packaudio", StringComparison.OrdinalIgnoreCase)) packAudio = property.Value;
-                            else if (propName.Equals("packcue", StringComparison.OrdinalIgnoreCase)) packCue = property.Value;
-                            else if (propName.Equals("packresource", StringComparison.OrdinalIgnoreCase)) packResource = property.Value;
-                            else if (propName.Equals("packaudioloop", StringComparison.OrdinalIgnoreCase)) packAudioLoop = property.Value;
-                            else if (propName.Equals("packaudiostop", StringComparison.OrdinalIgnoreCase)) packAudioStop = property.Value;
-                        }
-                        if (packAudio is not null && packCue is not null)
-                        {
-                            soundList ??= [];
-                            soundList.Add(new AvatarAnimationSoundEvent(timeMs, packAudio, packResource ?? "",
-                                packCue, bool.TryParse(packAudioLoop, out var loop) && loop,
-                                bool.TryParse(packAudioStop, out var stop) && stop));
-                        }
-                    }
-                }
-                IReadOnlyList<AvatarAnimationEvent> events;
-                if (eventList is null) events = Array.Empty<AvatarAnimationEvent>();
-                else
-                {
-                    eventList.Sort(static (a, b) => a.TimeMilliseconds.CompareTo(b.TimeMilliseconds));
-                    events = eventList.ToArray();
-                }
-                IReadOnlyList<AvatarAnimationSoundEvent> sounds;
-                if (soundList is null) sounds = Array.Empty<AvatarAnimationSoundEvent>();
-                else
-                {
-                    soundList.Sort(static (a, b) => a.TimeMilliseconds.CompareTo(b.TimeMilliseconds));
-                    sounds = soundList.ToArray();
-                }
+                var (events, sounds) = ExtractAnimationEvents(animation);
                 // Animation headers store clip duration in the first float and total translation distance
                 // in the second float.
                 var capturedAnimation = animation;
@@ -431,6 +353,98 @@ internal static class AvatarAnimations
             result[work[index].Name] = clips[index];
         if (cacheKey is not null) CachedCatalogsByKey.TryAdd(cacheKey, result);
         return result;
+    }
+
+    internal static (IReadOnlyList<AvatarAnimationEvent> Events, IReadOnlyList<AvatarAnimationSoundEvent> Sounds) ExtractAnimationEvents(Animation animation)
+    {
+        // Motion event timestamps are authored in milliseconds and trigger when matched against the
+        // truncated playback phase scaled by total duration.
+        var durationLimit = animation.Floats[0] > 0f ? (int)animation.Floats[0] : int.MaxValue;
+        List<AvatarAnimationEvent>? eventList = null;
+        List<AvatarAnimationSoundEvent>? soundList = null;
+        for (var m = 0; m < animation.Motions.Count; m++)
+        {
+            var motion = animation.Motions[m];
+            var motionEvents = motion.Events;
+            for (var e = 0; e < motionEvents.Count; e++)
+            {
+                var item = motionEvents[e];
+                var timeMs = item.Time;
+                if (timeMs < 0 || timeMs > durationLimit) continue;
+                string? packAudio = null;
+                string? packCue = null;
+                string? packResource = null;
+                string? packAudioLoop = null;
+                string? packAudioStop = null;
+                for (var p = 0; p < item.Properties.Count; p++)
+                {
+                    var property = item.Properties[p];
+                    var propName = property.Name;
+                    if (propName.Equals("xevt", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (short.TryParse(property.Value, System.Globalization.NumberStyles.Integer,
+                                System.Globalization.CultureInfo.InvariantCulture, out var xevtValue))
+                        {
+                            eventList ??= [];
+                            eventList.Add(new AvatarAnimationEvent(timeMs, xevtValue));
+                        }
+                    }
+                    else if (propName.Equals("discontinuity", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var cue = property.Value.Trim();
+                        soundList ??= [];
+                        soundList.Add(new AvatarAnimationSoundEvent(timeMs, "", "discontinuity", cue, false, false, motion.Name));
+                    }
+                    else if (propName.Equals("sound", StringComparison.OrdinalIgnoreCase) ||
+                             propName.Equals("selectedsound", StringComparison.OrdinalIgnoreCase) ||
+                             propName.Equals("deselectedsound", StringComparison.OrdinalIgnoreCase) ||
+                             propName.Equals("footstep", StringComparison.OrdinalIgnoreCase) ||
+                             propName.Equals("interruptable", StringComparison.OrdinalIgnoreCase) ||
+                             propName.Equals("interruptible", StringComparison.OrdinalIgnoreCase) ||
+                             propName.Equals("lefthand", StringComparison.OrdinalIgnoreCase) ||
+                             propName.Equals("righthand", StringComparison.OrdinalIgnoreCase) ||
+                             propName.Equals("censor", StringComparison.OrdinalIgnoreCase) ||
+                             propName.Equals("dress", StringComparison.OrdinalIgnoreCase) ||
+                             propName.Equals("undress", StringComparison.OrdinalIgnoreCase) ||
+                             propName.Equals("anchor", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var cue = property.Value.Trim();
+                        if (cue.Length > 0)
+                        {
+                            soundList ??= [];
+                            soundList.Add(new AvatarAnimationSoundEvent(timeMs, "", propName.ToLowerInvariant(), cue, false, false, motion.Name));
+                        }
+                    }
+                    else if (propName.Equals("packaudio", StringComparison.OrdinalIgnoreCase)) packAudio = property.Value;
+                    else if (propName.Equals("packcue", StringComparison.OrdinalIgnoreCase)) packCue = property.Value;
+                    else if (propName.Equals("packresource", StringComparison.OrdinalIgnoreCase)) packResource = property.Value;
+                    else if (propName.Equals("packaudioloop", StringComparison.OrdinalIgnoreCase)) packAudioLoop = property.Value;
+                    else if (propName.Equals("packaudiostop", StringComparison.OrdinalIgnoreCase)) packAudioStop = property.Value;
+                }
+                if (packAudio is not null && packCue is not null)
+                {
+                    soundList ??= [];
+                    soundList.Add(new AvatarAnimationSoundEvent(timeMs, packAudio, packResource ?? "",
+                        packCue, bool.TryParse(packAudioLoop, out var loop) && loop,
+                        bool.TryParse(packAudioStop, out var stop) && stop));
+                }
+            }
+        }
+        IReadOnlyList<AvatarAnimationEvent> events;
+        if (eventList is null) events = Array.Empty<AvatarAnimationEvent>();
+        else
+        {
+            eventList.Sort(static (a, b) => a.TimeMilliseconds.CompareTo(b.TimeMilliseconds));
+            events = eventList.ToArray();
+        }
+        IReadOnlyList<AvatarAnimationSoundEvent> sounds;
+        if (soundList is null) sounds = Array.Empty<AvatarAnimationSoundEvent>();
+        else
+        {
+            soundList.Sort(static (a, b) => a.TimeMilliseconds.CompareTo(b.TimeMilliseconds));
+            sounds = soundList.ToArray();
+        }
+        return (events, sounds);
     }
 
     private static bool HasRootMotionCandidate(Animation animation, IReadOnlyDictionary<string, CharacterFile[]> curveFiles)

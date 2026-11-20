@@ -150,10 +150,20 @@ public sealed record PersonMotiveDecayTuning(
     public void Apply(XPerson person, int gameHour)
     {
         ArgumentNullException.ThrowIfNull(person);
-        var gender = person[PersonData.Gender];
+        Apply(person.Motives, person.SavedPersonValues7CC, person.PersonData, gameHour);
+    }
+
+    /// <summary>Applies motive decay and mood weighting directly against raw motive/person-data arrays.</summary>
+    public void Apply(float[] motives, float[] savedValues7CC, short[] personData, int gameHour)
+    {
+        ArgumentNullException.ThrowIfNull(motives);
+        ArgumentNullException.ThrowIfNull(savedValues7CC);
+        ArgumentNullException.ThrowIfNull(personData);
+
+        var gender = personData[(int)PersonData.Gender];
         var tuning = (gender & 2) != 0 ? Dog : (gender & 4) != 0 ? Cat : Adult;
-        var asleep = person[Motive.SleepState] < 0;
-        var energy = person[Motive.Energy];
+        var asleep = motives[(int)Motive.SleepState] < 0;
+        var energy = motives[(int)Motive.Energy];
 
         if (asleep)
         {
@@ -171,57 +181,61 @@ public sealed record PersonMotiveDecayTuning(
                 : tuning.EnergySpan / tuning.WakeHours / 30f;
             energy -= loss;
         }
-        person[Motive.Energy] = energy;
+        motives[(int)Motive.Energy] = energy;
 
-        var hunger = person[Motive.Hunger];
-        var priorHunger = person.SavedPersonValues7CC[(int)Motive.Hunger];
+        var hunger = motives[(int)Motive.Hunger];
+        var priorHunger = savedValues7CC[(int)Motive.Hunger];
         var hungerGain = hunger - priorHunger;
         if (hungerGain > 0)
-            person[Motive.Bladder] -= hungerGain * tuning.HungerToBladderMultiplier;
+            motives[(int)Motive.Bladder] -= hungerGain * tuning.HungerToBladderMultiplier;
 
-        var active = person[PersonData.ActivePlayfulPersonality];
-        person[Motive.Comfort] -= active * (tuning.ComfortDecrementActive - tuning.ComfortDecrementLazy) * 0.001f
+        var active = personData[(int)PersonData.ActivePlayfulPersonality];
+        motives[(int)Motive.Comfort] -= active * (tuning.ComfortDecrementActive - tuning.ComfortDecrementLazy) * 0.001f
             + tuning.ComfortDecrementLazy;
-        person[Motive.Hunger] -= (100f + hunger) * tuning.HungerDecrementRatio;
+        motives[(int)Motive.Hunger] -= (100f + hunger) * tuning.HungerDecrementRatio;
 
         if (!asleep)
-            person[Motive.Social] -= person[PersonData.OutgoingFriendlyPersonality] * tuning.SocialDecrementMultiplier
+            motives[(int)Motive.Social] -= personData[(int)PersonData.OutgoingFriendlyPersonality] * tuning.SocialDecrementMultiplier
                 + tuning.SocialDecrementBase;
 
         if (asleep)
-            person[Motive.Fun] *= tuning.FunMultiplierAsleep;
+            motives[(int)Motive.Fun] *= tuning.FunMultiplierAsleep;
         else
-            person[Motive.Fun] -= tuning.FunDecrementAwake;
+            motives[(int)Motive.Fun] -= tuning.FunDecrementAwake;
 
-        person[Motive.Hygiene] -= asleep ? tuning.HygieneDecrementAsleep : tuning.HygieneDecrementAwake;
-        person[Motive.Bladder] -= asleep ? tuning.BladderDecrementAsleep : tuning.BladderDecrementAwake;
+        motives[(int)Motive.Hygiene] -= asleep ? tuning.HygieneDecrementAsleep : tuning.HygieneDecrementAwake;
+        motives[(int)Motive.Bladder] -= asleep ? tuning.BladderDecrementAsleep : tuning.BladderDecrementAwake;
 
-        for (var index = 0; index < person.Motives.Length; index++)
+        var clampLen = Math.Min(motives.Length, savedValues7CC.Length);
+        for (var index = 0; index < motives.Length; index++)
         {
-            person.Motives[index] = Math.Clamp(person.Motives[index], -100f, 100f);
-            person.SavedPersonValues7CC[index] = person.Motives[index];
+            var value = float.IsFinite(motives[index]) ? motives[index] : 0f;
+            motives[index] = Math.Clamp(value, -100f, 100f);
+            if (index < clampLen)
+                savedValues7CC[index] = motives[index];
         }
 
-        ApplyMood(person);
+        ApplyMood(motives, personData);
     }
 
-    private void ApplyMood(XPerson person)
+    private void ApplyMood(float[] motives, short[] personData)
     {
-        var curves = person[PersonData.PersonAge] is > 0 and <= 17 ? ChildMoodCurves : AdultMoodCurves;
+        var curves = personData[(int)PersonData.PersonAge] is > 0 and <= 17 ? ChildMoodCurves : AdultMoodCurves;
         if (curves.Count != MoodMotiveIndices.Length) return;
 
-        var gender = person[PersonData.Gender];
+        var gender = personData[(int)PersonData.Gender];
         var numerator = 0f;
         var denominator = 0f;
         for (var curveIndex = 0; curveIndex < MoodMotiveIndices.Length; curveIndex++)
         {
-            var value = person.Motives[MoodMotiveIndices[curveIndex]];
+            var value = motives[MoodMotiveIndices[curveIndex]];
             // Excludes the default Room motive (13) for pets, but includes it for Sims.
             if (gender >= 2 && value == 13f) continue;
             var weight = curves[curveIndex].Evaluate(value);
             numerator += weight * value;
             denominator += weight;
         }
-        person[Motive.Mood] = numerator / denominator;
+        if (denominator > 0f && float.IsFinite(numerator / denominator))
+            motives[(int)Motive.Mood] = Math.Clamp(numerator / denominator, -100f, 100f);
     }
 }

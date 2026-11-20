@@ -1004,17 +1004,9 @@ public sealed class OriginalFamilyPickerOverlay
                 var panelSize = new CGSize(800.0 * factor, 600.0 * factor);
                 var panelAnchor = new CGPoint(activeTip.Anchor.X * factor, activeTip.Anchor.Y * factor);
                 var fullRect = PlacementTooltip.Rect(scaledSize, panelAnchor, panelSize).OffsetBy(left, top);
-                if (progress < 1.0)
-                {
-                    double h = Math.Max(1.0, Math.Round(fullRect.Height * progress, MidpointRounding.AwayFromZero));
-                    float frac = (float)(h / fullRect.Height);
-                    var grownRect = new CGRect(fullRect.MinX, fullRect.MaxY - h, fullRect.Width, h);
-                    items.Add(new DrawItem(resolvedTip, grownRect, new Vector4(0f, 1f - frac, 1f, frac)));
-                }
-                else
-                {
-                    items.Add(new DrawItem(resolvedTip, fullRect, whole));
-                }
+                double lift = (1.0 - progress) * 2.0 * factor;
+                var liftedRect = new CGRect(fullRect.MinX, fullRect.MinY + lift, fullRect.Width, fullRect.Height);
+                items.Add(new DrawItem(resolvedTip, liftedRect, whole));
             }
         }
 

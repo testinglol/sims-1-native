@@ -419,14 +419,15 @@ public sealed class OriginalPhotoAlbumOverlay
             }
 
             var rect = PlacementTooltip.Rect(image.Size, new CGPoint(_tooltipAnchor.X, _tooltipAnchor.Y - 1), canvas);
-            var height = Math.Floor(rect.Height * progress.Value);
-            if (height < 1 || rect.Height <= 0) return [];
+            if (rect.Height <= 0) return [];
+            var lift = (1.0 - progress.Value) * 2.0;
             return
             [
                 new OriginalGameplayOverlay.Part(
                     image,
-                    new CGRect(rect.MinX, rect.MaxY - height, rect.Width, height),
-                    new Vector4(0f, (float)(1.0 - height / rect.Height), 1f, (float)(height / rect.Height)))
+                    new CGRect(rect.MinX, rect.MinY + lift, rect.Width, rect.Height),
+                    new Vector4(0f, 0f, 1f, 1f),
+                    (float)Math.Clamp(progress.Value, 0.0, 1.0))
             ];
         }
         catch

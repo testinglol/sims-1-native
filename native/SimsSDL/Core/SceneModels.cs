@@ -349,6 +349,28 @@ public sealed record SceneAnimation
         }
     }
 
+    public sealed record OverheadFeedbackDescriptor(
+        [property: JsonPropertyName("objectID")] short ObjectID,
+        [property: JsonPropertyName("kind")] string Kind,
+        [property: JsonPropertyName("text")] string Text,
+        [property: JsonPropertyName("backgroundRgb")] uint BackgroundRgb,
+        [property: JsonPropertyName("foregroundRgb")] uint ForegroundRgb,
+        [property: JsonPropertyName("delta")] int Delta,
+        [property: JsonPropertyName("x")] float X,
+        [property: JsonPropertyName("y")] float Y,
+        [property: JsonPropertyName("level")] int Level,
+        [property: JsonPropertyName("stackIndex")] int StackIndex,
+        [property: JsonPropertyName("remainingTicks")] int RemainingTicks,
+        [property: JsonPropertyName("hasSprite")] bool HasSprite);
+
+    public sealed record SkillMeterDescriptor(
+        [property: JsonPropertyName("objectID")] short ObjectID,
+        [property: JsonPropertyName("spriteId")] int SpriteId,
+        [property: JsonPropertyName("progressTenths")] int ProgressTenths,
+        [property: JsonPropertyName("x")] float X,
+        [property: JsonPropertyName("y")] float Y,
+        [property: JsonPropertyName("level")] int Level);
+
     [JsonConstructor]
     public SceneAnimation() { }
 
@@ -381,6 +403,14 @@ public sealed record SceneAnimation
 
     [JsonPropertyName("censorRects")]
     public IReadOnlyList<LotScene.CensorRect>? CensorRects { get; init; }
+
+    [JsonPropertyName("overheadFeedback")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<OverheadFeedbackDescriptor>? OverheadFeedback { get; init; }
+
+    [JsonPropertyName("skillMeters")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<SkillMeterDescriptor>? SkillMeters { get; init; }
 
     [JsonIgnore]
     internal bool IsTrustedInProcess { get; init; }
@@ -430,14 +460,26 @@ public sealed record SceneAnimation
             }
         }
 
-        var updatedSprites = new List<LotScene.Sprite>(retainedSprites.Count + Sprites.Count);
-        updatedSprites.AddRange(retainedSprites);
-        updatedSprites.AddRange(Sprites);
+        IReadOnlyList<LotScene.Sprite> updatedSprites = retainedSprites.Count == 0
+            ? Sprites
+            : Sprites.Count == 0
+                ? retainedSprites
+                : new ConcatReadOnlyList<LotScene.Sprite>(retainedSprites, Sprites);
 
-        var updatedMeshes = new List<LotScene.Mesh>(retainedMeshes.Count + Meshes.Count);
-        updatedMeshes.AddRange(retainedMeshes);
-        foreach (var mesh in Meshes)
-            updatedMeshes.Add(mesh.Unpack());
+        IReadOnlyList<LotScene.Mesh> updatedMeshes;
+        if (Meshes.Count == 0)
+        {
+            updatedMeshes = retainedMeshes;
+        }
+        else
+        {
+            var dynamicMeshes = new LotScene.Mesh[Meshes.Count];
+            for (int i = 0; i < Meshes.Count; i++)
+                dynamicMeshes[i] = Meshes[i].Unpack();
+            updatedMeshes = retainedMeshes.Count == 0
+                ? dynamicMeshes
+                : new ConcatReadOnlyList<LotScene.Mesh>(retainedMeshes, dynamicMeshes);
+        }
 
         IReadOnlyList<LotScene.Texture> updatedTextures;
         if (Textures.Count == 0 && TextureStart == scene.Textures.Count)
@@ -456,6 +498,8 @@ public sealed record SceneAnimation
         var result = scene with
         {
             CensorRects = CensorRects ?? scene.CensorRects,
+            OverheadFeedback = OverheadFeedback,
+            SkillMeters = SkillMeters,
             Lighting = Lighting ?? scene.Lighting,
             Textures = updatedTextures,
             Sprites = updatedSprites,
@@ -522,6 +566,9 @@ public sealed record AudioEvent
     [JsonPropertyName("zoom")]
     public bool? Zoom { get; init; }
 
+    [JsonPropertyName("pitchScale")]
+    public float? PitchScale { get; init; }
+
     public static AudioEvent FromJson(string json) =>
         JsonSerializer.Deserialize<AudioEvent>(json) ?? throw new ContentError("Audio event JSON decoded to null");
 
@@ -540,6 +587,7 @@ public sealed record AudioEvent
                 || !float.IsFinite(duration) || duration <= 0 || duration > 3600
                 || !float.IsFinite(volume) || volume < 0 || volume > 1
                 || !float.IsFinite(pan) || pan < -1 || pan > 1
+                || (PitchScale is float pitchScale && (!float.IsFinite(pitchScale) || pitchScale <= 0f || pitchScale > 4f))
                 || Group is not ("FX" or "VOX" or "MUSIC" or "AMBIENCE")
                 || (OwnerID ?? -1) < -32768 || (OwnerID ?? -1) > 32767)
             {
@@ -668,4 +716,21 @@ internal sealed class StrictCamelCaseEnumConverter<TEnum> : JsonConverter<TEnum>
             name = JsonNamingPolicy.CamelCase.ConvertName(value.ToString());
         writer.WriteStringValue(name);
     }
+}
+
+internal sealed class ConcatReadOnlyList<T>(IReadOnlyList<T> first, IReadOnlyList<T> second) : IReadOnlyList<T>
+{
+    public int Count => first.Count + second.Count;
+
+    public T this[int index] => index < first.Count ? first[index] : second[index - first.Count];
+
+    public IEnumerator<T> GetEnumerator()
+    {
+        for (int i = 0; i < first.Count; i++)
+            yield return first[i];
+        for (int i = 0; i < second.Count; i++)
+            yield return second[i];
+    }
+
+    System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
 }

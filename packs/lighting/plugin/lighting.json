@@ -1,0 +1,16 @@
+{
+  "radius": 26,
+  "occlusion": 1.2,
+  "shadow": 0.55,
+  "thickness": 60,
+  "reach": 4,
+  "contactRadius": 40,
+  "contact": 0.25,
+  "heightTexels": 16,
+  "groundOffset": 0,
+  "lampReach": 240,
+  "lampGain": 1.4,
+  "night": 0.55,
+  "windowSun": 1.2,
+  "tint": 0.6
+}

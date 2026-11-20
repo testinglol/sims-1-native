@@ -69,9 +69,7 @@ internal sealed class ReachOps(SimulationWorld world, TreeStack? stack) : IReach
         var age = me[PersonData.PersonAge];
         var child = age <= 17;
         if (!world.ReachAvatarAnimationTable.TryGetValue((child, index), out var clip)) return false;
-        me.PendingAnimationEvents.Clear();
-        me.AnimationPlayback = new AvatarAnimationPlayback(clip, false, false, startedAtMils: me.AnimatorMilliseconds);
-        me.AnimatorCurrentSkill = -1;
+        world.BeginPrimaryAnimation(me, new AvatarAnimationPlayback(clip, false, false, startedAtMils: me.AnimatorMilliseconds));
         me.AnimatorControlState = 0;
         return true;
     }

@@ -482,11 +482,14 @@ public static partial class OriginalGameplayLayout
 
     public struct MotiveBarState : IEquatable<MotiveBarState>
     {
+        public const int CriticalMotiveThreshold = -50;
+
         public readonly record struct Evaluation(uint GreenRgb, uint RedRgb, bool IsAnimating);
 
         public int Value { get; private set; }
         public MotiveColorRamp GreenRamp { get; private set; }
         public MotiveColorRamp RedRamp { get; private set; }
+        private bool _effectsDisabled;
 
         public MotiveBarState(int value = 0)
         {
@@ -495,29 +498,38 @@ public static partial class OriginalGameplayLayout
             var steady = BarColors(clamped);
             GreenRamp = new MotiveColorRamp(MotiveColorRamp.PackRgb(steady.Green));
             RedRamp = new MotiveColorRamp(MotiveColorRamp.PackRgb(steady.Red));
+            _effectsDisabled = false;
         }
 
-        public void Reset(int value, ulong nowMs = 0)
+        public void Reset(int value, ulong nowMs = 0, bool effectsEnabled = true)
         {
             int clamped = Math.Min(100, Math.Max(-100, value));
             Value = clamped;
+            _effectsDisabled = !effectsEnabled;
             var steady = BarColors(clamped);
             uint greenRgb = MotiveColorRamp.PackRgb(steady.Green);
             uint redRgb = MotiveColorRamp.PackRgb(steady.Red);
             var red = RedRamp;
-            red.Set(redRgb, redRgb, 0, nowMs);
+            if (clamped <= CriticalMotiveThreshold && effectsEnabled)
+            {
+                red.Set(redRgb, MotiveArrowFallingFlashRgb, MotiveArrowFadeDurationMs, nowMs);
+            }
+            else
+            {
+                red.Set(redRgb, redRgb, 0, nowMs);
+            }
             RedRamp = red;
             var green = GreenRamp;
             green.Set(greenRgb, greenRgb, 0, nowMs);
             GreenRamp = green;
         }
 
-        public void SetValue(int value, ulong nowMs = 0)
+        public void SetValue(int value, ulong nowMs = 0, bool effectsEnabled = true)
         {
             int clamped = Math.Min(100, Math.Max(-100, value));
-            if (clamped == Value)
+            if (clamped == Value && _effectsDisabled == !effectsEnabled)
                 return;
-            Reset(clamped, nowMs);
+            Reset(clamped, nowMs, effectsEnabled);
         }
 
         public Evaluation Evaluate(ulong nowMs)
@@ -528,7 +540,18 @@ public static partial class OriginalGameplayLayout
 
             var red = RedRamp;
             uint currentRed = red.Color(nowMs);
-            if (red.IsFinished(nowMs) && currentRed == MotiveArrowFallingFlashRgb)
+            if (Value <= CriticalMotiveThreshold && !_effectsDisabled)
+            {
+                if (red.IsFinished(nowMs))
+                {
+                    uint nextTarget = currentRed == MotiveArrowFallingFlashRgb
+                        ? steadyRed
+                        : MotiveArrowFallingFlashRgb;
+                    red.Set(currentRed, nextTarget, MotiveArrowFadeDurationMs, nowMs);
+                    RedRamp = red;
+                }
+            }
+            else if (red.IsFinished(nowMs) && currentRed == MotiveArrowFallingFlashRgb)
             {
                 red.Set(steadyRed, steadyRed, 0, nowMs);
                 RedRamp = red;

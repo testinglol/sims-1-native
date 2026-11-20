@@ -862,6 +862,44 @@ public sealed class LookTowardsPrimitiveTests
             RouteExecutor.Continue(context.World, person, context.Frame, stack: null));
     }
 
+    [Theory]
+    [InlineData(3, (short)7)]
+    [InlineData(5, (short)7)]
+    [InlineData(1, (short)7)]
+    public void LookTowardsModeTwoWithStandingTurnClipsTurnsInPlaceWithoutTranslatingTowardDistantTarget(
+        short initialDirection, short expectedDirection)
+    {
+        var (context, person, _) = World(stackObject: 2);
+        context.World.Host = null;
+        AddWalkClips(context.World);
+        var turnSamples = Enumerable.Range(0, 31).Select(_ => Vector3.Zero).ToArray();
+        for (var index = 4; index <= 10; index++)
+            context.World.StandardWalkFallbackAnimationTable[(150, index)] = new AvatarAnimationClip(
+                $"a2o-standing-turn-{index}", turnSamples.Length, [], null, 0f, Vector3.Zero, turnSamples, 1000f);
+
+        var origin = new ObjectPosition(424, 392, 0);
+        person.Position = origin;
+        person[ObjectData.Direction] = initialDirection;
+        context.World.ObjectById(2)!.Position = new ObjectPosition(200, 168, 0);
+
+        var result = RunLookTowardsStep(context, Operand(2, 2));
+        Assert.Equal(PrimitiveResult.Stop, result);
+        Assert.Equal(origin, person.Position);
+
+        for (var tick = 0; tick < 128 && result == PrimitiveResult.Stop; tick++)
+        {
+            Assert.Equal(origin, person.Position);
+            Assert.Equal((float)origin.X, person.AnimatorRootX ?? origin.X, 3);
+            Assert.Equal((float)origin.Y, person.AnimatorRootY ?? origin.Y, 3);
+            result = RunLookTowardsStep(context, Operand(2, 2));
+        }
+
+        Assert.Equal(PrimitiveResult.True, result);
+        Assert.Null(person.NativeRoute);
+        Assert.Equal(origin, person.Position);
+        Assert.Equal(expectedDirection, person[ObjectData.Direction]);
+    }
+
     [Fact]
     public void ModeOneTurnsToTheFrontAndNeedsNoStackObject()
     {

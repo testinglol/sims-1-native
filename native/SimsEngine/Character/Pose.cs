@@ -46,9 +46,9 @@ public static class Pose
         return direction;
     }
 
-    /// <summary>Applies transient head rotation to bone index 31 by adjusting the bone's base pitch angle,
-    /// clamping the result to [-1.2, 1.2] radians before re-multiplying the local rotation quaternion.
-    /// </summary>
+    /// <summary>Applies transient head rotation to the skeleton's HEAD bone (falling back to index 31 when
+    /// HEAD is absent) by adjusting the bone's base pitch angle, clamping the result to [-1.2, 1.2] radians
+    /// before re-multiplying the local rotation quaternion.</summary>
     public static IReadOnlyList<BonePose> ApplyHeadAdjustment(Skeleton skeleton, IReadOnlyList<BonePose> pose,
         float adjustment)
     {
@@ -56,8 +56,12 @@ public static class Pose
         ArgumentNullException.ThrowIfNull(pose);
         if (pose.Count != skeleton.Bones.Count)
             throw new InvalidDataException("The head-adjustment pose does not match the skeleton bone count");
-        const int headBoneId = 31;
-        if (pose.Count <= headBoneId) return pose;
+        var layout = GetLayout(skeleton);
+        if (!layout.IndexByName.TryGetValue("HEAD", out var headBoneId))
+        {
+            headBoneId = 31;
+            if (pose.Count <= headBoneId) return pose;
+        }
 
         var head = pose[headBoneId];
         var sourceRotation = head.LocalRotation;
@@ -75,7 +79,7 @@ public static class Pose
             var bone = pose[index];
             local[index] = new Local(bone.LocalTranslation, index == headBoneId ? adjustedRotation : bone.LocalRotation, bone.Animated);
         }
-        return Recompose(skeleton, GetLayout(skeleton), local);
+        return Recompose(skeleton, layout, local);
     }
 
     /// <summary>Selects the active locomotion stride based on cycle phase, returning the primary stride
@@ -177,7 +181,7 @@ public static class Pose
     /// interpolation sample to frame zero when looping is enabled.</summary>
     public static IReadOnlyList<BonePose> Sample(Skeleton skeleton, Animation animation, AnimationCurves curves, double frame,
         IReadOnlyList<BonePose>? basePose = null, float practiceWeight = 1f, bool loop = false,
-        bool interpolateFrame = true)
+        bool interpolateFrame = true, bool allowUnblendedOverride = true)
     {
         var bones = skeleton.Bones;
         if (basePose is not null && basePose.Count != bones.Count)
@@ -230,10 +234,12 @@ public static class Pose
                             ? first + 1
                             : motionFirst;
                 var motionWeight = motionSecond == motionFirst ? 0f : weight;
-                // Bones with CanBlend disabled bypass blend weighting and assign directly.
+                // Bones with CanBlend disabled bypass blend weighting and assign directly unless suppressed
+                // (e.g. fading-out Last practices skip unblended bones so they do not overwrite Primary).
                 var current = local[bone];
                 var boneIntegers = bones[bone].Integers;
                 var canBlend = boneIntegers.Length <= 2 || boneIntegers[2] != 0;
+                if (!canBlend && !allowUnblendedOverride) continue;
                 var sampledTranslation = motion.Integers[2] >= 0
                     ? Lerp(Translation(curves, motion, motionFirst, animation.Name), Translation(curves, motion, motionSecond, animation.Name), motionWeight)
                     : current.Translation;

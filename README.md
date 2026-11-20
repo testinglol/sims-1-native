@@ -1,16 +1,18 @@
-# The Sims Native
+# Plumbob Engine
 
-Cross-platform C# (.NET 9) and SDL3 (`SDL_GPU`) client and simulation engine for *The Sims 1*.
+Cross-platform C# (.NET 9) and SDL3 (`SDL_GPU`) engine and client for *The Sims 1*.
 
-No game assets are included. You need an existing installation of *The Sims 1* (such as *Complete Collection* or *Legacy Collection*) containing `GameData` and `UIGraphics`. Game files are read-only and never modified.
+> **Disclaimer**: Plumbob Engine is an independent, clean-room engine reimplementation and is not affiliated with, endorsed by, or sponsored by Electronic Arts Inc. or Maxis. All trademarks belong to their respective owners.
+
+No game assets are included. You need an existing, legally owned installation of *The Sims 1* (such as *Complete Collection* or *Legacy Collection*) containing `GameData` and `UIGraphics`. Game files are read-only and never modified.
 
 ## Releases
 
-Standalone archives include the .NET 9 runtime, SDL3, and compiled shaders:
+Standalone archives include the .NET 9 runtime, SDL3, compiled shaders, and preinstalled **Enhanced Graphics** and **Seasons** packs (enabled by default; toggleable in the in-game **Mods** menu):
 
-- macOS (Apple Silicon, macOS 14+): extract `The-Sims-Native-macOS-arm64.zip` and open `The Sims Native.app` (Control-click -> Open on first run; ad-hoc signed).
-- Windows (x64): extract `The-Sims-Native-Windows-x64.zip` and run `SimsSDL.exe`.
-- Linux (x64): extract `The-Sims-Native-Linux-x64.zip` and run `./SimsSDL`.
+- macOS (Apple Silicon, macOS 14+): extract `Plumbob-Engine-macOS-arm64.zip` and open `Plumbob Engine.app` (Control-click -> Open on first run; ad-hoc signed).
+- Windows (x64): extract `Plumbob-Engine-Windows-x64.zip` and run `SimsSDL.exe`.
+- Linux (x64): extract `Plumbob-Engine-Linux-x64.zip` and run `./SimsSDL`.
 
 On first launch, select your *The Sims 1* install directory (or pass `--game <dir>` / set `SIMS_GAME_DIR`).
 
@@ -62,9 +64,9 @@ Requires the .NET 9 SDK and SDL3 (`brew install sdl3` on macOS, `SDL3_DIR` / `-S
 SIMS_GAME_DIR="/path/to/The Sims 1" ./tools/play_sdl.command
 
 # Package release archives into dist/
-./tools/package_release.command 0.4.0
-pwsh -File tools/package_windows.ps1 -Version 0.4.0 -SdlDir C:\path\to\SDL3
-./tools/package_linux.sh 0.4.0
+./tools/package_release.command 0.5.0
+pwsh -File tools/package_windows.ps1 -Version 0.5.0 -SdlDir C:\path\to\SDL3
+./tools/package_linux.sh 0.5.0
 
 # Run tests (asset-dependent tests skip if runtime/game and SIMS_GAME_DIR are absent)
 dotnet test native/SimsEngine.Tests/SimsEngine.Tests.csproj -c Release -p:EnableWindowsTargeting=true --nologo

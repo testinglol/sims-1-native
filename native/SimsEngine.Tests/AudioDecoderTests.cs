@@ -134,7 +134,10 @@ public class AudioDecoderTests
             var music = bank.Resolve("bkground_buy1");
             Assert.NotNull(music);
             Assert.Equal("MUSIC", music.Group);
-            Assert.True(music.IsLoop);
+            // Per 0057163b.c & MainMusicLoop (simssound.HIT:0xc6), mode music tracks play non-looped and
+            // advance to the next playlist entry when SDLAudioPlayer signals audioEnded.
+            Assert.False(music.IsLoop);
+            Assert.True(music.IsPlaylist);
             Assert.EndsWith(".mp3", music.RelativePath);
 
             var dtn = bank.Resolve("station_dtnhood");

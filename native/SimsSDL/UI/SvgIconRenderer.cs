@@ -1249,7 +1249,7 @@ public static class SvgIconRenderer
                 if (outerA <= 0.001f)
                     continue;
                 float dIn = -d;
-                float ringCov = Math.Clamp((1.30f - dIn) * scale, 0f, 1f);
+                float ringCov = Math.Clamp((1.05f - dIn) * scale, 0f, 1f);
                 if (ringCov <= 0.001f)
                     continue;
 

@@ -120,13 +120,13 @@ public static class UtkAudio
         private uint bitsValue;
         private int bitsCount;
 
-        private byte ReadByte() => pos < buffer.Length ? buffer[pos++] : (byte)0;
-
         public void InitBits()
         {
             if (bitsCount == 0)
             {
-                bitsValue = ReadByte();
+                if (pos >= buffer.Length)
+                    throw new EndOfStreamException("Unexpected end of UTK bitstream");
+                bitsValue = buffer[pos++];
                 bitsCount = 8;
             }
         }
@@ -139,14 +139,22 @@ public static class UtkAudio
 
         public byte ReadBits(int count)
         {
+            if (bitsCount < count && pos < buffer.Length)
+            {
+                bitsValue |= (uint)buffer[pos++] << bitsCount;
+                bitsCount += 8;
+            }
+            if (bitsCount < count)
+                throw new EndOfStreamException("Unexpected end of UTK bitstream");
+
             byte mask = Bitmasks[count - 1];
             byte ret = (byte)(bitsValue & mask);
             bitsValue >>= count;
             bitsCount -= count;
 
-            if (bitsCount < 8)
+            if (bitsCount < 8 && pos < buffer.Length)
             {
-                bitsValue |= (uint)ReadByte() << bitsCount;
+                bitsValue |= (uint)buffer[pos++] << bitsCount;
                 bitsCount += 8;
             }
 
@@ -169,6 +177,7 @@ public static class UtkAudio
     public static (byte[] WavBytes, int SampleRate, int Channels, int TotalSamples, float Duration) Decode(ReadOnlySpan<byte> data)
     {
         if (!IsUtk(data)) throw new ArgumentException("Invalid UTK / UTM0 header magic");
+        if (data.Length <= 0x20) throw new ArgumentException("Truncated UTK / UTM0 payload");
 
         var pcmBytes = BinaryPrimitives.ReadUInt32LittleEndian(data.Slice(4, 4));
         var channels = BinaryPrimitives.ReadUInt16LittleEndian(data.Slice(14, 2));
@@ -195,8 +204,8 @@ public static class UtkAudio
         float[] synthHistory = new float[12];
         float[] subframes = new float[324 + 432]; // Indices 0..323 store the adaptive codebook; 324..755 store speech samples.
 
-        int targetSamples = pcmBytes > 0 ? (int)(pcmBytes / 2) : 22050;
-        var pcmSamples = new List<short>(targetSamples);
+        int targetSamples = pcmBytes > 0 ? (int)Math.Min(pcmBytes / 2, int.MaxValue / 2) : 22050;
+        var pcmSamples = new List<short>(Math.Min(targetSamples, 65536));
 
         while (pcmSamples.Count < targetSamples && br.HasMoreBytes)
         {

@@ -131,8 +131,16 @@ public sealed partial class SimulationWorld
 
         var multiTile = objectClass is ObjectClass.MultiTileObject or ObjectClass.Portal
             ? (live.SavedMultiTileState ?? baseState?.MultiTile ?? new MultiTileState(0, 0, version > 0x39 ? 0 : null, 0, 0, 0,
-                live.MultiTileMasterId, objectClass == ObjectClass.Portal ? [] : null)) with { LeadObject = live.MultiTileMasterId }
+                live.MultiTileMasterId, objectClass == ObjectClass.Portal ? [] : null))
             : null;
+        if (multiTile is not null)
+        {
+            multiTile = multiTile with
+            {
+                LeadObject = live.MultiTileMasterId,
+                PortalValues = objectClass == ObjectClass.Portal ? multiTile.PortalValues ?? [] : multiTile.PortalValues,
+            };
+        }
 
         var values0x108 = new int[6];
         values0x108[0] = live.FootprintBounds.MinY;

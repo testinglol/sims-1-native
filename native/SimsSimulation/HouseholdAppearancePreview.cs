@@ -9,7 +9,7 @@ internal static class HouseholdAppearancePreview
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
     private sealed record PreviewTexture(string File, int Width, int Height, string Encoding);
-    internal sealed record PreviewVertex(float X, float Y, float Z, float U, float V, float Nx, float Ny, float Nz);
+    internal readonly record struct PreviewVertex(float X, float Y, float Z, float U, float V, float Nx, float Ny, float Nz);
     private sealed record PreviewMesh(int Texture, int ObjectID, float Depth, PreviewVertex[] Vertices, int Layer);
     private sealed record PreviewDocument(int SchemaVersion, float Width, float Height, PreviewTexture[] Textures, PreviewMesh[] Meshes);
 

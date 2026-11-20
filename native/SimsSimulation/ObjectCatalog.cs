@@ -6,15 +6,36 @@ using SimsEngine.Formats;
 
 namespace SimsSimulation;
 
-internal sealed record ObjectCatalogEntry(ObjectEntry Source, uint Guid, int Categories, int Price,
-    string Name, string Description, int RoomSort = 0, int FunctionSubsort = 0);
+internal enum CatalogLotType
+{
+    Residential = 0,
+    Downtown = 1,
+    Vacation = 2,
+    Community = 3,
+    StudioTown = 4,
+    MagicTown = 5,
+}
 
-/// <summary>Residential catalog filtering evaluates object definition function flags, room flags, and lot
-/// subsorts. Multi-tile groups are cataloged via their root definition (having a nonzero master ID and
-/// sub-index -1) while physical child tiles are omitted.</summary>
+internal sealed record ObjectCatalogEntry(ObjectEntry Source, uint Guid, int Categories, int Price,
+    string Name, string Description, int RoomSort = 0, int FunctionSubsort = 0,
+    int DTSubsort = 0, int VacationSubsort = 0, int CommunitySubsort = 0,
+    int STSubsort = 0, int MTSubsort = 0);
+
+/// <summary>Catalog filtering evaluates object definition function flags, room flags, and residential or
+/// community/expansion lot subsorts. Multi-tile groups are cataloged via their root definition (having a
+/// nonzero master ID and sub-index -1) while physical child tiles are omitted.</summary>
 internal static class ObjectCatalog
 {
-    public static bool TryGetEntry(ObjectEntry source, byte language, out ObjectCatalogEntry? item)
+    private const ObjdField DTSubsortField = (ObjdField)95;
+    private const ObjdField VacationSubsortField = (ObjdField)97;
+    private const ObjdField CommunitySubsortField = (ObjdField)99;
+    private const ObjdField STSubsortField = (ObjdField)103;
+    private const ObjdField MTSubsortField = (ObjdField)104;
+
+    public static bool TryGetEntry(ObjectEntry source, byte language, out ObjectCatalogEntry? item) =>
+        TryGetEntry(source, language, CatalogLotType.Residential, out item);
+
+    public static bool TryGetEntry(ObjectEntry source, byte language, CatalogLotType lotType, out ObjectCatalogEntry? item)
     {
         var definition = source.Definition;
         var flags = definition[ObjdField.FunctionFlags];
@@ -26,12 +47,33 @@ internal static class ObjectCatalog
         // columns, and pool accessories by BuildModeType (1 through 7), mapping to catalog categories 8
         // through 14.
         var buildTool = buildMode is >= 1 and <= 7;
+        var dtSubsort = definition[DTSubsortField];
+        var vacationSubsort = definition[VacationSubsortField];
+        var communitySubsort = definition[CommunitySubsortField];
+        var stSubsort = definition[STSubsortField];
+        var mtSubsort = definition[MTSubsortField];
+
+        var lotSubsort = lotType switch
+        {
+            CatalogLotType.Downtown => dtSubsort,
+            CatalogLotType.Vacation => vacationSubsort,
+            CatalogLotType.Community => communitySubsort,
+            CatalogLotType.StudioTown => stSubsort,
+            CatalogLotType.MagicTown => mtSubsort,
+            _ => 0,
+        };
+
+        var validSort = lotType == CatalogLotType.Residential
+            ? (definition[ObjdField.RoomSort] != 0 && (flags & 0xff) != 0)
+            : (lotSubsort & 0x8f) != 0;
+
         if (definition[ObjdField.Disabled] != 0 ||
             objectClass is not (ObjectClass.Object or ObjectClass.MultiTileObject or ObjectClass.Portal) ||
             objectClass == ObjectClass.Portal && !buildTool ||
             (master != 0 && subIndex != ushort.MaxValue) || (master == 0 && subIndex != 0) ||
-            (definition[ObjdField.RoomSort] == 0 && definition[ObjdField.BuildModeType] != 0 && !buildTool) || !buildTool && definition[ObjdField.NumGraphics] == 0 ||
-            !buildTool && (definition[ObjdField.RoomSort] == 0 || (flags & 0xff) == 0))
+            (definition[ObjdField.RoomSort] == 0 && definition[ObjdField.BuildModeType] != 0 && !buildTool) ||
+            !buildTool && definition[ObjdField.NumGraphics] == 0 ||
+            !buildTool && !validSort)
         {
             item = null;
             return false;
@@ -49,9 +91,15 @@ internal static class ObjectCatalog
             catName = null;
             catDesc = null;
         }
-        item = new ObjectCatalogEntry(source, source.Guid, buildTool ? 1 << (buildMode + 7) : (int)(flags & 0xff),
+        var categories = buildTool
+            ? 1 << (buildMode + 7)
+            : lotType == CatalogLotType.Residential
+                ? ((flags & 0xff) != 0 ? (int)(flags & 0xff) : (1 << 7))
+                : (lotSubsort & 0x8f);
+        item = new ObjectCatalogEntry(source, source.Guid, categories,
             definition[ObjdField.Price], catName ?? source.Chunk.Label,
-            catDesc ?? "", buildTool ? 0 : definition[ObjdField.RoomSort], definition[ObjdField.FunctionSubsort]);
+            catDesc ?? "", buildTool ? 0 : definition[ObjdField.RoomSort], definition[ObjdField.FunctionSubsort],
+            dtSubsort, vacationSubsort, communitySubsort, stSubsort, mtSubsort);
         return true;
     }
 
@@ -86,22 +134,30 @@ internal static class ObjectCatalog
     private static readonly int[] FunctionSubsortMasks = [0x01, 0x02, 0x04, 0x08, 0x20, 0x40, 0x90, 0xff];
 
     public static object Page(ObjectRegistry registry, byte language, int category, int offset, int count, string session,
-        int? room = null, int? subsort = null, string? game = null)
+        int? room = null, int? subsort = null, string? game = null, CatalogLotType lotType = CatalogLotType.Residential)
     {
-        if (category is < -1 or > 12 || category == -1 && room is null || room is < 0 or > 7 ||
-            subsort is < 0 or > 7 || subsort is not null && (room is not null || category is < 0 or > 7) ||
+        var isResidential = lotType == CatalogLotType.Residential;
+        if (category is < -1 or > 12 ||
+            (isResidential && category == -1 && room is null) ||
+            room is < 0 or > 7 ||
+            subsort is < 0 or > 7 ||
+            (subsort is not null && (room is not null || (isResidential && category is < 0 or > 7))) ||
             category > 7 && room is not null ||
             offset is < 0 or > 1_000_000 || count is < 1 or > 64)
             throw new ArgumentException("Invalid native residential catalog page");
         var roomMask = room is { } roomIndex ? RoomMasks[roomIndex] : 0;
         var subsortMask = subsort is { } subsortIndex ? FunctionSubsortMasks[subsortIndex] : 0;
-        static bool MatchesSubsort(ObjectCatalogEntry item, int mask) =>
-            (item.FunctionSubsort & mask) != 0 || mask == 0xff && item.FunctionSubsort == 0;
+        static bool MatchesSubsort(ObjectCatalogEntry item, int mask)
+        {
+            var value = item.FunctionSubsort;
+            return (value & mask) != 0 || mask == 0xff && value == 0;
+        }
 
         var items = registry.ByGuid.Values
-            .Select(entry => TryGetEntry(entry, language, out var item) ? item : null)
+            .Select(entry => TryGetEntry(entry, language, lotType, out var item) ? item : null)
             .Where(item => item is not null && (room is null
-                ? (item.Categories & (1 << category)) != 0 && (subsort is null || MatchesSubsort(item, subsortMask))
+                ? (category == -1 || (item.Categories & (1 << category)) != 0) &&
+                  (subsort is null || MatchesSubsort(item, subsortMask))
                 : (item.RoomSort & roomMask) != 0 && (category == -1 || (item.Categories & (1 << category)) != 0)))
             .Cast<ObjectCatalogEntry>()
             .OrderBy(item => item.Price)
@@ -115,7 +171,7 @@ internal static class ObjectCatalog
         if (functionCounts is not null)
         {
             var inRoom = registry.ByGuid.Values
-                .Select(entry => TryGetEntry(entry, language, out var item) ? item : null)
+                .Select(entry => TryGetEntry(entry, language, lotType, out var item) ? item : null)
                 .Where(item => item is not null && (item.RoomSort & roomMask) != 0);
             foreach (var item in inRoom)
                 for (var function = 0; function < 8; function++)
@@ -124,7 +180,7 @@ internal static class ObjectCatalog
         if (functionSubsortCounts is not null)
         {
             var inFunction = registry.ByGuid.Values
-                .Select(entry => TryGetEntry(entry, language, out var item) ? item : null)
+                .Select(entry => TryGetEntry(entry, language, lotType, out var item) ? item : null)
                 .Where(item => item is not null && (item.Categories & (1 << category)) != 0)
                 .Cast<ObjectCatalogEntry>()
                 .ToArray();
@@ -378,7 +434,17 @@ internal static class ObjectCatalog
         return (size, size, output);
     }
 
-    private sealed record IconLayer(int X, int Y, int Width, int Height, bool Flip, float Order, int Index, byte[] Rgba);
+    private sealed record IconLayer(
+        int X,
+        int Y,
+        int Width,
+        int Height,
+        bool Flip,
+        float Order,
+        int Index,
+        byte[] Rgba,
+        byte[]? Depth,
+        float DepthOffset);
 
     internal static byte[]? RenderedIcon(ObjectEntry item) => RenderObjectFitting(item, 37, 37, fixedZoom: 3);
 
@@ -386,9 +452,9 @@ internal static class ObjectCatalog
     /// zoom 3, filtered into the 37x37 frame of the thumbnail template.</summary>
     private static byte[]? RenderedCatalogIcon(ObjectEntry item) => RenderObjectFitting(item, 37, 37, fixedZoom: 3, twoStateCatalogSheet: true);
 
-    /// <summary>Renders an object preview by selecting the highest zoom level (3, 2, or 1) whose bounds fit
-    /// within the 160x119 preview box with a 3-pixel margin on all sides.</summary>
-    private static byte[]? RenderedPreview(ObjectEntry item) => RenderObjectFitting(item, 160, 119, fixedZoom: null);
+    /// <summary>Renders an object preview from the highest available zoom level (preferring zoom 3),
+    /// smoothly area-downsampled into the 160x119 preview box with preserved 8-bit alpha.</summary>
+    private static byte[]? RenderedPreview(ObjectEntry item) => RenderObjectFitting(item, 160, 119, fixedZoom: 3);
 
     internal static byte[]? RenderedDialogPreview(ObjectEntry item) => RenderObjectFitting(item, 127, 97, fixedZoom: null);
 
@@ -465,8 +531,20 @@ internal static class ObjectCatalog
                     localX / (float)outWidth, localY / (float)outHeight, 1f / outWidth, 1f / outHeight, bg);
             });
         }
-        return WriteIconBitmap(outWidth, outHeight, (x, y) => Downsample(canvas, widthOut, heightOut,
-            x / (float)outWidth, y / (float)outHeight, 1f / outWidth, 1f / outHeight));
+        var pad = maxWidth >= 3 && maxHeight >= 3 ? 1 : 0;
+        var innerMaxW = maxWidth - pad * 2;
+        var innerMaxH = maxHeight - pad * 2;
+        var innerScale = Math.Min(1f, Math.Min(innerMaxW / (float)widthOut, innerMaxH / (float)heightOut));
+        var innerWidth = Math.Max(1, (int)Math.Round(widthOut * innerScale));
+        var innerHeight = Math.Max(1, (int)Math.Round(heightOut * innerScale));
+        return WriteIconBitmap(innerWidth + pad * 2, innerHeight + pad * 2, (x, y) =>
+        {
+            var localX = x - pad;
+            var localY = y - pad;
+            if ((uint)localX >= (uint)innerWidth || (uint)localY >= (uint)innerHeight)
+                return ((byte)0, (byte)0, (byte)0, (byte)0);
+            return DownsampleAlpha(canvas, widthOut, heightOut, localX, localY, innerWidth, innerHeight);
+        });
     }
 
     private static (int Width, int Height, byte[] Canvas)? RenderObjectZoom(
@@ -515,6 +593,7 @@ internal static class ObjectCatalog
                 var sprite = image.Sprites[index];
                 int width, height;
                 byte[] rgba;
+                byte[]? depth = null;
                 int paletteId;
                 int boundsX = 0;
                 bool flip = (sprite.Flags & 1) != 0;
@@ -526,6 +605,7 @@ internal static class ObjectCatalog
                         if ((uint)sprite.Frame >= art.Frames.Count) continue;
                         var frame = art.Frames[sprite.Frame];
                         width = frame.Width; height = frame.Height; paletteId = art.PaletteId;
+                        depth = frame.Depth;
                         rgba = Colorize(file, paletteId, frame.Width, frame.Height, pixel =>
                         {
                             var alpha = frame.Alpha[pixel];
@@ -552,7 +632,10 @@ internal static class ObjectCatalog
                 // offsets.
                 var left = tilePixelX + sprite.X + boundsX;
                 var top = tilePixelY + sprite.Y - height - (sprite.Offset1 != 0f ? (int)(sprite.Offset1 * (1 << (zoom + 1))) : 0);
-                layers.Add(new IconLayer(left, top, width, height, flip, (rx + ry) * 16f + x + y, layerSequence++, rgba));
+                // Match SceneExporter.SpriteDepth / SceneDepth.Project: 20*sqrt(6) depth units per tile along (rx+ry).
+                const float DepthPerTile = 48.989795f;
+                var depthOffset = (rx + ry + x + y + (sprite.Offset1 / 5f) * 0.81649658f) * DepthPerTile;
+                layers.Add(new IconLayer(left, top, width, height, flip, (rx + ry) * 16f + x + y, layerSequence++, rgba, depth, depthOffset));
             }
         }
         if (layers.Count == 0) return null;
@@ -561,13 +644,19 @@ internal static class ObjectCatalog
         var heightOut = layers.Max(layer => layer.Y + layer.Height) - minY;
         if (widthOut is < 1 or > 4096 || heightOut is < 1 or > 4096 || (long)widthOut * heightOut > 8_000_000) return null;
         var canvas = new byte[widthOut * heightOut * 4];
+        var zBuffer = new float[widthOut * heightOut];
+        Array.Fill(zBuffer, float.PositiveInfinity);
         foreach (var layer in layers.OrderBy(layer => layer.Order).ThenBy(layer => layer.Index))
         for (var sy = 0; sy < layer.Height; sy++)
         for (var sx = 0; sx < layer.Width; sx++)
         {
-            var source = (sy * layer.Width + (layer.Flip ? layer.Width - 1 - sx : sx)) * 4;
+            var srcPixel = sy * layer.Width + (layer.Flip ? layer.Width - 1 - sx : sx);
+            var source = srcPixel * 4;
             var alpha = layer.Rgba[source + 3]; if (alpha == 0) continue;
-            var target = ((layer.Y - minY + sy) * widthOut + layer.X - minX + sx) * 4;
+            var dstPixel = (layer.Y - minY + sy) * widthOut + layer.X - minX + sx;
+            float z = (layer.Depth is { } layerDepth ? layerDepth[srcPixel] : 128f) - layer.DepthOffset;
+            if (z > zBuffer[dstPixel] + 0.01f) continue;
+            var target = dstPixel * 4;
             if (alpha == 255) layer.Rgba.AsSpan(source, 4).CopyTo(canvas.AsSpan(target, 4));
             else
             {
@@ -578,6 +667,7 @@ internal static class ObjectCatalog
                     canvas[target + channel] = (byte)((layer.Rgba[source + channel] * nextAlpha + canvas[target + channel] * oldAlpha * (1 - nextAlpha)) / outputAlpha);
                 canvas[target + 3] = (byte)(outputAlpha * 255);
             }
+            if (alpha >= 128) zBuffer[dstPixel] = z;
         }
         return (widthOut, heightOut, canvas);
     }
@@ -600,19 +690,62 @@ internal static class ObjectCatalog
         return output;
     }
 
-    private static (byte Red, byte Green, byte Blue, byte Alpha) Downsample(byte[] canvas, int width, int height,
-        float u, float v, float du, float dv)
+    private static (byte Red, byte Green, byte Blue, byte Alpha) DownsampleAlpha(byte[] canvas, int width, int height,
+        int dstX, int dstY, int outWidth, int outHeight)
     {
-        var x0 = (int)(u * width); var y0 = (int)(v * height);
-        var x1 = Math.Max(x0 + 1, (int)((u + du) * width)); var y1 = Math.Max(y0 + 1, (int)((v + dv) * height));
-        int r = 0, g = 0, b = 0, opaque = 0, total = 0;
-        for (var y = y0; y < Math.Min(y1, height); y++)
-        for (var x = x0; x < Math.Min(x1, width); x++)
+        if (outWidth == width && outHeight == height)
         {
-            total++; var at = (y * width + x) * 4; if (canvas[at + 3] == 0) continue;
-            r += canvas[at]; g += canvas[at + 1]; b += canvas[at + 2]; opaque++;
+            var at = (dstY * width + dstX) * 4;
+            var a = canvas[at + 3];
+            return a == 0 ? ((byte)0, (byte)0, (byte)0, (byte)0) : (canvas[at], canvas[at + 1], canvas[at + 2], a);
         }
-        return opaque * 2 < total || opaque == 0 ? ((byte)255, (byte)0, (byte)255, (byte)255) : ((byte)(r / opaque), (byte)(g / opaque), (byte)(b / opaque), (byte)255);
+
+        float scaleX = width / (float)outWidth;
+        float scaleY = height / (float)outHeight;
+        float fx0 = dstX * scaleX;
+        float fx1 = (dstX + 1) * scaleX;
+        float fy0 = dstY * scaleY;
+        float fy1 = (dstY + 1) * scaleY;
+        int x0 = Math.Clamp((int)MathF.Floor(fx0), 0, width - 1);
+        int x1 = Math.Clamp((int)MathF.Ceiling(fx1), x0 + 1, width);
+        int y0 = Math.Clamp((int)MathF.Floor(fy0), 0, height - 1);
+        int y1 = Math.Clamp((int)MathF.Ceiling(fy1), y0 + 1, height);
+
+        float sumR = 0f, sumG = 0f, sumB = 0f, sumAlpha = 0f, totalWeight = 0f;
+        for (var y = y0; y < y1; y++)
+        {
+            float wy = MathF.Min(fy1, y + 1) - MathF.Max(fy0, y);
+            if (wy <= 0f) continue;
+            for (var x = x0; x < x1; x++)
+            {
+                float wx = MathF.Min(fx1, x + 1) - MathF.Max(fx0, x);
+                if (wx <= 0f) continue;
+                float coverage = wx * wy;
+                totalWeight += coverage;
+                var at = (y * width + x) * 4;
+                var a = canvas[at + 3];
+                if (a == 0) continue;
+                float alphaWeight = coverage * (a / 255f);
+                sumR += canvas[at] * alphaWeight;
+                sumG += canvas[at + 1] * alphaWeight;
+                sumB += canvas[at + 2] * alphaWeight;
+                sumAlpha += alphaWeight;
+            }
+        }
+
+        if (sumAlpha <= 1e-6f || totalWeight <= 0f)
+            return ((byte)0, (byte)0, (byte)0, (byte)0);
+
+        int outAlpha = Math.Clamp((int)MathF.Round((sumAlpha / totalWeight) * 255f), 0, 255);
+        if (outAlpha == 0)
+            return ((byte)0, (byte)0, (byte)0, (byte)0);
+
+        return (
+            (byte)Math.Clamp((int)MathF.Round(sumR / sumAlpha), 0, 255),
+            (byte)Math.Clamp((int)MathF.Round(sumG / sumAlpha), 0, 255),
+            (byte)Math.Clamp((int)MathF.Round(sumB / sumAlpha), 0, 255),
+            (byte)outAlpha
+        );
     }
 
     private static (byte Red, byte Green, byte Blue, byte Alpha) DownsampleBlended(byte[] canvas, int width, int height,
@@ -653,8 +786,20 @@ internal static class ObjectCatalog
         for (var y = 0; y < height; y++) for (var x = 0; x < width; x++)
         {
             var pixel = pixelAt(x, y);
-            writer.Write(pixel.Alpha == 0 ? (byte)255 : pixel.Blue); writer.Write(pixel.Alpha == 0 ? (byte)0 : pixel.Green);
-            writer.Write(pixel.Alpha == 0 ? (byte)255 : pixel.Red); writer.Write((byte)255);
+            if (pixel.Alpha == 0)
+            {
+                writer.Write((byte)0);
+                writer.Write((byte)0);
+                writer.Write((byte)0);
+                writer.Write((byte)0);
+            }
+            else
+            {
+                writer.Write(pixel.Blue);
+                writer.Write(pixel.Green);
+                writer.Write(pixel.Red);
+                writer.Write(pixel.Alpha);
+            }
         }
         writer.Flush(); return data.ToArray();
     }

@@ -22,6 +22,8 @@ public static class SetBalloonHeadlinePrimitive
         var priority = operand[3] == PriorityTwoTable ? 2 : 1;
         var value = (short)(operand[4] | operand[5] << 8);
         var flags = operand[6] | operand[7] << 8;
+        if (value != 0 && operand[6] > 3)
+            throw new SimulationException(SimulationError.BalloonTypeIsInvalid);
         if (host is null)
         {
             // Attaches balloon display to the object's first runtime sprite slot.

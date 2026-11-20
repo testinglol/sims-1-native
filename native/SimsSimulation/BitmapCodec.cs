@@ -44,11 +44,11 @@ internal static class BitmapCodec
             throw new InvalidDataException("BMP dimensions are invalid");
         var rgba = new byte[checked(width * height * 4)];
         int Row(int y) => rawHeight > 0 ? height - 1 - y : y;
-        void Put(int x, int y, byte r, byte g, byte b)
+        void Put(int x, int y, byte r, byte g, byte b, byte a = 255)
         {
             if ((uint)x >= (uint)width || (uint)y >= (uint)height) return;
             var offset = (Row(y) * width + x) * 4;
-            (rgba[offset], rgba[offset + 1], rgba[offset + 2], rgba[offset + 3]) = (r, g, b, 255);
+            (rgba[offset], rgba[offset + 1], rgba[offset + 2], rgba[offset + 3]) = (r, g, b, a);
         }
         if (bits == 8)
         {
@@ -108,12 +108,24 @@ internal static class BitmapCodec
         {
             var size = bits / 8;
             var stride = checked((width * size + 3) & ~3);
+            var useAlpha = false;
+            if (bits == 32)
+            {
+                for (var y = 0; y < height && !useAlpha; y++)
+                for (var x = 0; x < width; x++)
+                {
+                    var offset = pixels + y * stride + x * 4;
+                    if (offset + 4 > data.Length) throw new InvalidDataException("BMP pixel data is truncated");
+                    if (data[offset + 3] != 0) { useAlpha = true; break; }
+                }
+            }
             for (var y = 0; y < height; y++)
             for (var x = 0; x < width; x++)
             {
                 var offset = pixels + y * stride + x * size;
                 if (offset + size > data.Length) throw new InvalidDataException("BMP pixel data is truncated");
-                Put(x, y, data[offset + 2], data[offset + 1], data[offset]);
+                var alpha = useAlpha ? data[offset + 3] : (byte)255;
+                Put(x, y, data[offset + 2], data[offset + 1], data[offset], alpha);
             }
         }
         else throw new InvalidDataException($"Unsupported {bits}-bit BMP");

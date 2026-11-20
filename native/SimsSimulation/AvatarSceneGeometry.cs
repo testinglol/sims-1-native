@@ -18,7 +18,13 @@ internal sealed class AvatarSceneGeometry
     // lookup basis to convert to sixteenth-tile elevation units.
     private const float AnimatorLevelHeight = 3.1001704f;
 
-    internal sealed record Vertex(float X, float Y, float Z, float U, float V, float Nx, float Ny, float Nz);
+    internal readonly record struct Vertex(float X, float Y, float Z, float U, float V, float Nx, float Ny, float Nz);
+
+    [ThreadStatic]
+    private static Vertex[]? s_projectedScratch;
+
+    [ThreadStatic]
+    private static (Vector3 Position, Vector3 Normal, Vector2 UV)[]? s_posedScratch;
     internal sealed record Part(byte[] Texture, string TextureHash, string Encoding, int Width, int Height, Vertex[] Vertices, bool IgnoreRoomLighting = false);
     internal sealed record CensorBounds(float X, float Y, float Width, float Height, float Depth);
 
@@ -174,6 +180,7 @@ internal sealed class AvatarSceneGeometry
     private static SkeletonInfo GetSkeletonInfo(Skeleton skeleton) => SkeletonInfos.GetValue(skeleton, static s => new SkeletonInfo(s));
     private static MeshBindingLayout GetMeshLayout(Mesh mesh) => MeshLayouts.GetValue(mesh, static m => new MeshBindingLayout(m));
 
+    private readonly Lock _instanceLock = new();
     private readonly string gameRoot;
     private readonly ObjectRegistry registry;
     private readonly CharacterSearchPath skins;
@@ -250,12 +257,13 @@ internal sealed class AvatarSceneGeometry
         Func<float, float, float> elevation, LotCamera camera, List<PosedHeadMesh>? headMeshes = null,
         Vector3? attachmentRoot = null, float? inheritedRootDirection = null, int headIndicatorKind = 0,
         float subTickAlpha = 0f, long updates = 0, ISimulationCareerHost? careerHost = null,
-        IReadOnlyList<uint>? heldPropGuids = null)
+        IReadOnlyList<uint>? heldPropGuids = null,
+        SimsEngine.Simulation.Neighborhood.CrossLotTransitVisualOverride? transitOverride = null)
     {
         var character = person.PresentationCharacter ?? person.SavedCharacter;
         if (character is null)
         {
-            PrepareRootTransform(person, level, elevation, camera, headMeshes, attachmentRoot, inheritedRootDirection, subTickAlpha, updates);
+            PrepareRootTransform(person, level, elevation, camera, headMeshes, attachmentRoot, inheritedRootDirection, subTickAlpha, updates, transitOverride);
             if (headMeshes is null) censorBounds.Remove(person.Id);
             return Array.Empty<Part>();
         }
@@ -292,7 +300,7 @@ internal sealed class AvatarSceneGeometry
         }
         if (selected.Count == 0)
         {
-            PrepareRootTransform(person, level, elevation, camera, headMeshes, attachmentRoot, inheritedRootDirection, subTickAlpha, updates);
+            PrepareRootTransform(person, level, elevation, camera, headMeshes, attachmentRoot, inheritedRootDirection, subTickAlpha, updates, transitOverride);
             if (headMeshes is null) censorBounds.Remove(person.Id);
             return Array.Empty<Part>();
         }
@@ -366,7 +374,7 @@ internal sealed class AvatarSceneGeometry
 
         if (resolved.Count == 0)
         {
-            PrepareRootTransform(person, level, elevation, camera, headMeshes, attachmentRoot, inheritedRootDirection, subTickAlpha, updates);
+            PrepareRootTransform(person, level, elevation, camera, headMeshes, attachmentRoot, inheritedRootDirection, subTickAlpha, updates, transitOverride);
             if (headMeshes is null) censorBounds.Remove(person.Id);
             return Array.Empty<Part>();
         }
@@ -414,7 +422,7 @@ internal sealed class AvatarSceneGeometry
         }
 
         var (tileX, tileY, altitude, rootDirection) = PrepareRootTransform(
-            person, level, elevation, camera, headMeshes, attachmentRoot, inheritedRootDirection, subTickAlpha, updates);
+            person, level, elevation, camera, headMeshes, attachmentRoot, inheritedRootDirection, subTickAlpha, updates, transitOverride);
         // Direction index maps to lot coordinates where 0 is -Y, 2 is +X, 4 is +Y, and 6 is -X, aligning
         // the mesh forward (+Z) axis with avatar facing.
         var facing = AvatarDirection.LotFacingAngle(rootDirection);
@@ -564,9 +572,26 @@ internal sealed class AvatarSceneGeometry
             var blendBoneForVertex = meshLayout.BlendBoneForVertex;
             var blendWeightForVertex = meshLayout.BlendWeightForVertex;
             var blendVertexForVertex = meshLayout.BlendVertexForVertex;
-            var posed = new (Vector3 Position, Vector3 Normal, Vector2 UV)[mesh.TextureCoordinates.Count];
+            var vertexCount = mesh.TextureCoordinates.Count;
+            var needHeadPose = headBindings is not null && headBindings.Contains(mesh);
+            var projected = s_projectedScratch;
+            if (projected is null || projected.Length < vertexCount)
+            {
+                projected = new Vertex[Math.Max(vertexCount, 256)];
+                s_projectedScratch = projected;
+            }
+            (Vector3 Position, Vector3 Normal, Vector2 UV)[]? posed = null;
+            if (needHeadPose)
+            {
+                posed = s_posedScratch;
+                if (posed is null || posed.Length < vertexCount)
+                {
+                    posed = new (Vector3 Position, Vector3 Normal, Vector2 UV)[Math.Max(vertexCount, 256)];
+                    s_posedScratch = posed;
+                }
+            }
             var skateScale = scale / 3f;
-            for (var vertexIndex = 0; vertexIndex < posed.Length; vertexIndex++)
+            for (var vertexIndex = 0; vertexIndex < vertexCount; vertexIndex++)
             {
                 var matrix = boneMatrices[meshBoneToSkeleton[boneForVertex[vertexIndex]]];
                 var source = mesh.Vertices[vertexIndex];
@@ -586,7 +611,6 @@ internal sealed class AvatarSceneGeometry
                 normal = Vector3.TransformNormal(normal, facingMatrix);
                 var cameraNormal = camera.CameraNormal(new Microsoft.Xna.Framework.Vector3(normal.Z, normal.Y, normal.X));
                 if (cameraNormal.LengthSquared() > 0) cameraNormal.Normalize();
-                var camNorm = new Vector3(cameraNormal.X, cameraNormal.Y, cameraNormal.Z);
                 if (hasSkates)
                 {
                     if (meshLayout.IsLeftFootVertex[vertexIndex])
@@ -595,17 +619,25 @@ internal sealed class AvatarSceneGeometry
                         rightFootPositions!.Add(Vector3.Transform(position, facingMatrix) * skateScale);
                 }
                 var rootPosition = Vector3.Transform(position, rootTransform);
-                posed[vertexIndex] = (rootPosition, camNorm, mesh.TextureCoordinates[vertexIndex]);
+                var uv = mesh.TextureCoordinates[vertexIndex];
+                if (posed is not null)
+                    posed[vertexIndex] = (rootPosition, new Vector3(cameraNormal.X, cameraNormal.Y, cameraNormal.Z), uv);
+
+                var lotPosition = AvatarCoordinates.ToLot(rootPosition);
+                var point = camera.Project(lotPosition.X, lotPosition.Y, rootPosition.Y * 40);
+                var vertexDepth = camera.Depth(lotPosition.X, lotPosition.Y, rootPosition.Y);
+                projected[vertexIndex] = new Vertex(point.X, point.Y, vertexDepth,
+                    uv.X, uv.Y, cameraNormal.X, cameraNormal.Y, cameraNormal.Z);
             }
 
-            if (headBindings is not null && headBindings.Contains(mesh))
+            if (posed is not null)
             {
                 var framesHead = skullMeshes is null || skullMeshes.Contains(mesh);
-                var headPositionsOut = new Vector3[posed.Length];
-                var headNormalsOut = new Vector3[posed.Length];
-                var headUvsOut = new Vector2[posed.Length];
-                var onHeadOut = new bool[posed.Length];
-                for (var v = 0; v < posed.Length; v++)
+                var headPositionsOut = new Vector3[vertexCount];
+                var headNormalsOut = new Vector3[vertexCount];
+                var headUvsOut = new Vector2[vertexCount];
+                var onHeadOut = new bool[vertexCount];
+                for (var v = 0; v < vertexCount; v++)
                 {
                     headPositionsOut[v] = posed[v].Position;
                     headNormalsOut[v] = posed[v].Normal;
@@ -618,25 +650,24 @@ internal sealed class AvatarSceneGeometry
             }
             var flatFaces = meshLayout.FlatFaceIndices;
             var vertices = new Vertex[flatFaces.Length];
-            for (var output = 0; output < flatFaces.Length; output++)
+            if (censorThisBinding)
             {
-                var item = posed[flatFaces[output]];
-                var lotPosition = AvatarCoordinates.ToLot(item.Position);
-                var worldX = lotPosition.X;
-                var worldY = lotPosition.Y;
-                var point = camera.Project(worldX, worldY, item.Position.Y * 40);
-                var vertexDepth = camera.Depth(worldX, worldY, item.Position.Y);
-                if (censorThisBinding)
+                for (var output = 0; output < flatFaces.Length; output++)
                 {
+                    var v = projected[flatFaces[output]];
                     hasCensorBounds = true;
-                    if (point.X < censorMinX) censorMinX = point.X;
-                    if (point.Y < censorMinY) censorMinY = point.Y;
-                    if (point.X > censorMaxX) censorMaxX = point.X;
-                    if (point.Y > censorMaxY) censorMaxY = point.Y;
-                    if (vertexDepth < censorMinDepth) censorMinDepth = vertexDepth;
+                    if (v.X < censorMinX) censorMinX = v.X;
+                    if (v.Y < censorMinY) censorMinY = v.Y;
+                    if (v.X > censorMaxX) censorMaxX = v.X;
+                    if (v.Y > censorMaxY) censorMaxY = v.Y;
+                    if (v.Z < censorMinDepth) censorMinDepth = v.Z;
+                    vertices[output] = v;
                 }
-                vertices[output] = new Vertex(point.X, point.Y, vertexDepth,
-                    item.UV.X, item.UV.Y, item.Normal.X, item.Normal.Y, item.Normal.Z);
+            }
+            else
+            {
+                for (var output = 0; output < flatFaces.Length; output++)
+                    vertices[output] = projected[flatFaces[output]];
             }
             parts.Add(new Part(texture.Bytes, texture.Sha1Hex, texture.Encoding, texture.Width, texture.Height, vertices));
         }
@@ -728,7 +759,8 @@ internal sealed class AvatarSceneGeometry
     private (float TileX, float TileY, float Altitude, float RootDirection) PrepareRootTransform(
         XPerson person, int level, Func<float, float, float> elevation, LotCamera camera,
         List<PosedHeadMesh>? headMeshes, Vector3? attachmentRoot, float? inheritedRootDirection,
-        float subTickAlpha, long updates)
+        float subTickAlpha, long updates,
+        SimsEngine.Simulation.Neighborhood.CrossLotTransitVisualOverride? transitOverride = null)
     {
         // Uses high-precision floating root coordinates rather than rounded tile positions to avoid
         // sub-tile movement jitter across scene builds.
@@ -747,7 +779,13 @@ internal sealed class AvatarSceneGeometry
             person[ObjectData.Direction], person.AnimatorDisplacementDirection, inheritedRootDirection);
         var rootDirection = baseRootDirection;
         var subTickMoved = false;
-        if (headMeshes is null && updates > 0)
+        if (transitOverride is { } tv)
+        {
+            rootFtileX = (tv.WorldRelTileX ?? tv.TileX) * 16f;
+            rootFtileY = (tv.WorldRelTileY ?? tv.TileY) * 16f;
+            rootDirection = tv.Direction;
+        }
+        else if (headMeshes is null && updates > 0)
         {
             if (!lastTickRoots.TryGetValue(person.Id, out var lastRoot) || lastRoot.Updates != updates)
             {
@@ -1604,14 +1642,108 @@ internal sealed class AvatarSceneGeometry
                     sampleFrame = Math.Clamp(sampleFrame, 0f, Math.Max(0f, frameCount - 1f));
                 }
             }
-            return Pose.Sample(skeleton, source.Animation, source.Curves, sampleFrame, basis, playback.PracticeWeight,
-                playback.Loop, playback.InterpolatePose);
+            var weight = playback.EvaluatePracticeWeight(person.AnimatorMilliseconds, subTickAlpha);
+            return Pose.Sample(skeleton, source.Animation, source.Curves, sampleFrame, basis, weight,
+                playback.Loop, playback.InterpolatePose, playback.AllowUnblendedOverride);
+        }
+    }
+
+    /// <summary>Resolves the requested bone's avatar-local position from the person's current skeleton
+    /// and active animation practices without throwing on missing assets or bones.</summary>
+    internal Vector3? ResolveAnchorBoneAvatarPosition(XPerson person, string boneName)
+    {
+        lock (_instanceLock)
+        {
+            return ResolveAnchorBoneAvatarPositionCore(person, boneName);
+        }
+    }
+
+    private Vector3? ResolveAnchorBoneAvatarPositionCore(XPerson person, string boneName)
+    {
+        if (string.IsNullOrWhiteSpace(boneName) ||
+            (person.PresentationCharacter ?? person.SavedCharacter) is not { } character)
+            return null;
+        if (person.AnimationPlayback is { } primary && ResolveAnimation(primary.Clip.Name) is null)
+            return null;
+
+        var effectiveParts = character.Parts.Count >= 5
+            ? character.Parts
+            : character.Parts.Concat(Enumerable.Repeat(("NONE", ""), 5 - character.Parts.Count)).ToArray();
+
+        var (bodyPair, leftHandPair, rightHandPair, headPair) = ResolveEffectiveParts(person, effectiveParts);
+        var bodyName = NormalizeAppearance(bodyPair.Item1);
+        var body = ResolveAppearance(bodyName);
+        if (body is null)
+        {
+            var fallbackBody = BodyFallbackByMarker(PersonFallbackMarker(person));
+            body = fallbackBody is null ? null : appearances.GetValueOrDefault(fallbackBody);
+            if (body is null) return null;
+        }
+
+        try
+        {
+            var coreNames = new[] { leftHandPair.Item1, rightHandPair.Item1, headPair.Item1 }
+                .Where(name => !string.IsNullOrWhiteSpace(name) && !name.Equals("NONE", StringComparison.OrdinalIgnoreCase));
+            var sourceList = new List<AppearanceSource> { body };
+            foreach (var name in coreNames)
+            {
+                var normalized = NormalizeAppearance(name);
+                var source = ResolveAppearance(normalized);
+                if (source is not null) sourceList.Add(source);
+            }
+            var requiredBones = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var source in sourceList)
+            {
+                foreach (var binding in source.Appearance.Bindings)
+                {
+                    try { requiredBones.UnionWith(ReadMesh(source.Path, binding.Mesh).Bones); }
+                    catch (InvalidDataException) { }
+                }
+            }
+            var skeleton = SelectSkeleton(body, requiredBones, person);
+            var skeletonInfo = GetSkeletonInfo(skeleton);
+            if (!skeletonInfo.IndexByNameIgnoreCase.TryGetValue(boneName, out var boneIndex))
+                return null;
+
+            var pose = Pose.BindPose(skeleton);
+            foreach (var practice in person.GetAnimationPracticeApplicationOrder())
+            {
+                if (ResolveAnimation(practice.Clip.Name) is not { } animSource)
+                    continue;
+                var weight = practice.EvaluatePracticeWeight(person.AnimatorMilliseconds);
+                pose = Pose.Sample(skeleton, animSource.Animation, animSource.Curves, practice.Frame, pose,
+                    weight, practice.Loop, practice.InterpolatePose, practice.AllowUnblendedOverride);
+            }
+            return pose[boneIndex].WorldTranslation;
+        }
+        catch (InvalidDataException)
+        {
+            return null;
+        }
+
+        AppearanceSource? ResolveAppearance(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name) || name.Equals("NONE", StringComparison.OrdinalIgnoreCase))
+                return null;
+            var source = appearances.GetValueOrDefault(name);
+            if (source is not null) return source;
+            if (name.StartsWith('b'))
+                return BodyFallback(name) is { } bodyFallback ? appearances.GetValueOrDefault(bodyFallback) : null;
+            return name.StartsWith('c') ? HeadFallback(name) : null;
         }
     }
 
     /// <summary>Computes locomotion stride distances from marker bones in the active animation at authored
     /// marker keyframes.</summary>
     internal (float MarkerOneStride, float MarkerTwoStride)? LocomotionStrides(XPerson person, string animationName)
+    {
+        lock (_instanceLock)
+        {
+            return LocomotionStridesCore(person, animationName);
+        }
+    }
+
+    private (float MarkerOneStride, float MarkerTwoStride)? LocomotionStridesCore(XPerson person, string animationName)
     {
         if ((person.PresentationCharacter ?? person.SavedCharacter) is not { Parts.Count: 5 } character ||
             ResolveAnimation(animationName) is not { } animationSource)
@@ -1902,13 +2034,34 @@ internal sealed class AvatarSceneGeometry
         var colorKey = PlumbobColor(indicatorKind, (int)person[Motive.Mood]);
         if (!plumbobTextures.TryGetValue(colorKey, out var plumbobTex))
         {
-            var bytes = new byte[4 * 4 * 4];
-            for (var i = 0; i < bytes.Length; i += 4)
+            // 32x1 crystal shading ramp: deep shadowed facets at u=0, vivid base color around u=0.62,
+            // and crisp specular highlight toward u=1 so spinning plumbbob facets read clearly in 3D.
+            const int rampWidth = 32;
+            var bytes = new byte[rampWidth * 4];
+            for (var x = 0; x < rampWidth; x++)
             {
-                bytes[i] = colorKey.R;
-                bytes[i + 1] = colorKey.G;
-                bytes[i + 2] = colorKey.B;
-                bytes[i + 3] = 255;
+                var t = x / (float)(rampWidth - 1);
+                float r, g, b;
+                if (t <= 0.65f)
+                {
+                    var k = 0.42f + (t / 0.65f) * 0.58f;
+                    r = colorKey.R * k;
+                    g = colorKey.G * k;
+                    b = colorKey.B * k;
+                }
+                else
+                {
+                    var spec = (t - 0.65f) / 0.35f;
+                    var highlight = spec * spec * 0.68f;
+                    r = colorKey.R + (255f - colorKey.R) * highlight;
+                    g = colorKey.G + (255f - colorKey.G) * highlight;
+                    b = colorKey.B + (255f - colorKey.B) * highlight;
+                }
+                var offset = x * 4;
+                bytes[offset] = (byte)Math.Clamp((int)MathF.Round(r), 0, 255);
+                bytes[offset + 1] = (byte)Math.Clamp((int)MathF.Round(g), 0, 255);
+                bytes[offset + 2] = (byte)Math.Clamp((int)MathF.Round(b), 0, 255);
+                bytes[offset + 3] = 255;
             }
             plumbobTex = (bytes, Convert.ToHexString(SHA1.HashData(bytes), 0, 6));
             plumbobTextures[colorKey] = plumbobTex;
@@ -1934,6 +2087,9 @@ internal sealed class AvatarSceneGeometry
         var indicatorRootTransform = facingMatrix * Matrix4x4.CreateScale(1f / 3f) *
                                      Matrix4x4.CreateTranslation(headRoot);
 
+        var keyLight = new Microsoft.Xna.Framework.Vector3(-0.32444283f, 0.8111071f, -0.48666427f);
+        var specHalf = Microsoft.Xna.Framework.Vector3.Normalize(keyLight + new Microsoft.Xna.Framework.Vector3(0f, 0.25f, -0.97f));
+
         foreach (var binding in source.Appearance.Bindings)
         {
             var mesh = ReadMesh(source.Path, binding.Mesh);
@@ -1950,19 +2106,45 @@ internal sealed class AvatarSceneGeometry
             }
             var flatFaces = GetMeshLayout(mesh).FlatFaceIndices;
             var vertices = new Vertex[flatFaces.Length];
-            for (var output = 0; output < flatFaces.Length; output++)
+            for (var tri = 0; tri + 2 < flatFaces.Length; tri += 3)
             {
-                var item = posed[flatFaces[output]];
-                var lotPosition = AvatarCoordinates.ToLot(item.Position);
-                var worldX = lotPosition.X;
-                var worldY = lotPosition.Y;
-                var point = camera.Project(worldX, worldY, item.Position.Y * 40);
-                var normal = camera.CameraNormal(new Microsoft.Xna.Framework.Vector3(item.Normal.Z, item.Normal.Y, item.Normal.X));
+                var a = posed[flatFaces[tri]];
+                var b = posed[flatFaces[tri + 1]];
+                var c = posed[flatFaces[tri + 2]];
+
+                // Flat per-triangle facet normal oriented to agree with vertex normals.
+                var faceNormal = Vector3.Cross(b.Position - a.Position, c.Position - a.Position);
+                var avgVertexNormal = a.Normal + b.Normal + c.Normal;
+                if (faceNormal.LengthSquared() > 1e-8f)
+                {
+                    if (Vector3.Dot(faceNormal, avgVertexNormal) < 0f)
+                        faceNormal = -faceNormal;
+                }
+                else
+                {
+                    faceNormal = avgVertexNormal;
+                }
+
+                var normal = camera.CameraNormal(new Microsoft.Xna.Framework.Vector3(faceNormal.Z, faceNormal.Y, faceNormal.X));
                 if (normal.LengthSquared() > 0) normal.Normalize();
-                vertices[output] = new Vertex(point.X, point.Y, camera.Depth(worldX, worldY, item.Position.Y),
-                    item.UV.X, item.UV.Y, normal.X, normal.Y, normal.Z);
+
+                var ndotl = MathF.Max(0f, Microsoft.Xna.Framework.Vector3.Dot(normal, keyLight));
+                var hemi = 0.5f + 0.5f * normal.Y;
+                var spec = MathF.Pow(MathF.Max(0f, Microsoft.Xna.Framework.Vector3.Dot(normal, specHalf)), 8f);
+                var rampU = Math.Clamp(0.05f + ndotl * 0.62f + hemi * 0.14f + spec * 0.35f, 0.02f, 0.98f);
+
+                for (var corner = 0; corner < 3; corner++)
+                {
+                    var item = posed[flatFaces[tri + corner]];
+                    var lotPosition = AvatarCoordinates.ToLot(item.Position);
+                    var worldX = lotPosition.X;
+                    var worldY = lotPosition.Y;
+                    var point = camera.Project(worldX, worldY, item.Position.Y * 40);
+                    vertices[tri + corner] = new Vertex(point.X, point.Y, camera.Depth(worldX, worldY, item.Position.Y),
+                        rampU, 0.5f, normal.X, normal.Y, normal.Z);
+                }
             }
-            parts.Add(new Part(textureBytes, textureHash, "rgba", 4, 4, vertices, IgnoreRoomLighting: true));
+            parts.Add(new Part(textureBytes, textureHash, "rgba", 32, 1, vertices, IgnoreRoomLighting: true));
         }
     }
 

@@ -23,6 +23,7 @@ static float2 outUV;
 static float4 outTint;
 static float3 outNormal;
 static float outTextureOnly;
+static float3 outSunDir;
 
 struct SPIRV_Cross_Input
 {
@@ -35,6 +36,7 @@ struct SPIRV_Cross_Output
     nointerpolation float4 outTint : TEXCOORD1;
     float3 outNormal : TEXCOORD2;
     nointerpolation float outTextureOnly : TEXCOORD3;
+    nointerpolation float3 outSunDir : TEXCOORD4;
     float4 gl_Position : SV_Position;
 };
 
@@ -64,6 +66,7 @@ void vert_main()
     outTint = quad_tint;
     outNormal = vertex.normal.xyz;
     outTextureOnly = quad_uvRect.x;
+    outSunDir = quad_uvRect.yzw;
 }
 
 SPIRV_Cross_Output main(SPIRV_Cross_Input stage_input)
@@ -76,5 +79,6 @@ SPIRV_Cross_Output main(SPIRV_Cross_Input stage_input)
     stage_output.outTint = outTint;
     stage_output.outNormal = outNormal;
     stage_output.outTextureOnly = outTextureOnly;
+    stage_output.outSunDir = outSunDir;
     return stage_output;
 }

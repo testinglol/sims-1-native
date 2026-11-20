@@ -30,6 +30,7 @@
 
   <ItemGroup>
     <EmbeddedResource Include="VectorUI\**\*.svg" />
+    <EmbeddedResource Include="VectorUI\**\*.json" />
     <EmbeddedResource Include="ExtendedMaps\**\*.jpg" />
   </ItemGroup>
 

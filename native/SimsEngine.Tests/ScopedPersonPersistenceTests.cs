@@ -17,7 +17,8 @@ public sealed class ScopedPersonPersistenceTests
         me.Temporaries[0] = 1;
         var item = new XPerson(300, PrimitiveTestWorld.Definition(XPerson.PersonType));
         me.SetObjectTableEntry(1, item);
-        var scope = new InteractionScopeTable([new InteractionScopeEntry(1, key, 2)]);
+        var scopeValue = call == 0x13 ? 1 : 3;
+        var scope = new InteractionScopeTable([new InteractionScopeEntry(scopeValue, key, 2)]);
         context.World.InteractionScopes[item.InteractionScopeKey5CA] = scope;
         context.World.Host = null;
         short expected = -1;
@@ -35,7 +36,7 @@ public sealed class ScopedPersonPersistenceTests
         {
             Assert.Equal(expected, me.Temporaries[0]);
             Assert.True(scope.TryGet(0, out var remaining));
-            Assert.Equal(new InteractionScopeEntry(1, key, 1), remaining);
+            Assert.Equal(new InteractionScopeEntry(scopeValue, key, 1), remaining);
             persisted++;
         };
 

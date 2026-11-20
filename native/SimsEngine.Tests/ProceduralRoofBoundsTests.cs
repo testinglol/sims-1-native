@@ -171,4 +171,35 @@ public class ProceduralRoofBoundsTests
         Assert.False(grid.Has(15, 8));
         Assert.False(grid.Has(15, 22));
     }
+
+    [Fact]
+    public void RoofSunDirectionCreatesDistinctFacetContrastInDefaultMode()
+    {
+        var sun = SimsSDL.LotRenderer.ResolveRoofSunDirection(ambientActive: false, new System.Numerics.Vector3(1f, 0f, 0f));
+        var frontRight = System.Numerics.Vector3.Normalize(new System.Numerics.Vector3(0.5f, 1f, 0f));
+        var frontLeft = System.Numerics.Vector3.Normalize(new System.Numerics.Vector3(0f, 1f, 0.5f));
+        var backRight = System.Numerics.Vector3.Normalize(new System.Numerics.Vector3(0f, 1f, -0.5f));
+        var backLeft = System.Numerics.Vector3.Normalize(new System.Numerics.Vector3(-0.5f, 1f, 0f));
+
+        float dotFR = MathF.Max(0f, System.Numerics.Vector3.Dot(frontRight, sun));
+        float dotFL = MathF.Max(0f, System.Numerics.Vector3.Dot(frontLeft, sun));
+        float dotBR = MathF.Max(0f, System.Numerics.Vector3.Dot(backRight, sun));
+        float dotBL = MathF.Max(0f, System.Numerics.Vector3.Dot(backLeft, sun));
+
+        Assert.True(dotFR - dotFL > 0.35f, $"Expected strong front-right vs front-left contrast, got FR={dotFR:F3}, FL={dotFL:F3}");
+        Assert.True(dotBR > dotBL, $"Expected back-right ({dotBR:F3}) brighter than back-left ({dotBL:F3})");
+    }
+
+    [Fact]
+    public void RoofSunDirectionFollowsActiveAmbientSun()
+    {
+        var frontRight = System.Numerics.Vector3.Normalize(new System.Numerics.Vector3(0.5f, 1f, 0f));
+        var frontLeft = System.Numerics.Vector3.Normalize(new System.Numerics.Vector3(0f, 1f, 0.5f));
+
+        var sunRight = SimsSDL.LotRenderer.ResolveRoofSunDirection(ambientActive: true, new System.Numerics.Vector3(0.6f, 0f, 0.8f));
+        var sunLeft = SimsSDL.LotRenderer.ResolveRoofSunDirection(ambientActive: true, new System.Numerics.Vector3(0.6f, 0f, -0.8f));
+
+        Assert.True(System.Numerics.Vector3.Dot(frontRight, sunRight) > System.Numerics.Vector3.Dot(frontLeft, sunRight));
+        Assert.True(System.Numerics.Vector3.Dot(frontLeft, sunLeft) > System.Numerics.Vector3.Dot(frontRight, sunLeft));
+    }
 }

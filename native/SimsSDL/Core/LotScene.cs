@@ -296,7 +296,7 @@ public sealed record LotScene
         [JsonPropertyName("hideAtFarZoom")]
         public bool? HideAtFarZoom { get; init; }
 
-        public ZoomImage? Image(LotZoom zoom) => zoom switch
+        public ZoomImage? Image(LotZoom zoom) => zoom.AssetZoom() switch
         {
             LotZoom.Near => Near,
             LotZoom.Far => Far,
@@ -304,7 +304,7 @@ public sealed record LotScene
             _ => null
         };
 
-        public ZoomImage? FloorShadowImage(LotZoom zoom) => zoom switch
+        public ZoomImage? FloorShadowImage(LotZoom zoom) => zoom.AssetZoom() switch
         {
             LotZoom.Near => FloorShadowNear ?? FloorShadow,
             LotZoom.Far => FloorShadowFar ?? FloorShadow,
@@ -567,14 +567,14 @@ public sealed record LotScene
 
         /// <summary>Floor texture for the given zoom level; UV coordinates span exactly one tile at every
         /// zoom.</summary>
-        public int TextureFor(LotZoom zoom) => zoom switch
+        public int TextureFor(LotZoom zoom) => zoom.AssetZoom() switch
         {
             LotZoom.Near => NearTexture ?? Texture,
             LotZoom.Far => FarTexture ?? Texture,
             _ => Texture
         };
 
-        public ZoomImage? FloorShadowImage(LotZoom zoom) => zoom switch
+        public ZoomImage? FloorShadowImage(LotZoom zoom) => zoom.AssetZoom() switch
         {
             LotZoom.Near => FloorShadowNear ?? FloorShadow,
             LotZoom.Far => FloorShadowFar ?? FloorShadow,
@@ -715,6 +715,14 @@ public sealed record LotScene
 
     [JsonPropertyName("censorRects")]
     public IReadOnlyList<CensorRect>? CensorRects { get; init; }
+
+    [JsonPropertyName("overheadFeedback")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<SceneAnimation.OverheadFeedbackDescriptor>? OverheadFeedback { get; init; }
+
+    [JsonPropertyName("skillMeters")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<SceneAnimation.SkillMeterDescriptor>? SkillMeters { get; init; }
 
     [JsonPropertyName("schemaVersion")]
     public required int SchemaVersion { get; init; }
@@ -953,6 +961,8 @@ public sealed record LotScene
             TerrainVertices = terrainVertices,
             Meshes = meshes,
             CensorRects = ToCensorRects(payload.CensorRects),
+            OverheadFeedback = ToOverheadFeedback(payload.OverheadFeedback),
+            SkillMeters = ToSkillMeters(payload.SkillMeters),
             Limitations = payload.Limitations,
             OverheadMap = payload.OverheadMap is { } om
                 ? new OverheadMapData(om.Width, om.Height, om.SamplesPerTile, om.Pixels)
@@ -1085,6 +1095,37 @@ public sealed record LotScene
         {
             var v = source[i];
             result[i] = new MeshVertex(v.X + shiftX, v.Y + shiftY, v.Z, v.U, v.V, v.Nx, v.Ny, v.Nz);
+        }
+        return result;
+    }
+
+    internal static IReadOnlyList<SceneAnimation.OverheadFeedbackDescriptor>? ToOverheadFeedback(
+        SimsSimulation.SceneExporter.OverheadFeedbackRecord[]? source)
+    {
+        if (source is null || source.Length == 0)
+            return null;
+        var result = new SceneAnimation.OverheadFeedbackDescriptor[source.Length];
+        for (int i = 0; i < source.Length; i++)
+        {
+            var r = source[i];
+            result[i] = new SceneAnimation.OverheadFeedbackDescriptor(
+                r.ObjectID, r.Kind, r.Text, r.BackgroundRgb, r.ForegroundRgb, r.Delta,
+                r.X, r.Y, r.Level, r.StackIndex, r.RemainingTicks, r.HasSprite);
+        }
+        return result;
+    }
+
+    internal static IReadOnlyList<SceneAnimation.SkillMeterDescriptor>? ToSkillMeters(
+        SimsSimulation.SceneExporter.SkillMeterRecord[]? source)
+    {
+        if (source is null || source.Length == 0)
+            return null;
+        var result = new SceneAnimation.SkillMeterDescriptor[source.Length];
+        for (int i = 0; i < source.Length; i++)
+        {
+            var r = source[i];
+            result[i] = new SceneAnimation.SkillMeterDescriptor(
+                r.ObjectID, r.SpriteId, r.ProgressTenths, r.X, r.Y, r.Level);
         }
         return result;
     }

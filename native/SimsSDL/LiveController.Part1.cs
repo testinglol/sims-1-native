@@ -370,6 +370,7 @@ internal sealed partial class LiveController
     private List<(string Operation, Dictionary<string, object?> Parameters)> _pendingFrontendAudio = [];
     public bool ScriptAnswersDialogs { get; set; }
     public string? ScriptDialogStop { get; set; }
+    public bool SuppressEdgeScrollForScript { get; set; }
     private string? _frontendMusic;
     private bool UsesNativeEngine => SimulationEngineSelection.UsesNativeEngine();
     private Dictionary<string, Dictionary<string, Dictionary<string, string>>> _pluginPanelValues = new(StringComparer.Ordinal);
@@ -383,6 +384,7 @@ internal sealed partial class LiveController
     /// tools such as walls, floors, and wallpaper.</summary>
     public bool DeleteModifier { get; set; }
     public bool ScriptDeleteModifier { get; set; }
+    public bool ScriptCtrlModifier { get; set; }
     public bool ScriptShiftModifier { get; set; }
     private double _lastTutorialPanelCheck;
     private LotZoom? _simulatorZoom;
@@ -456,6 +458,7 @@ internal sealed partial class LiveController
         _currentNeighborhood = resolvedOptions.Neighborhood;
         Ui = new LiveUI(Content);
         AppLog.Info("LiveUI initialized.");
+        ModManager.TrustBundledPlugins(Content, dataRoot);
         if (!options.AnswerDialogs)
         {
             ReviewPluginTrust();
@@ -482,7 +485,11 @@ internal sealed partial class LiveController
 
     /// <summary>Retrieves the saved music master volume (HIT audio group 1), falling back to full volume if
     /// unset.</summary>
-    private float LoadLoopVolume()
+    private float LoadLoopVolume() => LoadPersistedAudioGroupVolume(1, "MUSIC");
+
+    private float LoadAmbientVolume() => LoadPersistedAudioGroupVolume(3, "AMBIENCE");
+
+    private float LoadPersistedAudioGroupVolume(int groupIndex, string groupName)
     {
         string profile = Path.Combine(Options.DataRoot ?? Workspace, "runtime", "profiles", Options.Profile, "Settings", "audio.json");
         try
@@ -499,28 +506,32 @@ internal sealed partial class LiveController
                 return 1f;
             }
 
-            if (!doc.RootElement.TryGetProperty("schemaVersion", out var schema) ||
-                schema.ValueKind != JsonValueKind.Number ||
-                !schema.TryGetInt32(out int schemaVersion) ||
-                schemaVersion != 1)
+            if (doc.RootElement.TryGetProperty("schemaVersion", out var schema) &&
+                schema.ValueKind == JsonValueKind.Number &&
+                schema.TryGetInt32(out int schemaVersion) &&
+                schemaVersion == 1 &&
+                doc.RootElement.TryGetProperty("volumes", out var volumes) &&
+                volumes.ValueKind == JsonValueKind.Array &&
+                volumes.GetArrayLength() == 4)
             {
+                var entry = volumes[groupIndex];
+                if (entry.ValueKind == JsonValueKind.Number && entry.TryGetSingle(out float v) && float.IsFinite(v))
+                {
+                    return Math.Clamp(v, 0f, 1f);
+                }
+
                 return 1f;
             }
 
-            if (!doc.RootElement.TryGetProperty("volumes", out var volumes) ||
-                volumes.ValueKind != JsonValueKind.Array ||
-                volumes.GetArrayLength() != 4)
+            if (doc.RootElement.TryGetProperty(groupName, out var flat) &&
+                flat.ValueKind == JsonValueKind.Number &&
+                flat.TryGetSingle(out float flatValue) &&
+                float.IsFinite(flatValue))
             {
-                return 1f;
+                return Math.Clamp(flatValue, 0f, 1f);
             }
 
-            var group1 = volumes[1];
-            if (group1.ValueKind != JsonValueKind.Number || !group1.TryGetSingle(out float value))
-            {
-                return 1f;
-            }
-
-            return float.IsFinite(value) ? Math.Clamp(value, 0f, 1f) : 1f;
+            return 1f;
         }
         catch
         {
@@ -599,6 +610,7 @@ internal sealed partial class LiveController
                     }
                 });
                 audio.Spatial = (owner, panned, zoom) => SpatialMix(owner, panned, zoom);
+                audio.SetAmbientMasterVolume(LoadAmbientVolume());
                 _audio = audio;
                 if (LoadLoopURL(Content) is { } loop)
                 {
@@ -715,6 +727,20 @@ internal sealed partial class LiveController
             }
 
             self.Renderer.QueueAnimation(frame);
+        });
+        bridge.AdjacentAnimation = (adjHouse, frame) => MainThreadDispatcher.Post(() =>
+        {
+            if (!weakSelf.TryGetTarget(out var self) || !weakBridge.TryGetTarget(out var target))
+            {
+                return;
+            }
+
+            if (!ReferenceEquals(self.Bridge, target))
+            {
+                return;
+            }
+
+            self.Renderer.QueueAdjacentAnimation(adjHouse, frame);
         });
         bridge.Failed = error => RunOnMainThread(() =>
         {
@@ -847,6 +873,7 @@ internal sealed partial class LiveController
                     }
                 });
                 audio.Spatial = (owner, panned, zoom) => SpatialMix(owner, panned, zoom);
+                audio.SetAmbientMasterVolume(LoadAmbientVolume());
                 _audio = audio;
             }
             catch (Exception error)
@@ -885,6 +912,7 @@ internal sealed partial class LiveController
             Ui.Loading = false;
             _openingNeighborhoodLot = true;
         }
+        ResetConnectedAdjacentHoldState();
 
         _centresOnSelectedSim = Ui.OptionsPanel.PlayOptions.AutoCenter;
         _pendingPieHead = null;
@@ -1169,7 +1197,9 @@ internal sealed partial class LiveController
             return;
         }
 
-        if (SpeedTransitionSound(Renderer.Speed, value) is { } sound)
+        int previousSpeed = Renderer.Speed;
+        Renderer.Speed = value;
+        if (SpeedTransitionSound(previousSpeed, value) is { } sound)
         {
             PlayUISound(sound);
         }
@@ -1187,7 +1217,9 @@ internal sealed partial class LiveController
             return;
         }
 
-        if (SpeedTransitionSound(Renderer.Speed, 0) is { } sound)
+        int previousSpeed = Renderer.Speed;
+        Renderer.Speed = 0;
+        if (SpeedTransitionSound(previousSpeed, 0) is { } sound)
         {
             PlayUISound(sound);
         }
@@ -1460,11 +1492,14 @@ internal sealed partial class LiveController
         _ = Send("selectSim", new Dictionary<string, object?> { ["objectID"] = next });
     }
 
-    private void RequestAutoCenterOnSelection()
+    private void RequestAutoCenterOnSelection(bool playErrorSound = true)
     {
         if (!Ui.OptionsPanel.PlayOptions.AutoCenter)
         {
-            PlayUISound("ui_error");
+            if (playErrorSound)
+            {
+                PlayUISound("ui_error");
+            }
             return;
         }
 
@@ -1618,10 +1653,11 @@ internal sealed partial class LiveController
                 var wallsPayload = new Dictionary<string, object?> { ["mode"] = mode };
                 if (mode == "cutaway" && Pointer is { } cutawayPointer && Renderer.GroundTileAt(Simd(cutawayPointer), SimdCanvas) is { } cwTile)
                 {
+                    int cutawayZoom = (int)Renderer.Zoom.AssetZoom();
                     wallsPayload["x"] = cwTile.X;
                     wallsPayload["y"] = cwTile.Y;
-                    wallsPayload["zoom"] = (int)Renderer.Zoom;
-                    _lastCutawayTile = $"{EffectiveViewLevel}:{(int)Renderer.Zoom}:{cwTile.X}:{cwTile.Y}";
+                    wallsPayload["zoom"] = cutawayZoom;
+                    _lastCutawayTile = $"{EffectiveViewLevel}:{cutawayZoom}:{cwTile.X}:{cwTile.Y}";
                 }
                 else
                 {
@@ -1997,6 +2033,10 @@ internal sealed partial class LiveController
 
         _pendingAudioVolumes[id] = change;
         _latestAudioVolumeRequest[change.Group] = id;
+        if (string.Equals(change.Group, "AMBIENCE", StringComparison.OrdinalIgnoreCase))
+        {
+            _audio?.SetAmbientMasterVolume(change.Volume);
+        }
     }
 
     private void ChooseOption(OriginalOptionsPanelOverlay.Button button)
@@ -2078,6 +2118,16 @@ internal sealed partial class LiveController
                 if (Ui.SoundOptions.IsEmbedded)
                 {
                     Ui.SoundOptions.HideEmbedded();
+                }
+
+                if (target == OriginalOptionsPanelOverlay.Page.Graphics)
+                {
+                    Ui.OptionsPanel.HasLightingSettings = PluginPanels.Any(p =>
+                        string.Equals(p.Description.Id, "lighting-settings", StringComparison.Ordinal));
+                    if (Ui.OptionsPanel.HasLightingSettings)
+                    {
+                        _ = Send("pluginPanels");
+                    }
                 }
 
                 Ui.OptionsPanel.Select(Ui.OptionsPanel.CurrentPage != target ? target : OriginalOptionsPanelOverlay.Page.None);
@@ -2167,32 +2217,41 @@ internal sealed partial class LiveController
 
     public void LoadPlayOptions()
     {
+        var loadedOptions = Ui.OptionsPanel.PlayOptions;
         try
         {
-            if (!File.Exists(PlayOptionsURL))
+            if (File.Exists(PlayOptionsURL))
             {
-                return;
+                byte[] data = File.ReadAllBytes(PlayOptionsURL);
+                if (JsonSerializer.Deserialize<OriginalOptionsPanelOverlay.PlayOptionsState?>(data) is { } parsed)
+                {
+                    loadedOptions = parsed;
+                }
             }
-
-            byte[] data = File.ReadAllBytes(PlayOptionsURL);
-            if (JsonSerializer.Deserialize<OriginalOptionsPanelOverlay.PlayOptionsState?>(data) is not { } loadedOptions)
-            {
-                return;
-            }
-
-            Ui.OptionsPanel.PlayOptions = loadedOptions;
-            Ui.ApplySharpText(loadedOptions.SharpText);
-            Ui.SoundOptions.InterfaceEffectsEnabled = loadedOptions.InterfaceEffects;
-            _centresOnSelectedSim = loadedOptions.AutoCenter;
-            Renderer.LightingEnabled = loadedOptions.Lighting && Options.Lighting;
-            Renderer.AntiAliasedSprites = loadedOptions.AntiAlias;
-            Renderer.ShadowsEnabled = loadedOptions.Shadows;
-            Renderer.TerrainDetail = loadedOptions.Detail(OriginalOptionsPanelOverlay.DetailSetting.Terrain);
-            Renderer.CharacterDetail = loadedOptions.Detail(OriginalOptionsPanelOverlay.DetailSetting.Character);
         }
         catch
         {
         }
+
+        if (Options.EdgeScroll is bool cliEdgeScroll)
+        {
+            loadedOptions.EdgeScrolling = cliEdgeScroll;
+        }
+
+        if (Options.AutoCenter is bool cliAutoCenter)
+        {
+            loadedOptions.AutoCenter = cliAutoCenter;
+        }
+
+        Ui.OptionsPanel.PlayOptions = loadedOptions;
+        Ui.ApplySharpText(loadedOptions.SharpText);
+        Ui.SoundOptions.InterfaceEffectsEnabled = loadedOptions.InterfaceEffects;
+        _centresOnSelectedSim = loadedOptions.AutoCenter;
+        Renderer.LightingEnabled = loadedOptions.Lighting && Options.Lighting;
+        Renderer.AntiAliasedSprites = loadedOptions.AntiAlias;
+        Renderer.ShadowsEnabled = loadedOptions.Shadows;
+        Renderer.TerrainDetail = loadedOptions.Detail(OriginalOptionsPanelOverlay.DetailSetting.Terrain);
+        Renderer.CharacterDetail = loadedOptions.Detail(OriginalOptionsPanelOverlay.DetailSetting.Character);
     }
 
     private void TogglePlayOption(OriginalOptionsPanelOverlay.PlayOption option)

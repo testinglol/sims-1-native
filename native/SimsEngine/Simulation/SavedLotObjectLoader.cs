@@ -119,13 +119,13 @@ public static class SavedLotObjectLoader
                 {
                     root = part;
                     root.SavedMultiTileState = new MultiTileState(offsetX, offsetY, levelOffset,
-                        offsetX, offsetY, levelOffset, 0, null);
+                        offsetX, offsetY, levelOffset, 0, root.RuntimeClass == ObjectClass.Portal ? [] : null);
                 }
                 else
                 {
                     part.MultiTileMasterId = root.Id;
                     part.SavedMultiTileState = new MultiTileState(offsetX, offsetY, levelOffset,
-                        offsetX, offsetY, levelOffset, root.Id, null);
+                        offsetX, offsetY, levelOffset, root.Id, part.RuntimeClass == ObjectClass.Portal ? [] : null);
                     created[^1].MultiTileNextId = part.Id;
                 }
                 world.Add(part);

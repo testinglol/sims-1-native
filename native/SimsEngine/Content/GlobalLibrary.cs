@@ -1,4 +1,5 @@
 using SimsEngine.Formats;
+using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 
 namespace SimsEngine.Content;
@@ -22,6 +23,8 @@ public sealed record BehaviorScope(IffFile Global, IffFile Private, IffFile? Sem
 {
     // Shares BCON tuning overrides across definitions from the same resource file.
     private static readonly ConditionalWeakTable<IffFile, Dictionary<ushort, short[]>> ConstantOverrides = new();
+    private static readonly ConditionalWeakTable<IffFile, ConcurrentDictionary<ushort, Bhav?>> BhavCache = new();
+    private static readonly ConditionalWeakTable<IffFile, ConcurrentDictionary<ushort, Bcon?>> BconCache = new();
     public int? ObjectKey { get; init; }
     public ushort AnimationTableId { get; init; }
     private static readonly StringComparison[] NamePasses =
@@ -87,15 +90,26 @@ public sealed record BehaviorScope(IffFile Global, IffFile Private, IffFile? Sem
     public Bhav? Find(short id)
     {
         var file = FileFor(id);
-        var chunk = file?.Find(ResourceType.Bhav, (ushort)id);
-        if (chunk is null) return null;
+        if (file is null) return null;
+        var uid = (ushort)id;
+        var cache = BhavCache.GetOrCreateValue(file);
+        if (cache.TryGetValue(uid, out var cached)) return cached;
+        var chunk = file.Find(ResourceType.Bhav, uid);
+        if (chunk is null)
+        {
+            cache.TryAdd(uid, null);
+            return null;
+        }
         try
         {
-            return Bhav.Read(file!, chunk);
+            var decoded = Bhav.Read(file, chunk);
+            cache.TryAdd(uid, decoded);
+            return decoded;
         }
         catch (ResourceFormatException error)
         {
-            LogMalformedChunkOnce(file!, "BHAV", (ushort)id, error);
+            LogMalformedChunkOnce(file, "BHAV", uid, error);
+            cache.TryAdd(uid, null);
             return null;
         }
     }
@@ -111,18 +125,29 @@ public sealed record BehaviorScope(IffFile Global, IffFile Private, IffFile? Sem
             >= 0x100 and < 0x1000 => Global,
             _ => null,
         };
-        var chunk = file?.Find(ResourceType.Bcon, id);
-        if (chunk is null) return null;
-        Bcon bcon;
-        try
+        if (file is null) return null;
+        var cache = BconCache.GetOrCreateValue(file);
+        if (!cache.TryGetValue(id, out var bcon))
         {
-            bcon = Bcon.Read(file!, chunk);
+            var chunk = file.Find(ResourceType.Bcon, id);
+            if (chunk is null)
+            {
+                cache.TryAdd(id, null);
+                return null;
+            }
+            try
+            {
+                bcon = Bcon.Read(file, chunk);
+                cache.TryAdd(id, bcon);
+            }
+            catch (ResourceFormatException error)
+            {
+                LogMalformedChunkOnce(file, "BCON", id, error);
+                cache.TryAdd(id, null);
+                return null;
+            }
         }
-        catch (ResourceFormatException error)
-        {
-            LogMalformedChunkOnce(file!, "BCON", id, error);
-            return null;
-        }
+        if (bcon is null) return null;
         if (allowTuningOverride && bcon.TuningOverride && ReferenceEquals(file, Private) &&
             ConstantOverrides.TryGetValue(Private, out var overrides))
         {

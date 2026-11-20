@@ -57,7 +57,8 @@ public sealed class PoolTool(SimulationWorld world, LotFloors floors, LotPool po
             else pools.AddPool(x, y);
             floors[x, y] = erase ? (ushort)0 : (ushort)65535;
         }
-        pools.RebuildDeck(tiles, terrain, walls, (x, y) => world.ObjectsAtTile(x, y, 1).Any());
+        pools.RebuildDeck(tiles, terrain, walls, (x, y) => world.ObjectsAtTile(x, y, 1)
+            .Any(item => item[ObjectData.Hidden] == 0 && item.Definition[(int)ObjdField.Type] != 9));
         if (charge != 0) budget.AlterFamilyBudget(ExpenseCategory, charge);
         return new PoolToolResult(true, erase ? "POOL_ERASE" : "POOL_RECT", changed.Count, charge, null, false,
             budget.ReadFamilyBudget());

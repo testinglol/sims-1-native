@@ -431,6 +431,10 @@ public sealed class PackManifest
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyList<string>? Panels { get; set; }
 
+    [JsonPropertyName("features")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<string>? Features { get; set; }
+
     [JsonPropertyName("saveMigration")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public SaveMigration? SaveMigration { get; set; }
@@ -450,7 +454,7 @@ public sealed partial class ContentPack
     {
         "iff", "far", "flr", "wll", "bmp", "png", "tga", "jpg", "jpeg", "skn", "cmx", "bcf", "cfp",
         "hit", "hot", "hsm", "wav", "mp3", "xa", "fnt", "pal", "rt", "txt", "bmf", "bco", "msl",
-        "spv", "obj", "mtl"
+        "spv", "dxil", "obj", "mtl"
     };
 
     private static readonly HashSet<string> SupportedRoots = new(StringComparer.OrdinalIgnoreCase)

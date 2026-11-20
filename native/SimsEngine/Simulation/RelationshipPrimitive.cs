@@ -124,7 +124,14 @@ public static class RelationshipPrimitive
         var variable = Variables.Reference(context, variableOwner, data);
         if (write)
         {
+            var oldValue = table.Get(target, index);
             table.Set(target, index, variable.Value);
+            if (index == 0 && sourceNeighbor is not null && targetNeighbor is not null)
+            {
+                var delta = variable.Value - oldValue;
+                if (delta != 0)
+                    context.World.RecordRelationshipOverhead(sourceNeighbor, targetNeighbor, delta);
+            }
             return PrimitiveResult.True;
         }
         if (!variable.IsShort) throw new SimulationException(SimulationError.ExpressionAttemptingToWriteInAReadOnlyArea);

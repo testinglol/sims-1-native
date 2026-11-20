@@ -78,15 +78,21 @@ public static partial class SimsVectorUiKit
         const float bevW = 2.504f;
         const float sigma1x = 1.623f;
         float[] h0 = new float[pw * ph];
+        float invBevW = 1f / bevW;
         Parallel.For(0, ph, py =>
         {
             float ly = (py + 0.5f) * inv - pad1x;
+            float dy = MathF.Min(ly, h1x - ly);
             int rowOff = py * pw;
+            if (dy <= 0f)
+                return;
             for (int px = 0; px < pw; px++)
             {
                 float lx = (px + 0.5f) * inv - pad1x;
-                float dEdge = MathF.Min(MathF.Min(lx, w1x - lx), MathF.Min(ly, h1x - ly));
-                h0[rowOff + px] = dEdge > 0f ? MathF.Pow(Math.Clamp(dEdge / bevW, 0f, 1f), 1.381f) : 0f;
+                float dEdge = MathF.Min(MathF.Min(lx, w1x - lx), dy);
+                if (dEdge <= 0f)
+                    continue;
+                h0[rowOff + px] = dEdge >= bevW ? 1f : MathF.Pow(dEdge * invBevW, 1.381f);
             }
         });
 
@@ -183,7 +189,10 @@ public static partial class SimsVectorUiKit
     /// (so Maxis dialog illustrations blend invisibly with zero border box), and razor-sharp 45-degree mitered
     /// picture-frame bevel facets with top-left specular miter ridge gleam.
     /// </summary>
-    public static VectorBannerRenderer.RasterImage RenderPopupInfoFrame(int w1x, int h1x, int scale = 4)
+    public static VectorBannerRenderer.RasterImage RenderPopupInfoFrame(int w1x, int h1x, int scale = 4) =>
+        RenderFittedPopupInfoFrame(w1x, h1x, scale);
+
+    private static VectorBannerRenderer.RasterImage RenderLegacyPopupInfoFrame(int w1x, int h1x, int scale = 4)
     {
         scale = Math.Clamp(scale, 1, 8);
         string key = $"popup_miter_v2:{w1x}:{h1x}:{scale}";
@@ -502,7 +511,10 @@ public static partial class SimsVectorUiKit
     /// stationary cobalt socket trench &amp; periwinkle BR ridge + crisp separating groove +
     /// vivid Maxis cerulean pillow (shifted +2.0px down-right in State 1 Pressed; States 0, 2, 3 identical).
     /// </summary>
-    public static VectorBannerRenderer.RasterImage RenderSlantedButtonStrip(int w1x, int h1x, bool highlighted = false, int scale = 4)
+    public static VectorBannerRenderer.RasterImage RenderSlantedButtonStrip(int w1x, int h1x, bool highlighted = false, int scale = 4) =>
+        RenderFittedSlantedButtonStrip(w1x, h1x, highlighted, scale);
+
+    private static VectorBannerRenderer.RasterImage RenderLegacySlantedButtonStrip(int w1x, int h1x, bool highlighted = false, int scale = 4)
     {
         scale = Math.Clamp(scale, 1, 8);
         string key = $"winbtn_jack58d_v2:{w1x}:{h1x}:{(highlighted ? 1 : 0)}:{scale}";
@@ -1320,10 +1332,31 @@ public static partial class SimsVectorUiKit
             kern[i] *= invSum;
 
         float[] tmp = new float[w * h];
+        int kernLen = kern.Length;
+        int xInteriorStart = Math.Min(rad, w);
+        int xInteriorEnd = Math.Max(xInteriorStart, w - rad);
         Parallel.For(0, h, y =>
         {
             int row = y * w;
-            for (int x = 0; x < w; x++)
+            for (int x = 0; x < xInteriorStart; x++)
+            {
+                float acc = 0f;
+                for (int k = -rad; k <= rad; k++)
+                {
+                    int sx = Math.Clamp(x + k, 0, w - 1);
+                    acc += src[row + sx] * kern[k + rad];
+                }
+                tmp[row + x] = acc;
+            }
+            for (int x = xInteriorStart; x < xInteriorEnd; x++)
+            {
+                float acc = 0f;
+                int baseIdx = row + x - rad;
+                for (int ki = 0; ki < kernLen; ki++)
+                    acc += src[baseIdx + ki] * kern[ki];
+                tmp[row + x] = acc;
+            }
+            for (int x = xInteriorEnd; x < w; x++)
             {
                 float acc = 0f;
                 for (int k = -rad; k <= rad; k++)
@@ -1336,18 +1369,31 @@ public static partial class SimsVectorUiKit
         });
 
         float[] dst = new float[w * h];
+        int yInteriorStart = Math.Min(rad, h);
+        int yInteriorEnd = Math.Max(yInteriorStart, h - rad);
         Parallel.For(0, h, y =>
         {
             int row = y * w;
-            for (int x = 0; x < w; x++)
+            if (y >= yInteriorStart && y < yInteriorEnd)
             {
-                float acc = 0f;
-                for (int k = -rad; k <= rad; k++)
+                for (int ki = 0; ki < kernLen; ki++)
                 {
-                    int sy = Math.Clamp(y + k, 0, h - 1);
-                    acc += tmp[sy * w + x] * kern[k + rad];
+                    float kv = kern[ki];
+                    int srcRow = (y - rad + ki) * w;
+                    for (int x = 0; x < w; x++)
+                        dst[row + x] += tmp[srcRow + x] * kv;
                 }
-                dst[row + x] = acc;
+            }
+            else
+            {
+                for (int ki = 0; ki < kernLen; ki++)
+                {
+                    float kv = kern[ki];
+                    int sy = Math.Clamp(y - rad + ki, 0, h - 1);
+                    int srcRow = sy * w;
+                    for (int x = 0; x < w; x++)
+                        dst[row + x] += tmp[srcRow + x] * kv;
+                }
             }
         });
 

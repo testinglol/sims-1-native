@@ -8,8 +8,9 @@ layout(std430, set = 0, binding = 0) readonly buffer Vertices { AvatarVertex ver
 layout(location = 0) out vec2 outUV;
 layout(location = 1) flat out vec4 outTint;
 layout(location = 2) out vec3 outNormal;
-// Character Detail Low (quad.uvRect.x = 1) draws the unlit texture alone.
+// quad.uvRect.x: 0 = avatar lit, 1 = unlit (Character Detail Low), 2 = roof slope shading.
 layout(location = 3) flat out float outTextureOnly;
+layout(location = 4) flat out vec3 outSunDir;
 
 void main() {
     uint baseVertex = floatBitsToUint(quad.depthInterval.x);
@@ -19,4 +20,5 @@ void main() {
     outTint = quad.tint;
     outNormal = vertex.normal.xyz;
     outTextureOnly = quad.uvRect.x;
+    outSunDir = quad.uvRect.yzw;
 }

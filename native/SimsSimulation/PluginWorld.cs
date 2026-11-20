@@ -253,6 +253,27 @@ internal sealed class PluginWorld(
 
     public void SetSimSuitOverride(short simId, int? suitCategory) => setSuitOverride?.Invoke(simId, suitCategory);
 
+    public int WaterOutdoorPlants()
+    {
+        if (world() is not { } currentWorld) return 0;
+        int watered = 0;
+        foreach (var item in currentWorld.Objects.Values)
+        {
+            if (item is XPerson || item.MultiTileMasterId != 0) continue;
+            if (!Outside(item) || Sheltered(item)) continue;
+            var interactions = item.TypeRecord?.Interactions?.Interactions;
+            if (interactions is null || !interactions.Any(entry =>
+                entry.Name is not null && entry.Name.Contains("Water", StringComparison.OrdinalIgnoreCase)))
+                continue;
+            if (item.Attributes.Length > 0 && item.Attributes[0] < 100)
+            {
+                item.Attributes[0] = 100;
+                watered++;
+            }
+        }
+        return watered;
+    }
+
     public short GetObjectAttribute(string packId, short objectId, int index) => OwnedObject(packId, objectId, index).Attributes[index];
     public void SetObjectAttribute(string packId, short objectId, int index, short value)
     {

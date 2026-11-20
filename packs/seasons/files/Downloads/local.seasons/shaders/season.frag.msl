@@ -1,0 +1,1332 @@
+#pragma clang diagnostic ignored "-Wmissing-prototypes"
+
+#include <metal_stdlib>
+#include <simd/simd.h>
+
+using namespace metal;
+
+struct Ambient
+{
+    float4 view;
+    float4 params;
+    float4 light;
+    float4 extent;
+    float4 lamp;
+    float4 contact;
+    float4 frame;
+    float4 sunLot;
+    float4 clouds;
+    float4 drift;
+    float4 weather;
+    float4 tone;
+    float4 season;
+    float4 lamps[16];
+    float4 prints[16];
+    float4 seasonExtra;
+    float4 seasonExtra2;
+    float4 shadowView;
+};
+
+struct main0_out
+{
+    float4 color [[color(0)]];
+    float4 lift [[color(1)]];
+};
+
+static inline __attribute__((always_inline))
+float4 positionAt(thread const float2& pixel, constant Ambient& ambient, texture2d<float> depthMap, sampler depthMapSmplr, texture2d<float> groundMap, sampler groundMapSmplr)
+{
+    float2 scene = (pixel - ambient.view.xy) / float2(ambient.view.z);
+    float depth = depthMap.read(uint2(int2(pixel)), 0).x;
+    if (depth < 1.0)
+    {
+        return float4(scene, ((0.89999997615814208984375 - depth) / 0.0030000000260770320892333984375) * 27.7128124237060546875, 0.0);
+    }
+    float ground = groundMap.read(uint2(int2(pixel)), 0).x;
+    if (ground < 1.0)
+    {
+        return float4(scene, (((0.89999997615814208984375 - ground) / 0.0030000000260770320892333984375) + ambient.view.w) * 27.7128124237060546875, 0.5);
+    }
+    return float4(scene, -100000.0, 1.0);
+}
+
+static inline __attribute__((always_inline))
+float3 lotPoint(thread const float2& scene, thread const float& key, thread const bool& terrain, thread const float2& frame)
+{
+    float2 local = scene - frame;
+    float _113;
+    if (terrain)
+    {
+        _113 = ((16.0 * key) - local.y) / 40.0;
+    }
+    else
+    {
+        _113 = ((16.0 * key) - local.y) / 52.799999237060546875;
+    }
+    float h = _113;
+    float _137;
+    if (terrain)
+    {
+        _137 = key;
+    }
+    else
+    {
+        _137 = key - (0.800000011920928955078125 * h);
+    }
+    float s = _137;
+    float u = local.x / 32.0;
+    return float3(0.5 * (s + u), 0.5 * (s - u), h);
+}
+
+static inline __attribute__((always_inline))
+int maskAt(thread const int2& at, thread const int& band, texture2d<float> indoorMap, sampler indoorMapSmplr)
+{
+    int2 size = int2(indoorMap.get_width(), indoorMap.get_height());
+    bool _305 = at.x < 0;
+    bool _312;
+    if (!_305)
+    {
+        _312 = at.y < 0;
+    }
+    else
+    {
+        _312 = _305;
+    }
+    bool _321;
+    if (!_312)
+    {
+        _321 = at.x >= size.x;
+    }
+    else
+    {
+        _321 = _312;
+    }
+    bool _332;
+    if (!_321)
+    {
+        _332 = at.y >= (size.y / 6);
+    }
+    else
+    {
+        _332 = _321;
+    }
+    if (_332)
+    {
+        return 0;
+    }
+    return int((indoorMap.read(uint2(int2(at.x, at.y + (band * (size.y / 6)))), 0).x * 255.0) + 0.5);
+}
+
+static inline __attribute__((always_inline))
+float floorAt(thread const int2& at, thread const int& row, thread const float& fallback, constant Ambient& ambient, texture2d<float> indoorMap, sampler indoorMapSmplr)
+{
+    int2 param = at;
+    int param_1 = row + 2;
+    int code = maskAt(param, param_1, indoorMap, indoorMapSmplr);
+    float _367;
+    if (code == 0)
+    {
+        _367 = fallback;
+    }
+    else
+    {
+        _367 = ambient.contact.w + (float(code - 1) / 8.0);
+    }
+    return _367;
+}
+
+static inline __attribute__((always_inline))
+float indoors(thread const float3& lot, constant Ambient& ambient, texture2d<float> indoorMap, sampler indoorMapSmplr)
+{
+    int2 param = int2(floor(lot.xy + float2(ambient.frame.w)));
+    int param_1 = 0;
+    float param_2 = lot.z;
+    float ground = floorAt(param, param_1, param_2, ambient, indoorMap, indoorMapSmplr);
+    if (lot.z > ((ground + 5.900000095367431640625) - 0.100000001490116119384765625))
+    {
+        return 0.0;
+    }
+    int row = int(lot.z > ((ground + 2.9500000476837158203125) - 0.100000001490116119384765625));
+    float2 cell = (lot.xy + float2(ambient.frame.w)) - float2(0.5);
+    int2 base = int2(floor(cell));
+    float2 f = fast::clamp(((fract(cell) - float2(0.5)) / float2(0.20000000298023223876953125)) + float2(0.5), float2(0.0), float2(1.0));
+    float sum = 0.0;
+    float _460;
+    float _473;
+    float2 _521;
+    float2 _529;
+    for (int i = 0; i < 4; i++)
+    {
+        if ((i & 1) == 1)
+        {
+            _460 = f.x;
+        }
+        else
+        {
+            _460 = 1.0 - f.x;
+        }
+        if ((i >> 1) == 1)
+        {
+            _473 = f.y;
+        }
+        else
+        {
+            _473 = 1.0 - f.y;
+        }
+        float weight = _460 * _473;
+        int2 at = base + int2(i & 1, i >> 1);
+        int2 param_3 = at;
+        int param_4 = row;
+        if (maskAt(param_3, param_4, indoorMap, indoorMapSmplr) < 2)
+        {
+            continue;
+        }
+        int2 param_5 = at;
+        int param_6 = row + 4;
+        int part = maskAt(param_5, param_6, indoorMap, indoorMapSmplr) & 7;
+        if (part == 0)
+        {
+            sum += weight;
+            continue;
+        }
+        if (part == 1)
+        {
+            _521 = float2(1.0, -1.0);
+        }
+        else
+        {
+            if (part == 2)
+            {
+                _529 = float2(-1.0, 1.0);
+            }
+            else
+            {
+                _529 = select(float2(1.0), float2(-1.0), bool2(part == 3));
+            }
+            _521 = _529;
+        }
+        float2 toward = _521;
+        sum += (weight * smoothstep(-0.0599999986588954925537109375, 0.0599999986588954925537109375, dot(((lot.xy + float2(ambient.frame.w)) - float2(at)) - float2(0.5), toward)));
+    }
+    return sum;
+}
+
+static inline __attribute__((always_inline))
+float architecturalExposure(thread const float3& point, constant Ambient& ambient, texture2d<float> overheadMap, sampler overheadMapSmplr)
+{
+    float2 size = ambient.drift.zw;
+    int orientation = int(ambient.clouds.z + 0.5);
+    float2 _679;
+    if (orientation == 1)
+    {
+        _679 = float2(point.y, size.y - point.x);
+    }
+    else
+    {
+        float2 _693;
+        if (orientation == 2)
+        {
+            _693 = size - point.xy;
+        }
+        else
+        {
+            float2 _703;
+            if (orientation == 3)
+            {
+                _703 = float2(size.x - point.y, point.x);
+            }
+            else
+            {
+                _703 = point.xy;
+            }
+            _693 = _703;
+        }
+        _679 = _693;
+    }
+    float2 source = _679;
+    bool _723 = any(source < float2(0.0));
+    bool _731;
+    if (!_723)
+    {
+        _731 = any(source >= size);
+    }
+    else
+    {
+        _731 = _723;
+    }
+    if (_731)
+    {
+        return 1.0;
+    }
+    float2 texelsPerTile = float2(int2(overheadMap.get_width(), overheadMap.get_height())) / fast::max(size, float2(1.0));
+    int2 at = int2(floor(source * texelsPerTile));
+    if (any(at >= int2(overheadMap.get_width(), overheadMap.get_height())))
+    {
+        return 1.0;
+    }
+    int4 data = int4((overheadMap.read(uint2(at), 0) * 255.0) + float4(0.5));
+    if (data.w == 0)
+    {
+        return 1.0;
+    }
+    float base = float(((data.y * 256) + data.z) - 32768) / 256.0;
+    int story = int(floor(((point.z - base) + 0.100000001490116119384765625) / 2.9500000476837158203125));
+    if ((story < 0) || (story > 4))
+    {
+        return 1.0;
+    }
+    return ((data.x & (1 << story)) != 0) ? 0.0 : 1.0;
+}
+
+static inline __attribute__((always_inline))
+float2 lotSource(thread const float2& camera, constant Ambient& ambient)
+{
+    float2 size = ambient.drift.zw;
+    int orientation = int(ambient.clouds.z + 0.5);
+    float2 _626;
+    if (orientation == 1)
+    {
+        _626 = float2(camera.y, size.y - camera.x);
+    }
+    else
+    {
+        float2 _640;
+        if (orientation == 2)
+        {
+            _640 = size - camera;
+        }
+        else
+        {
+            float2 _649;
+            if (orientation == 3)
+            {
+                _649 = float2(size.x - camera.y, camera.x);
+            }
+            else
+            {
+                _649 = camera;
+            }
+            _640 = _649;
+        }
+        _626 = _640;
+    }
+    return _626;
+}
+
+static inline __attribute__((always_inline))
+float topAt(thread const float2& at, constant Ambient& ambient, texture2d<float> heightMap, sampler heightMapSmplr)
+{
+    float2 gridSize = float2(int2(heightMap.get_width(), heightMap.get_height()));
+    return (0.5 - heightMap.sample(heightMapSmplr, (((at + float2(ambient.frame.w)) * ambient.frame.z) / gridSize)).x) * 64.0;
+}
+
+static inline __attribute__((always_inline))
+float3 srgbToLinear(thread const float3& c)
+{
+    return mix(c / float3(12.9200000762939453125), powr((c + float3(0.054999999701976776123046875)) / float3(1.05499994754791259765625), float3(2.400000095367431640625)), step(float3(0.040449999272823333740234375), c));
+}
+
+static inline __attribute__((always_inline))
+float3 recolor(thread const float3& like, thread const float3& hue)
+{
+    return hue * (dot(like, float3(0.2125999927520751953125, 0.715200006961822509765625, 0.072200000286102294921875)) / fast::max(dot(hue, float3(0.2125999927520751953125, 0.715200006961822509765625, 0.072200000286102294921875)), 0.001000000047497451305389404296875));
+}
+
+static inline __attribute__((always_inline))
+float hash12(thread const float2& q)
+{
+    float3 r = fract(q.xyx * 0.103100001811981201171875);
+    r += float3(dot(r, r.yzx + float3(33.3300018310546875)));
+    return fract((r.x + r.y) * r.z);
+}
+
+static inline __attribute__((always_inline))
+float valueNoise(thread const float2& q)
+{
+    float2 i = floor(q);
+    float2 f = fract(q);
+    f = (f * f) * (float2(3.0) - (f * 2.0));
+    float2 param = i;
+    float2 param_1 = i + float2(1.0, 0.0);
+    float2 param_2 = i + float2(0.0, 1.0);
+    float2 param_3 = i + float2(1.0);
+    return mix(mix(hash12(param), hash12(param_1), f.x), mix(hash12(param_2), hash12(param_3), f.x), f.y);
+}
+
+static inline __attribute__((always_inline))
+float3 autumnColorSrgb(thread const float& v)
+{
+    float3 gold = float3(0.7799999713897705078125, 0.62999999523162841796875, 0.180000007152557373046875);
+    float3 amber = float3(0.75, 0.4900000095367431640625, 0.1500000059604644775390625);
+    float3 russet = float3(0.62999999523162841796875, 0.3300000131130218505859375, 0.12999999523162841796875);
+    float3 _1327;
+    if (v < 0.550000011920928955078125)
+    {
+        _1327 = mix(gold, amber, float3(v / 0.550000011920928955078125));
+    }
+    else
+    {
+        _1327 = mix(amber, russet, float3((v - 0.550000011920928955078125) / 0.449999988079071044921875));
+    }
+    return _1327;
+}
+
+static inline __attribute__((always_inline))
+float pavedAt(thread float2& q, constant Ambient& ambient, texture2d<float> indoorMap, sampler indoorMapSmplr)
+{
+    float2 param = q;
+    float2 sourcePoint = lotSource(param, ambient);
+    bool _940 = any(sourcePoint < float2(1.0));
+    bool _952;
+    if (!_940)
+    {
+        _952 = any(sourcePoint > (ambient.drift.zw - float2(1.0)));
+    }
+    else
+    {
+        _952 = _940;
+    }
+    bool scenery = _952;
+    float2 size = ambient.drift.zw;
+    int orientation = int(ambient.clouds.z + 0.5);
+    if ((orientation == 1) || (orientation == 3))
+    {
+        size = size.yx;
+    }
+    float2 edge = fast::clamp(q, float2(1.5), size - float2(1.5));
+    int2 inward = int2(sign(edge - q));
+    float2 beyond = abs(edge - q);
+    int reach = min(12, int(ceil(fast::max(beyond.x, beyond.y) - 0.5)));
+    q = edge;
+    float2 cell = (q + float2(ambient.frame.w)) - float2(0.5);
+    int2 base = int2(floor(cell));
+    float2 f = fast::clamp(((fract(cell) - float2(0.5)) / float2(0.4000000059604644775390625)) + float2(0.5), float2(0.0), float2(1.0));
+    float sum = 0.0;
+    float _1111;
+    float _1124;
+    float2 _1145;
+    float2 _1151;
+    for (int i = 0; i < 4; i++)
+    {
+        int2 at = base + int2(i & 1, i >> 1);
+        int2 param_1 = at;
+        int param_2 = 2;
+        bool _1047 = maskAt(param_1, param_2, indoorMap, indoorMapSmplr) == 0;
+        bool _1056;
+        if (!_1047)
+        {
+            int2 param_3 = at;
+            int param_4 = 0;
+            _1056 = maskAt(param_3, param_4, indoorMap, indoorMapSmplr) >= 2;
+        }
+        else
+        {
+            _1056 = _1047;
+        }
+        if (_1056)
+        {
+            continue;
+        }
+        int2 param_5 = at;
+        int param_6 = 4;
+        int f4 = maskAt(param_5, param_6, indoorMap, indoorMapSmplr);
+        if ((f4 & 128) != 0)
+        {
+            continue;
+        }
+        if (scenery)
+        {
+            bool street = true;
+            for (int k = 0; (k < reach) && street; k++)
+            {
+                int2 param_7 = at + (inward * int2(k));
+                int param_8 = 4;
+                street = (maskAt(param_7, param_8, indoorMap, indoorMapSmplr) & 64) != 0;
+            }
+            if (!street)
+            {
+                continue;
+            }
+        }
+        if ((i & 1) == 1)
+        {
+            _1111 = f.x;
+        }
+        else
+        {
+            _1111 = 1.0 - f.x;
+        }
+        if ((i >> 1) == 1)
+        {
+            _1124 = f.y;
+        }
+        else
+        {
+            _1124 = 1.0 - f.y;
+        }
+        float weight = _1111 * _1124;
+        int part = f4 & 7;
+        if (part != 0)
+        {
+            if (part == 1)
+            {
+                _1145 = float2(1.0, -1.0);
+            }
+            else
+            {
+                if (part == 2)
+                {
+                    _1151 = float2(-1.0, 1.0);
+                }
+                else
+                {
+                    _1151 = select(float2(1.0), float2(-1.0), bool2(part == 3));
+                }
+                _1145 = _1151;
+            }
+            float2 toward = _1145;
+            weight *= smoothstep(-0.0599999986588954925537109375, 0.0599999986588954925537109375, dot(((q + float2(ambient.frame.w)) - float2(at)) - float2(0.5), toward));
+        }
+        sum += weight;
+    }
+    return sum;
+}
+
+static inline __attribute__((always_inline))
+float peakRiseAt(thread const float2& q, thread const float& base, constant Ambient& ambient, texture2d<float> heightMap, sampler heightMapSmplr)
+{
+    int2 size = int2(heightMap.get_width(), heightMap.get_height());
+    float2 t = ((q + float2(ambient.frame.w)) * ambient.frame.z) - float2(0.5);
+    int2 b = int2(floor(t));
+    float peak = 0.0;
+    for (int i = 0; i < 4; i++)
+    {
+        int2 c = clamp(b + int2(i & 1, i >> 1), int2(0), size - int2(1));
+        peak = fast::max(peak, ((0.5 - heightMap.read(uint2(c), 0).x) * 64.0) - base);
+    }
+    return peak;
+}
+
+static inline __attribute__((always_inline))
+float treeCrownAt(thread const float2& q, thread const float& baseZ, constant Ambient& ambient, texture2d<float> indoorMap, sampler indoorMapSmplr, texture2d<float> overheadMap, sampler overheadMapSmplr, texture2d<float> heightMap, sampler heightMapSmplr)
+{
+    float2 param = q;
+    float param_1 = baseZ;
+    float peak = peakRiseAt(param, param_1, ambient, heightMap, heightMapSmplr);
+    if (peak <= 2.0499999523162841796875)
+    {
+        return 0.0;
+    }
+    float3 p = float3(q, baseZ + 0.100000001490116119384765625);
+    float3 param_2 = p;
+    bool _1461 = indoors(param_2, ambient, indoorMap, indoorMapSmplr) > 0.0500000007450580596923828125;
+    bool _1470;
+    if (!_1461)
+    {
+        float3 param_3 = p;
+        _1470 = architecturalExposure(param_3, ambient, overheadMap, overheadMapSmplr) < 0.949999988079071044921875;
+    }
+    else
+    {
+        _1470 = _1461;
+    }
+    if (_1470)
+    {
+        return 0.0;
+    }
+    float _1485;
+    float _1495;
+    for (int i = 0; i < 4; i++)
+    {
+        if (i == 0)
+        {
+            _1485 = 1.0;
+        }
+        else
+        {
+            _1485 = (i == 1) ? (-1.0) : 0.0;
+        }
+        if (i == 2)
+        {
+            _1495 = 1.0;
+        }
+        else
+        {
+            _1495 = (i == 3) ? (-1.0) : 0.0;
+        }
+        float2 d = float2(_1485, _1495) * 0.550000011920928955078125;
+        float3 np = float3(q + d, baseZ + 0.100000001490116119384765625);
+        float3 param_4 = np;
+        bool _1518 = indoors(param_4, ambient, indoorMap, indoorMapSmplr) > 0.07999999821186065673828125;
+        bool _1527;
+        if (!_1518)
+        {
+            float3 param_5 = np;
+            _1527 = architecturalExposure(param_5, ambient, overheadMap, overheadMapSmplr) < 0.920000016689300537109375;
+        }
+        else
+        {
+            _1527 = _1518;
+        }
+        if (_1527)
+        {
+            return 0.0;
+        }
+    }
+    return smoothstep(2.0499999523162841796875, 2.650000095367431640625, peak);
+}
+
+static inline __attribute__((always_inline))
+float isoPixelHash(thread const float2& u, thread const float2& uFw, thread const float& seed)
+{
+    float2 aa = fast::clamp(uFw * 0.75, float2(0.0599999986588954925537109375), float2(0.4799999892711639404296875));
+    float2 base = floor(u - float2(0.5));
+    float2 f = smoothstep(float2(0.5) - aa, float2(0.5) + aa, fract(u - float2(0.5)));
+    float2 param = base + float2(seed);
+    float v00 = hash12(param);
+    float2 param_1 = (base + float2(1.0, 0.0)) + float2(seed);
+    float v10 = hash12(param_1);
+    float2 param_2 = (base + float2(0.0, 1.0)) + float2(seed);
+    float v01 = hash12(param_2);
+    float2 param_3 = (base + float2(1.0)) + float2(seed);
+    float v11 = hash12(param_3);
+    return mix(mix(v00, v10, f.x), mix(v01, v11, f.x), f.y);
+}
+
+static inline __attribute__((always_inline))
+float groundAt(thread const float2& pixel, constant Ambient& ambient, texture2d<float> groundMap, sampler groundMapSmplr)
+{
+    float ground = groundMap.read(uint2(int2(pixel)), 0).x;
+    float _284;
+    if (ground < 1.0)
+    {
+        _284 = (((0.89999997615814208984375 - ground) / 0.0030000000260770320892333984375) + ambient.view.w) * 27.7128124237060546875;
+    }
+    else
+    {
+        _284 = -100000.0;
+    }
+    return _284;
+}
+
+static inline __attribute__((always_inline))
+float pressedAt(thread const float2& at, constant Ambient& ambient, texture2d<float> trailMap, sampler trailMapSmplr)
+{
+    int2 size = int2(trailMap.get_width(), trailMap.get_height());
+    if (size.x < 4)
+    {
+        return 0.0;
+    }
+    float2 param = at;
+    float2 texel = ((lotSource(param, ambient) + float2(1.0)) * 32.0) - float2(0.5);
+    int2 base = int2(floor(texel));
+    float2 f = texel - float2(base);
+    float sum = 0.0;
+    float _898;
+    float _912;
+    for (int i = 0; i < 4; i++)
+    {
+        int2 c = clamp(base + int2(i & 1, i >> 1), int2(0), size - int2(1));
+        if ((i & 1) == 1)
+        {
+            _898 = f.x;
+        }
+        else
+        {
+            _898 = 1.0 - f.x;
+        }
+        if ((i >> 1) == 1)
+        {
+            _912 = f.y;
+        }
+        else
+        {
+            _912 = 1.0 - f.y;
+        }
+        sum += ((trailMap.read(uint2(c), 0).x * _898) * _912);
+    }
+    return smoothstep(0.3499999940395355224609375, 0.64999997615814208984375, sum);
+}
+
+static inline __attribute__((always_inline))
+float snowHeight(thread const float2& q, thread const float& base, thread const float& full, thread const float& amount, thread const float& nearWall, constant Ambient& ambient, texture2d<float> indoorMap, sampler indoorMapSmplr, texture2d<float> overheadMap, sampler overheadMapSmplr, texture2d<float> heightMap, sampler heightMapSmplr, texture2d<float> trailMap, sampler trailMapSmplr)
+{
+    float3 p3 = float3(q, base + 0.100000001490116119384765625);
+    float3 param = p3;
+    float outside = architecturalExposure(param, ambient, overheadMap, overheadMapSmplr);
+    if (outside <= 0.001000000047497451305389404296875)
+    {
+        return 0.0;
+    }
+    float3 param_1 = p3;
+    outside = fast::min(1.0 - indoors(param_1, ambient, indoorMap, indoorMapSmplr), outside);
+    if (outside <= 0.001000000047497451305389404296875)
+    {
+        return 0.0;
+    }
+    float2 param_2 = q;
+    float2 l = lotSource(param_2, ambient);
+    float2 param_3 = q;
+    float overhead = smoothstep(1.2000000476837158203125, 2.5, fast::max(0.0, topAt(param_3, ambient, heightMap, heightMapSmplr) - base));
+    float2 param_4 = l * 1.2999999523162841796875;
+    float2 param_5 = (l * 4.099999904632568359375) + float2(5.0);
+    float drift = (valueNoise(param_4) * 0.60000002384185791015625) + (valueNoise(param_5) * 0.4000000059604644775390625);
+    float lying = smoothstep(drift - 0.1500000059604644775390625, drift + 0.1500000059604644775390625, (amount * (1.0 - (0.300000011920928955078125 * overhead))) * 1.25);
+    if (lying <= 0.001000000047497451305389404296875)
+    {
+        return 0.0;
+    }
+    float2 param_6 = (l * 0.449999988079071044921875) + float2(9.0);
+    float swell = valueNoise(param_6);
+    float2 param_7 = q;
+    float _1290 = pavedAt(param_7, ambient, indoorMap, indoorMapSmplr);
+    float snow = ((((full * lying) * outside) * (0.699999988079071044921875 + (0.60000002384185791015625 * swell))) * (1.0 + (0.3499999940395355224609375 * nearWall))) * (1.0 - (0.89999997615814208984375 * _1290));
+    if (snow <= 0.001000000047497451305389404296875)
+    {
+        return 0.0;
+    }
+    float2 param_8 = q;
+    return snow - (fast::min(0.02500000037252902984619140625, snow * 0.5) * pressedAt(param_8, ambient, trailMap, trailMapSmplr));
+}
+
+fragment main0_out main0(constant Ambient& ambient [[buffer(0)]], texture2d<float> depthMap [[texture(0)]], texture2d<float> groundMap [[texture(1)]], texture2d<float> heightMap [[texture(2)]], texture2d<float> indoorMap [[texture(3)]], texture2d<float> source [[texture(4)]], texture2d<float> trailMap [[texture(5)]], texture2d<float> overheadMap [[texture(6)]], texture2d<float> simMap [[texture(7)]], sampler depthMapSmplr [[sampler(0)]], sampler groundMapSmplr [[sampler(1)]], sampler heightMapSmplr [[sampler(2)]], sampler indoorMapSmplr [[sampler(3)]], sampler sourceSmplr [[sampler(4)]], sampler trailMapSmplr [[sampler(5)]], sampler overheadMapSmplr [[sampler(6)]], sampler simMapSmplr [[sampler(7)]], float4 gl_FragCoord [[position]])
+{
+    main0_out out = {};
+    float2 pixel = floor(gl_FragCoord.xy) + float2(0.5);
+    out.color = float4(0.0);
+    out.lift = float4(0.0);
+    bool _1623 = pixel.x >= ambient.extent.x;
+    bool _1632;
+    if (!_1623)
+    {
+        _1632 = pixel.y >= ambient.extent.y;
+    }
+    else
+    {
+        _1632 = _1623;
+    }
+    if (_1632)
+    {
+        return out;
+    }
+    float2 param = pixel;
+    float4 centre = positionAt(param, ambient, depthMap, depthMapSmplr, groundMap, groundMapSmplr);
+    if (centre.w > 0.75)
+    {
+        return out;
+    }
+    float3 src = source.read(uint2(int2(pixel)), 0).xyz;
+    bool ground = centre.w > 0.25;
+    bool mapped = ambient.sunLot.w > 0.0;
+    float _1666;
+    if (ground)
+    {
+        _1666 = ((0.89999997615814208984375 - groundMap.read(uint2(int2(pixel)), 0).x) / 0.0030000000260770320892333984375) + ambient.view.w;
+    }
+    else
+    {
+        _1666 = (0.89999997615814208984375 - depthMap.read(uint2(int2(pixel)), 0).x) / 0.0030000000260770320892333984375;
+    }
+    float key = _1666;
+    float2 param_1 = centre.xy;
+    float param_2 = key;
+    bool param_3 = ground;
+    float2 param_4 = ambient.frame.xy;
+    float3 here = lotPoint(param_1, param_2, param_3, param_4);
+    float _1705;
+    if (mapped)
+    {
+        float3 param_5 = here;
+        _1705 = 1.0 - indoors(param_5, ambient, indoorMap, indoorMapSmplr);
+    }
+    else
+    {
+        _1705 = 1.0;
+    }
+    float outdoor = _1705;
+    if (mapped && (!ground))
+    {
+        float3 param_6 = here - float3(0.0, 0.0, 0.25);
+        outdoor = fast::min(outdoor, 1.0 - indoors(param_6, ambient, indoorMap, indoorMapSmplr));
+    }
+    float _1730;
+    if (mapped)
+    {
+        float3 _1734;
+        if (ground)
+        {
+            _1734 = here;
+        }
+        else
+        {
+            _1734 = here + float3(0.0, 0.0, 0.449999988079071044921875);
+        }
+        float3 param_7 = _1734;
+        _1730 = architecturalExposure(param_7, ambient, overheadMap, overheadMapSmplr);
+    }
+    else
+    {
+        _1730 = 1.0;
+    }
+    float skyExposed = _1730;
+    if (outdoor <= 0.0)
+    {
+        return out;
+    }
+    float2 param_8 = here.xy;
+    float2 lot = lotSource(param_8, ambient);
+    float2 isoPix = float2((lot.x - lot.y) * 32.0, (lot.x + lot.y) * 16.0);
+    float2 isoFw = fwidth(isoPix);
+    float amount = ambient.season.y;
+    float springBloom = fast::clamp(ambient.seasonExtra.y, 0.0, 1.0);
+    float frost = fast::clamp(ambient.seasonExtra2.y, 0.0, 1.0);
+    float lum = dot(src, float3(0.2125999927520751953125, 0.715200006961822509765625, 0.072200000286102294921875));
+    float green = smoothstep(0.0599999986588954925537109375, 0.2199999988079071044921875, (src.y - fast::max(src.x, src.z)) / fast::max(src.y, 0.039999999105930328369140625));
+    float _1808;
+    if (mapped)
+    {
+        float2 param_9 = here.xy;
+        _1808 = topAt(param_9, ambient, heightMap, heightMapSmplr) - here.z;
+    }
+    else
+    {
+        _1808 = 0.0;
+    }
+    float over = _1808;
+    float covered = smoothstep(0.300000011920928955078125, 0.89999997615814208984375, over);
+    bool _1829;
+    if (mapped)
+    {
+        _1829 = ambient.season.x > 1.5;
+    }
+    else
+    {
+        _1829 = mapped;
+    }
+    if (_1829)
+    {
+        float _1843;
+        float _1853;
+        for (int i = 0; i < 4; i++)
+        {
+            if (i == 0)
+            {
+                _1843 = 1.0;
+            }
+            else
+            {
+                _1843 = (i == 1) ? (-1.0) : 0.0;
+            }
+            if (i == 2)
+            {
+                _1853 = 1.0;
+            }
+            else
+            {
+                _1853 = (i == 3) ? (-1.0) : 0.0;
+            }
+            float2 offset = float2(_1843, _1853) * 0.3499999940395355224609375;
+            float2 param_10 = here.xy + offset;
+            covered += smoothstep(0.300000011920928955078125, 0.89999997615814208984375, topAt(param_10, ambient, heightMap, heightMapSmplr) - here.z);
+        }
+        covered /= 5.0;
+    }
+    float3 result = src;
+    bool _1887 = int2(simMap.get_width(), simMap.get_height()).x > 1;
+    bool _1897;
+    if (_1887)
+    {
+        _1897 = simMap.read(uint2(int2(pixel)), 0).x > 0.5;
+    }
+    else
+    {
+        _1897 = _1887;
+    }
+    bool sim = _1897;
+    if (ambient.season.x < 0.5)
+    {
+        if ((((springBloom > 0.00999999977648258209228515625) && (skyExposed > 0.001000000047497451305389404296875)) && ground) && (green > 0.0500000007450580596923828125))
+        {
+            float3 param_11 = float3(0.3400000035762786865234375, 0.449999988079071044921875, 0.180000007152557373046875);
+            float3 param_12 = src;
+            float3 param_13 = srgbToLinear(param_11);
+            result = mix(src, recolor(param_12, param_13), float3(((green * skyExposed) * springBloom) * 0.180000007152557373046875));
+        }
+        if ((((frost > 0.0199999995529651641845703125) && (skyExposed > 0.001000000047497451305389404296875)) && (!sim)) && (green > 0.0500000007450580596923828125))
+        {
+            float2 param_14 = lot * 6.0;
+            float2 param_15 = (lot * 19.0) + float2(7.099999904632568359375);
+            float rime = smoothstep(0.3499999940395355224609375, 0.819999992847442626953125, (valueNoise(param_14) * 0.550000011920928955078125) + (valueNoise(param_15) * 0.449999988079071044921875));
+            float3 param_16 = float3(0.7799999713897705078125, 0.86000001430511474609375, 0.949999988079071044921875);
+            float3 frostTint = srgbToLinear(param_16) * fast::clamp(lum / 0.119999997317790985107421875, 0.3499999940395355224609375, 1.25);
+            result = mix(result, frostTint, float3((((frost * rime) * green) * skyExposed) * (ground ? 0.3400000035762786865234375 : 0.2199999988079071044921875)));
+        }
+        if (all(abs(result - src) < float3(9.9999997473787516355514526367188e-05)))
+        {
+            return out;
+        }
+    }
+    else
+    {
+        if (ambient.season.x < 1.5)
+        {
+            if (!ground)
+            {
+                float2 param_17 = (lot * 0.2800000011920928955078125) + float2(7.30000019073486328125);
+                float canopyVar = valueNoise(param_17);
+                float2 param_18 = (lot * 1.60000002384185791015625) + float2(19.1000003814697265625);
+                float clusterVar = valueNoise(param_18);
+                float turned = ((sim ? 0.0 : green) * outdoor) * smoothstep(0.119999997317790985107421875 + (0.2800000011920928955078125 * canopyVar), 0.4199999868869781494140625 + (0.319999992847442626953125 * canopyVar), amount);
+                float param_19 = fast::clamp(((canopyVar * 0.7200000286102294921875) + (clusterVar * 0.2800000011920928955078125)) + (0.100000001490116119384765625 * (amount - 0.5)), 0.0, 1.0);
+                float3 hueSrgb = autumnColorSrgb(param_19);
+                float shade = fast::clamp(powr(fast::max(lum, 9.9999997473787516355514526367188e-05) / 0.054999999701976776123046875, 0.62000000476837158203125), 0.37999999523162841796875, 1.5499999523162841796875);
+                float3 param_20 = hueSrgb;
+                float3 turnedColor = srgbToLinear(param_20) * (0.3400000035762786865234375 * shade);
+                result = mix(src, fast::min(turnedColor, float3(1.0)), float3(turned * 0.920000016689300537109375));
+            }
+            else
+            {
+                float3 param_21 = src;
+                float3 param_22 = float3(0.62000000476837158203125, 0.579999983310699462890625, 0.300000011920928955078125);
+                result = mix(src, recolor(param_21, param_22), float3((((green * outdoor) * skyExposed) * 0.449999988079071044921875) * amount));
+                float2 param_23 = here.xy;
+                float _2108 = pavedAt(param_23, ambient, indoorMap, indoorMapSmplr);
+                float onTurf = green * (1.0 - (0.949999988079071044921875 * _2108));
+                if (mapped && (onTurf > 0.0500000007450580596923828125))
+                {
+                    float2 param_24 = here.xy;
+                    float param_25 = here.z;
+                    float canopy = treeCrownAt(param_24, param_25, ambient, indoorMap, indoorMapSmplr, overheadMap, overheadMapSmplr, heightMap, heightMapSmplr);
+                    for (int i_1 = 0; i_1 < 8; i_1++)
+                    {
+                        float a = float(i_1) * 0.785398185253143310546875;
+                        float2 dir = float2(cos(a), sin(a));
+                        float2 param_26 = here.xy + (dir * 0.800000011920928955078125);
+                        float param_27 = here.z;
+                        canopy = fast::max(canopy, 0.89999997615814208984375 * treeCrownAt(param_26, param_27, ambient, indoorMap, indoorMapSmplr, overheadMap, overheadMapSmplr, heightMap, heightMapSmplr));
+                        float2 param_28 = here.xy + (dir * 1.5499999523162841796875);
+                        float param_29 = here.z;
+                        canopy = fast::max(canopy, 0.550000011920928955078125 * treeCrownAt(param_28, param_29, ambient, indoorMap, indoorMapSmplr, overheadMap, overheadMapSmplr, heightMap, heightMapSmplr));
+                    }
+                    if (canopy > 0.0199999995529651641845703125)
+                    {
+                        float2 param_30 = (lot * 2.400000095367431640625) + float2(3.7000000476837158203125);
+                        float2 param_31 = (lot * 5.19999980926513671875) + float2(11.30000019073486328125);
+                        float patchNoise = (valueNoise(param_30) * 0.64999997615814208984375) + (valueNoise(param_31) * 0.3499999940395355224609375);
+                        float coverStrength = ((amount * onTurf) * canopy) * smoothstep(0.23999999463558197021484375, 0.699999988079071044921875, patchNoise + (0.3400000035762786865234375 * canopy));
+                        float2 param_32 = isoPix * 0.25;
+                        float2 param_33 = isoFw * 0.25;
+                        float param_34 = 5.099999904632568359375;
+                        float2 param_35 = isoPix * 0.5;
+                        float2 param_36 = isoFw * 0.5;
+                        float param_37 = 17.299999237060546875;
+                        float clump = (0.560000002384185791015625 * isoPixelHash(param_32, param_33, param_34)) + (0.439999997615814208984375 * isoPixelHash(param_35, param_36, param_37));
+                        float threshold = 1.0 - (0.680000007152557373046875 * coverStrength);
+                        float leafMask = smoothstep(threshold - 0.0500000007450580596923828125, threshold + 0.0500000007450580596923828125, clump);
+                        if (leafMask > 0.004999999888241291046142578125)
+                        {
+                            float2 param_38 = isoPix * 0.5;
+                            float2 param_39 = isoFw * 0.5;
+                            float param_40 = 41.700000762939453125;
+                            float huePick = isoPixelHash(param_38, param_39, param_40);
+                            float2 param_41 = isoPix * 0.5;
+                            float2 param_42 = isoFw * 0.5;
+                            float param_43 = 73.90000152587890625;
+                            float shadePick = isoPixelHash(param_41, param_42, param_43);
+                            float3 _2273;
+                            if (huePick < 0.37999999523162841796875)
+                            {
+                                _2273 = float3(0.4900000095367431640625, 0.37000000476837158203125, 0.180000007152557373046875);
+                            }
+                            else
+                            {
+                                _2273 = select(float3(0.3400000035762786865234375, 0.23000000417232513427734375, 0.12999999523162841796875), float3(0.439999997615814208984375, 0.2700000107288360595703125, 0.14000000059604644775390625), bool3(huePick < 0.7400000095367431640625));
+                            }
+                            float3 leafSrgb = _2273;
+                            leafSrgb *= (0.87999999523162841796875 + (0.20000000298023223876953125 * shadePick));
+                            float3 param_44 = leafSrgb;
+                            float3 leafLin = srgbToLinear(param_44) * fast::clamp(lum / 0.097999997437000274658203125, 0.2800000011920928955078125, 1.17999994754791259765625);
+                            result = mix(result, leafLin, float3((((leafMask * outdoor) * skyExposed) * onTurf) * 0.7200000286102294921875));
+                        }
+                    }
+                }
+            }
+            bool _2325 = ((frost > 0.0199999995529651641845703125) && (skyExposed > 0.001000000047497451305389404296875)) && (!sim);
+            bool _2332;
+            if (_2325)
+            {
+                _2332 = ground || (green > 0.0500000007450580596923828125);
+            }
+            else
+            {
+                _2332 = _2325;
+            }
+            if (_2332)
+            {
+                float2 param_45 = lot * 6.0;
+                float2 param_46 = (lot * 19.0) + float2(7.099999904632568359375);
+                float rime_1 = smoothstep(0.37999999523162841796875, 0.839999973773956298828125, (valueNoise(param_45) * 0.550000011920928955078125) + (valueNoise(param_46) * 0.449999988079071044921875));
+                float _2353;
+                if (ground)
+                {
+                    float2 param_47 = here.xy;
+                    float _2360 = pavedAt(param_47, ambient, indoorMap, indoorMapSmplr);
+                    _2353 = 1.0 - (0.85000002384185791015625 * _2360);
+                }
+                else
+                {
+                    _2353 = green;
+                }
+                float mask = _2353;
+                float3 param_48 = float3(0.7799999713897705078125, 0.86000001430511474609375, 0.949999988079071044921875);
+                float3 frostTint_1 = srgbToLinear(param_48) * fast::clamp(lum / 0.119999997317790985107421875, 0.3499999940395355224609375, 1.25);
+                result = mix(result, frostTint_1, float3((((frost * rime_1) * mask) * skyExposed) * (ground ? 0.300000011920928955078125 : 0.20000000298023223876953125)));
+            }
+        }
+        else
+        {
+            float winterOutdoor = fast::min(outdoor, skyExposed);
+            if (winterOutdoor > 0.0)
+            {
+                float3 baseColor = result;
+                float3 _2400;
+                if (sim)
+                {
+                    _2400 = baseColor;
+                }
+                else
+                {
+                    float3 param_49 = baseColor;
+                    float3 param_50 = float3(0.300000011920928955078125, 0.4199999868869781494140625, 0.36000001430511474609375);
+                    _2400 = mix(baseColor, recolor(param_49, param_50), float3(0.4000000059604644775390625 * green));
+                }
+                float3 dull = _2400;
+                float deep = fast::clamp(amount - 1.0, 0.0, 1.0);
+                bool _2422 = !sim;
+                bool _2430;
+                if (_2422)
+                {
+                    _2430 = (!ground) || (!mapped);
+                }
+                else
+                {
+                    _2430 = _2422;
+                }
+                if (_2430)
+                {
+                    float facing = 1.0;
+                    if (!ground)
+                    {
+                        float3 p = centre.xyz;
+                        float _step = fast::max(1.0, 1.5 * ambient.view.z);
+                        float2 param_51 = pixel - float2(_step, 0.0);
+                        float3 left = positionAt(param_51, ambient, depthMap, depthMapSmplr, groundMap, groundMapSmplr).xyz;
+                        float2 param_52 = pixel + float2(_step, 0.0);
+                        float3 right = positionAt(param_52, ambient, depthMap, depthMapSmplr, groundMap, groundMapSmplr).xyz;
+                        float2 param_53 = pixel - float2(0.0, _step);
+                        float3 up = positionAt(param_53, ambient, depthMap, depthMapSmplr, groundMap, groundMapSmplr).xyz;
+                        float2 param_54 = pixel + float2(0.0, _step);
+                        float3 down = positionAt(param_54, ambient, depthMap, depthMapSmplr, groundMap, groundMapSmplr).xyz;
+                        float3 _2492;
+                        if (abs(right.z - p.z) < abs(p.z - left.z))
+                        {
+                            _2492 = right - p;
+                        }
+                        else
+                        {
+                            _2492 = p - left;
+                        }
+                        float3 dx = _2492;
+                        float3 _2517;
+                        if (abs(down.z - p.z) < abs(p.z - up.z))
+                        {
+                            _2517 = down - p;
+                        }
+                        else
+                        {
+                            _2517 = p - up;
+                        }
+                        float3 dy = _2517;
+                        float3 n = fast::normalize(cross(dy, dx));
+                        if (n.z < 0.0)
+                        {
+                            n = -n;
+                        }
+                        facing = dot(n, float3(0.0, -0.866025388240814208984375, 0.5));
+                    }
+                    float2 param_55 = lot * 1.2999999523162841796875;
+                    float2 param_56 = (lot * 4.099999904632568359375) + float2(5.0);
+                    float drift = (valueNoise(param_55) * 0.60000002384185791015625) + (valueNoise(param_56) * 0.4000000059604644775390625);
+                    float depth = (amount * (1.0 - (0.300000011920928955078125 * covered))) * 1.25;
+                    float lying = smoothstep(drift - 0.1500000059604644775390625, drift + 0.1500000059604644775390625, depth);
+                    float _2574;
+                    if (mapped)
+                    {
+                        float2 param_57 = pixel;
+                        _2574 = groundAt(param_57, ambient, groundMap, groundMapSmplr);
+                    }
+                    else
+                    {
+                        _2574 = -100000.0;
+                    }
+                    float baseAlt = _2574;
+                    float _2586;
+                    if (baseAlt > (-10000.0))
+                    {
+                        float2 param_58 = centre.xy;
+                        float param_59 = baseAlt / 27.7128124237060546875;
+                        bool param_60 = true;
+                        float2 param_61 = ambient.frame.xy;
+                        _2586 = lotPoint(param_58, param_59, param_60, param_61).z;
+                    }
+                    else
+                    {
+                        _2586 = 0.0;
+                    }
+                    float roofBase = _2586;
+                    bool _2608 = (!ground) && mapped;
+                    bool _2617;
+                    if (_2608)
+                    {
+                        _2617 = (here.z - roofBase) > 2.124000072479248046875;
+                    }
+                    else
+                    {
+                        _2617 = _2608;
+                    }
+                    bool _2628;
+                    if (_2617)
+                    {
+                        float2 param_62 = here.xy;
+                        _2628 = (topAt(param_62, ambient, heightMap, heightMapSmplr) - here.z) < 0.3499999940395355224609375;
+                    }
+                    else
+                    {
+                        _2628 = _2617;
+                    }
+                    bool onRoof = _2628;
+                    float _2631;
+                    if (ground)
+                    {
+                        _2631 = 1.0;
+                    }
+                    else
+                    {
+                        float _2636;
+                        if (onRoof)
+                        {
+                            _2636 = smoothstep(0.2199999988079071044921875, 0.560000002384185791015625, facing);
+                        }
+                        else
+                        {
+                            _2636 = smoothstep((green > 0.5) ? 0.25 : 0.449999988079071044921875, (green > 0.5) ? 0.60000002384185791015625 : 0.800000011920928955078125, facing);
+                        }
+                        _2631 = _2636;
+                    }
+                    float settle = _2631;
+                    float2 param_63 = lot * 5.0;
+                    float2 param_64 = lot * 17.0;
+                    float crust = (valueNoise(param_63) * 0.5) + (valueNoise(param_64) * 0.5);
+                    float2 param_65 = (lot * 0.449999988079071044921875) + float2(9.0);
+                    float swell = valueNoise(param_65);
+                    float3 snow = mix(float3(0.699999988079071044921875, 0.7599999904632568359375, 0.87999999523162841796875), float3(0.819999992847442626953125, 0.85000002384185791015625, 0.910000026226043701171875), float3(smoothstep(0.20000000298023223876953125, 0.800000011920928955078125, swell))) * ((0.839999973773956298828125 + (0.100000001490116119384765625 * crust)) + ((0.5 * (1.0 - (0.699999988079071044921875 * deep))) * (lum - 0.300000011920928955078125)));
+                    float daySun = fast::max(0.0, 1.0 - ambient.weather.w);
+                    float2 param_66 = lot * 28.0;
+                    float2 param_67 = (lot * 47.0) + float2(31.700000762939453125);
+                    float glint = smoothstep(0.60000002384185791015625, 0.89999997615814208984375, valueNoise(param_66) * valueNoise(param_67)) * daySun;
+                    snow += ((float3(0.0240000002086162567138671875, 0.02999999932944774627685546875, 0.0419999994337558746337890625) * glint) * winterOutdoor);
+                    float _2729;
+                    if (ground)
+                    {
+                        _2729 = lying * winterOutdoor;
+                    }
+                    else
+                    {
+                        _2729 = ((lying * settle) * winterOutdoor) * (onRoof ? 0.89999997615814208984375 : 0.85000002384185791015625);
+                    }
+                    float cover = _2729;
+                    result = mix(dull, snow, float3(fast::clamp(cover, 0.0, 1.0)));
+                }
+                else
+                {
+                    result = dull;
+                }
+                if (mapped)
+                {
+                    float2 param_68 = pixel;
+                    float terrain = groundAt(param_68, ambient, groundMap, groundMapSmplr);
+                    float _2762;
+                    if (ground)
+                    {
+                        _2762 = here.z;
+                    }
+                    else
+                    {
+                        float _2770;
+                        if (terrain > (-10000.0))
+                        {
+                            float2 param_69 = centre.xy;
+                            float param_70 = terrain / 27.7128124237060546875;
+                            bool param_71 = true;
+                            float2 param_72 = ambient.frame.xy;
+                            _2770 = lotPoint(param_69, param_70, param_71, param_72).z;
+                        }
+                        else
+                        {
+                            _2770 = here.z;
+                        }
+                        _2762 = _2770;
+                    }
+                    float base = _2762;
+                    float full = (0.039999999105930328369140625 * fast::min(amount, 1.0)) + (0.300000011920928955078125 * deep);
+                    float _2800;
+                    if (ground)
+                    {
+                        _2800 = 0.0;
+                    }
+                    else
+                    {
+                        _2800 = fast::max(0.0, here.z - base);
+                    }
+                    float h0 = _2800;
+                    float top = full * 1.9500000476837158203125;
+                    float wall = 0.0;
+                    if (((!ground) && (h0 < top)) && (!sim))
+                    {
+                        for (int i_2 = 0; i_2 < 4; i_2++)
+                        {
+                            float2 offset_1 = float2((i_2 < 2) ? 1.0 : (-1.0), ((i_2 & 1) == 1) ? 1.0 : (-1.0)) * 0.300000011920928955078125;
+                            float3 param_73 = float3(here.xy + offset_1, base + 0.100000001490116119384765625);
+                            wall = fast::max(wall, indoors(param_73, ambient, indoorMap, indoorMapSmplr));
+                        }
+                    }
+                    if (((h0 < top) && (wall < 0.0500000007450580596923828125)) && (!sim))
+                    {
+                        float2 param_74 = here.xy + float2(0.3499999940395355224609375, 0.0);
+                        float2 param_75 = here.xy - float2(0.3499999940395355224609375, 0.0);
+                        float2 param_76 = here.xy + float2(0.0, 0.3499999940395355224609375);
+                        float2 param_77 = here.xy - float2(0.0, 0.3499999940395355224609375);
+                        float nearWall = smoothstep(0.20000000298023223876953125, 1.2000000476837158203125, 0.25 * (((fast::max(0.0, topAt(param_74, ambient, heightMap, heightMapSmplr) - base) + fast::max(0.0, topAt(param_75, ambient, heightMap, heightMapSmplr) - base)) + fast::max(0.0, topAt(param_76, ambient, heightMap, heightMapSmplr) - base)) + fast::max(0.0, topAt(param_77, ambient, heightMap, heightMapSmplr) - base)));
+                        int steps = (amount > 1.0) ? 6 : 3;
+                        float dt = ((top - h0) / 0.4000000059604644775390625) / float(steps);
+                        float hitT = -1.0;
+                        float hitS = 0.0;
+                        float nextS = -1.0;
+                        float prevDiff = 0.0;
+                        float prevS = 0.0;
+                        bool hasPrev = false;
+                        int _2931 = steps - 1;
+                        for (int i_3 = _2931; i_3 >= 0; i_3--)
+                        {
+                            float t = float(i_3) * dt;
+                            float2 param_78 = here.xy + float2(0.5 * t);
+                            float param_79 = base;
+                            float param_80 = full;
+                            float param_81 = amount;
+                            float param_82 = nearWall;
+                            float sh = snowHeight(param_78, param_79, param_80, param_81, param_82, ambient, indoorMap, indoorMapSmplr, overheadMap, overheadMapSmplr, heightMap, heightMapSmplr, trailMap, trailMapSmplr);
+                            float diff = sh - (h0 + (0.4000000059604644775390625 * t));
+                            if (diff > 0.0)
+                            {
+                                hitT = t;
+                                hitS = sh;
+                                if (hasPrev)
+                                {
+                                    hitT += ((dt * diff) / fast::max(diff - prevDiff, 9.9999997473787516355514526367188e-05));
+                                    nextS = prevS;
+                                }
+                                break;
+                            }
+                            prevDiff = diff;
+                            prevS = sh;
+                            hasPrev = true;
+                        }
+                        if (hitT >= 0.0)
+                        {
+                            float2 q = here.xy + float2(0.5 * hitT);
+                            bool _3006 = nextS >= 0.0;
+                            bool _3017;
+                            if (_3006)
+                            {
+                                _3017 = (hitS - nextS) > ((0.4799999892711639404296875 * dt) + 0.014999999664723873138427734375);
+                            }
+                            else
+                            {
+                                _3017 = _3006;
+                            }
+                            bool face = _3017;
+                            float e = 0.119999997317790985107421875;
+                            float s0 = h0 + (0.4000000059604644775390625 * hitT);
+                            float2 param_83 = q + float2(e, 0.0);
+                            float param_84 = base;
+                            float param_85 = full;
+                            float param_86 = amount;
+                            float param_87 = nearWall;
+                            float gx = (snowHeight(param_83, param_84, param_85, param_86, param_87, ambient, indoorMap, indoorMapSmplr, overheadMap, overheadMapSmplr, heightMap, heightMapSmplr, trailMap, trailMapSmplr) - s0) / e;
+                            float2 param_88 = q + float2(0.0, e);
+                            float param_89 = base;
+                            float param_90 = full;
+                            float param_91 = amount;
+                            float param_92 = nearWall;
+                            float gy = (snowHeight(param_88, param_89, param_90, param_91, param_92, ambient, indoorMap, indoorMapSmplr, overheadMap, overheadMapSmplr, heightMap, heightMapSmplr, trailMap, trailMapSmplr) - s0) / e;
+                            float3 n2 = fast::normalize(float3(-gx, -gy, 1.0));
+                            float3 sunDir = fast::normalize(ambient.sunLot.xyz);
+                            float lit = fast::clamp(1.0 + (0.89999997615814208984375 * (dot(n2, sunDir) - sunDir.z)), 0.699999988079071044921875, 1.2000000476837158203125);
+                            float2 param_93 = q;
+                            float2 lq = lotSource(param_93, ambient);
+                            float2 param_94 = lq * 5.0;
+                            float2 param_95 = lq * 17.0;
+                            float qCrust = (valueNoise(param_94) * 0.5) + (valueNoise(param_95) * 0.5);
+                            float2 param_96 = (lq * 0.449999988079071044921875) + float2(9.0);
+                            float qSwell = valueNoise(param_96);
+                            float3 qSnow = mix(float3(0.699999988079071044921875, 0.7599999904632568359375, 0.87999999523162841796875), float3(0.819999992847442626953125, 0.85000002384185791015625, 0.910000026226043701171875), float3(smoothstep(0.20000000298023223876953125, 0.800000011920928955078125, qSwell))) * (0.86000001430511474609375 + (0.07999999821186065673828125 * qCrust));
+                            float under = ground ? lum : 0.20999999344348907470703125;
+                            qSnow *= (1.0 + ((0.5 * (1.0 - smoothstep(0.02999999932944774627685546875, 0.119999997317790985107421875, hitS))) * (under - 0.300000011920928955078125)));
+                            float2 param_97 = q;
+                            float pressed = pressedAt(param_97, ambient, trailMap, trailMapSmplr);
+                            if (pressed > 0.0)
+                            {
+                                float2 toSun = fast::normalize(ambient.sunLot.xy + float2(9.9999997473787516355514526367188e-05)) * 0.02999999932944774627685546875;
+                                float2 param_98 = q + toSun;
+                                float shaded = fast::clamp(pressed - pressedAt(param_98, ambient, trailMap, trailMapSmplr), 0.0, 1.0);
+                                float2 param_99 = q - toSun;
+                                float facing2 = fast::clamp(pressed - pressedAt(param_99, ambient, trailMap, trailMapSmplr), 0.0, 1.0);
+                                qSnow = mix(qSnow, float3(0.65799999237060546875, 0.714399993419647216796875, 0.827199995517730712890625), float3(0.25 * pressed)) * ((1.0 - (0.119999997317790985107421875 * shaded)) + (0.070000000298023223876953125 * facing2));
+                            }
+                            float daySun2 = fast::max(0.0, 1.0 - ambient.weather.w);
+                            float2 param_100 = lq * 28.0;
+                            float2 param_101 = (lq * 47.0) + float2(31.700000762939453125);
+                            float qGlint = smoothstep(0.60000002384185791015625, 0.89999997615814208984375, valueNoise(param_100) * valueNoise(param_101)) * daySun2;
+                            qSnow += (float3(0.0240000002086162567138671875, 0.02999999932944774627685546875, 0.0419999994337558746337890625) * qGlint);
+                            float3 _3208;
+                            if (face)
+                            {
+                                _3208 = float3(0.699999988079071044921875, 0.7599999904632568359375, 0.87999999523162841796875) * (0.800000011920928955078125 + (0.0599999986588954925537109375 * qCrust));
+                            }
+                            else
+                            {
+                                _3208 = qSnow * lit;
+                            }
+                            float3 seen = _3208;
+                            float edge = smoothstep(0.0040000001899898052215576171875, 0.0199999995529651641845703125, hitS);
+                            result = mix(result, seen, float3(edge));
+                            if (edge > 0.5)
+                            {
+                                out.lift = float4(hitT, (base + hitS) - here.z, 1.0, 0.0);
+                            }
+                        }
+                    }
+                }
+            }
+            else
+            {
+                if (all(abs(result - src) < float3(9.9999997473787516355514526367188e-05)))
+                {
+                    return out;
+                }
+            }
+        }
+    }
+    out.color = float4(result, 1.0);
+    return out;
+}

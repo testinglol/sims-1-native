@@ -68,6 +68,87 @@ public static class ModManager
     public static string UserPacksDirectory(string dataRoot) =>
         Path.Combine(dataRoot, "Packs");
 
+    internal static string? BundledPacksDirectoryOverride { get; set; }
+
+    public static string? BundledPacksDirectory()
+    {
+        if (!string.IsNullOrWhiteSpace(BundledPacksDirectoryOverride))
+            return Directory.Exists(BundledPacksDirectoryOverride) ? BundledPacksDirectoryOverride : null;
+
+        string[] candidates =
+        [
+            Path.Combine(AppContext.BaseDirectory, "Packs"),
+            Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "Resources", "Packs")),
+        ];
+        foreach (string candidate in candidates)
+        {
+            if (Directory.Exists(candidate))
+                return candidate;
+        }
+        return null;
+    }
+
+    public static void TrustBundledPlugins(GameContent content, string dataRoot)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+        string? bundledRoot = BundledPacksDirectory();
+        if (bundledRoot is null || content.Packs.Ordered.Count == 0)
+            return;
+
+        string canonicalBundled;
+        try
+        {
+            canonicalBundled = PackContentPaths.ResolveSymlinksInPath(bundledRoot)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                + Path.DirectorySeparatorChar;
+        }
+        catch
+        {
+            return;
+        }
+
+        var comparison = OperatingSystem.IsLinux() ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+        var bundledPackIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var pack in content.Packs.Ordered)
+        {
+            if (pack.PluginAssembly is null)
+                continue;
+
+            string canonicalPack;
+            try
+            {
+                canonicalPack = PackContentPaths.ResolveSymlinksInPath(pack.Directory);
+            }
+            catch
+            {
+                continue;
+            }
+
+            if (canonicalPack.StartsWith(canonicalBundled, comparison))
+                bundledPackIds.Add(pack.Manifest.Id);
+        }
+
+        if (bundledPackIds.Count == 0)
+            return;
+
+        PluginTrustStore? store = null;
+        foreach (var report in content.Packs.PluginReports())
+        {
+            if (!bundledPackIds.Contains(report.PackID))
+                continue;
+
+            try
+            {
+                store ??= new PluginTrustStore(dataRoot);
+                if (!store.IsTrusted(report))
+                    store.Trust(report);
+            }
+            catch
+            {
+            }
+        }
+    }
+
     public static ModSettingsFile LoadSettings(string dataRoot)
     {
         string path = SettingsPath(dataRoot);
@@ -213,9 +294,11 @@ public static class ModManager
         if (!string.IsNullOrWhiteSpace(cliPacks))
             ScanPackCandidateDir(cliPacks, defaultEnabled: true);
 
-        // 2. User DataRoot/Packs and Game/Packs (enabled by default unless disabled in mods.json).
+        // 2. User DataRoot/Packs, Game/Packs, and bundled app Packs (enabled by default unless disabled in mods.json).
         ScanPackCandidateDir(UserPacksDirectory(dataRoot), defaultEnabled: true);
         ScanPackCandidateDir(Path.Combine(gameRoot, "Packs"), defaultEnabled: true);
+        if (BundledPacksDirectory() is { } bundledPacks)
+            ScanPackCandidateDir(bundledPacks, defaultEnabled: true);
 
         // 3. Workspace/packs (discovered for easy 1-click toggling in Mods Menu; off by default unless in cliPacks or enabledPacks).
         if (!string.IsNullOrWhiteSpace(workspace))
@@ -529,9 +612,9 @@ public static class ModManager
         string modsSettingsFile = SettingsPath(dataRoot);
         if (!File.Exists(modsSettingsFile))
         {
-            // No saved mods.json yet: match exact CLI behavior while also picking up user DataRoot/Packs if present!
+            // No saved mods.json yet: match exact CLI behavior while also picking up user DataRoot/Packs or bundled Packs if present!
             string userPacks = UserPacksDirectory(dataRoot);
-            if (!Directory.Exists(userPacks))
+            if (!Directory.Exists(userPacks) && BundledPacksDirectory() is null)
             {
                 return PackTool.LoadContent(gameRoot, cliPacks);
             }
@@ -602,10 +685,11 @@ public static class ModManager
         {
             var pack = new ContentPack(canonicalDir);
             var tags = new List<string>();
-            if (pack.PluginAssembly is not null)
+            if (pack.PluginAssembly is not null || pack.Manifest.Features is { Count: > 0 })
                 tags.Add("Gameplay");
 
-            bool hasTown = false, hasUi = false, hasSkins = false, hasObjects = false;
+            bool hasTown = pack.Manifest.Features?.Any(f => string.Equals(f, "connected-neighborhood", StringComparison.OrdinalIgnoreCase)) == true,
+                hasUi = false, hasSkins = false, hasObjects = false;
             foreach (string key in pack.Assets.Keys)
             {
                 string root = key.Split('/')[0];
@@ -732,6 +816,8 @@ public static class ModManager
         if (pack.PluginAssembly is not null)
             return false;
         if (pack.Manifest.Panels is { Count: > 0 })
+            return false;
+        if (pack.Manifest.Features is { Count: > 0 })
             return false;
         return pack.Assets.Keys.All(static key =>
             key.EndsWith(".txt", StringComparison.OrdinalIgnoreCase)

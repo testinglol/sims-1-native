@@ -52,6 +52,9 @@ public static class AnimateSimPrimitive
         if (id == 0)
         {
             context.World.StopCurrentAnimation(person);
+            person.PrimaryAnimationWaiting = false;
+            person.PrimaryAnimationEventsRun = 0;
+            person.PrimaryAnimationBackwards = false;
             person[PersonData.UnusedAndDoNotUse] = 0;
             person.ReachAnimationActive = false;
             person.AnimatorControlState = person[PersonData.Sitting] switch
@@ -98,9 +101,9 @@ public static class AnimateSimPrimitive
             return PrimitiveResult.True;
         }
         var playback = person.AnimationPlayback;
-        // Route-driven walk animations are replaced rather than waited upon, allowing portal animations
-        // like stairs or doors to play while routing pauses.
-        if (playback is null or { RouteDriven: true })
+        // PrimaryAnimationWaiting (param_1[0x28]) prevents restarting if Primary is cleared externally mid-wait,
+        // while allowing any non-waiting playback (e.g., RouteDriven or ReachOps) to be replaced cleanly.
+        if (!person.PrimaryAnimationWaiting)
         {
             var primaryClip = ResolveClip(context, person, source, id, idFromParameter, flags);
             if (primaryClip is null)
@@ -109,78 +112,128 @@ public static class AnimateSimPrimitive
                 primaryClip = RouteExecutor.ResolveWalkAnimation(context.World, person, 0x25);
                 if (primaryClip is null)
                 {
+                    context.World.StopCurrentAnimation(person);
+                    person.PendingAnimationEvents.Clear();
+                    person.AnimatorCurrentSkill = -1;
+                    person.AnimatorControlState = 0;
                     person.AnimatorPracticeScaleEnabled = (flags & 0x40) != 0;
                     if (clearCarryWhenPrimaryStarts) ClearCarryForPrimaryStart(person);
-                    return PrimitiveResult.True;
+                    person.PrimaryAnimationWaiting = true;
+                    person.PrimaryAnimationEventsRun = 0;
+                    person.PrimaryAnimationBackwards = backwards;
+                    playback = null;
                 }
+                else
+                {
+                    if (clearCarryWhenPrimaryStarts) ClearCarryForPrimaryStart(person);
+                    var fallbackPlayback = new AvatarAnimationPlayback(primaryClip, backwards: false, loop: false,
+                        startedAtMils: person.AnimatorMilliseconds)
+                    {
+                        Interruptible = (flags & HurryFlag) != 0,
+                    };
+                    context.World.BeginPrimaryAnimation(person, fallbackPlayback);
+                    person.AnimatorPracticeScaleEnabled = (flags & 0x40) != 0;
+                    person.AnimatorControlState = 0;
+                    person.PrimaryAnimationWaiting = true;
+                    person.PrimaryAnimationEventsRun = 0;
+                    person.PrimaryAnimationBackwards = backwards;
+                    return PrimitiveResult.Stop;
+                }
+            }
+            else
+            {
                 if (clearCarryWhenPrimaryStarts) ClearCarryForPrimaryStart(person);
-                person.PendingAnimationEvents.Clear();
-                person.AnimatorCurrentSkill = -1;
-                person.AnimationPlayback = new AvatarAnimationPlayback(primaryClip, backwards: false, loop: false,
+                var primaryPlayback = new AvatarAnimationPlayback(primaryClip, backwards, loop: false,
                     startedAtMils: person.AnimatorMilliseconds)
                 {
                     Interruptible = (flags & HurryFlag) != 0,
                 };
+                context.World.BeginPrimaryAnimation(person, primaryPlayback);
                 person.AnimatorPracticeScaleEnabled = (flags & 0x40) != 0;
                 person.AnimatorControlState = 0;
+                person.PrimaryAnimationWaiting = true;
+                person.PrimaryAnimationEventsRun = 0;
+                person.PrimaryAnimationBackwards = primaryPlayback.Backwards;
                 return PrimitiveResult.Stop;
             }
-            if (clearCarryWhenPrimaryStarts) ClearCarryForPrimaryStart(person);
-            person.PendingAnimationEvents.Clear();
-            person.AnimatorCurrentSkill = -1;
-            person.AnimationPlayback = new AvatarAnimationPlayback(primaryClip, backwards, loop: false,
-                startedAtMils: person.AnimatorMilliseconds)
-            {
-                Interruptible = (flags & HurryFlag) != 0,
-            };
-            person.AnimatorPracticeScaleEnabled = (flags & 0x40) != 0;
-            person.AnimatorControlState = 0;
-            return PrimitiveResult.Stop;
         }
 
         if (person.TryDequeueAnimationEvent(out var value))
         {
-            if (!playback.TryConsumeExpectedEvent(value, expectedEvents, out value))
-                return PrimitiveResult.Stop;
-            if ((flags & StoreEventInLocal) != 0)
+            if (playback is not null)
             {
-                if (localEventIndex >= context.Frame.Locals.Length)
-                    throw new InvalidOperationException($"Animate Sim local index {localEventIndex} is outside the frame's {context.Frame.Locals.Length} locals.");
-                context.Frame.Locals[localEventIndex] = value;
+                if (!playback.TryConsumeExpectedEvent(value, expectedEvents, out value, person.PrimaryAnimationBackwards))
+                    return PrimitiveResult.Stop;
+                person.PrimaryAnimationEventsRun = playback.EventsRun;
+            }
+            else if (!TryConsumeNullPlaybackExpectedEvent(person, value, expectedEvents, out value))
+            {
+                return PrimitiveResult.Stop;
+            }
+            WriteEventResult(context, flags, localEventIndex, value);
+            return PrimitiveResult.False;
+        }
+        if (playback is null || playback.EndReached || (playback.Interruptible && IdleForInputPrimitive.ShouldInterrupt(context.World, person)))
+        {
+            short? missingEvent;
+            if (playback is not null)
+            {
+                missingEvent = playback.TakeMissingExpectedEvent(expectedEvents, person.PrimaryAnimationBackwards);
+                person.PrimaryAnimationEventsRun = playback.EventsRun;
             }
             else
             {
-                if (context.Frame.Parameters.Length == 0)
-                    throw new InvalidOperationException("Animate Sim writes the next XEVT to parameter 0, but the frame has no parameters.");
-                context.Frame.Parameters[0] = value;
+                missingEvent = TakeNullPlaybackMissingExpectedEvent(person, expectedEvents);
             }
-            return PrimitiveResult.False;
-        }
-        if (playback.EndReached || (playback.Interruptible && IdleForInputPrimitive.ShouldInterrupt(context.World, person)))
-        {
-            var missingEvent = playback.TakeMissingExpectedEvent(expectedEvents);
             if (missingEvent is { } expectedEvent)
             {
-                if ((flags & StoreEventInLocal) != 0)
-                {
-                    if (localEventIndex >= context.Frame.Locals.Length)
-                        throw new InvalidOperationException($"Animate Sim local index {localEventIndex} is outside the frame's {context.Frame.Locals.Length} locals.");
-                    context.Frame.Locals[localEventIndex] = expectedEvent;
-                }
-                else
-                {
-                    if (context.Frame.Parameters.Length == 0)
-                        throw new InvalidOperationException("Animate Sim writes the next XEVT to parameter 0, but the frame has no parameters.");
-                    context.Frame.Parameters[0] = expectedEvent;
-                }
+                WriteEventResult(context, flags, localEventIndex, expectedEvent);
                 return PrimitiveResult.False;
             }
+            person.PrimaryAnimationWaiting = false;
+            person.PrimaryAnimationEventsRun = 0;
+            person.PrimaryAnimationBackwards = false;
             context.World.StopReachAnimation(person);
             context.World.UpdateBackgroundPractice(person);
             person[PersonData.UnusedAndDoNotUse] = 0;
             return PrimitiveResult.True;
         }
         return PrimitiveResult.Stop;
+    }
+
+    private static void WriteEventResult(in TreeContext context, byte flags, byte localEventIndex, short value)
+    {
+        if ((flags & StoreEventInLocal) != 0)
+        {
+            if (localEventIndex >= context.Frame.Locals.Length)
+                throw new InvalidOperationException($"Animate Sim local index {localEventIndex} is outside the frame's {context.Frame.Locals.Length} locals.");
+            context.Frame.Locals[localEventIndex] = value;
+        }
+        else
+        {
+            if (context.Frame.Parameters.Length == 0)
+                throw new InvalidOperationException("Animate Sim writes the next XEVT to parameter 0, but the frame has no parameters.");
+            context.Frame.Parameters[0] = value;
+        }
+    }
+
+    private static bool TryConsumeNullPlaybackExpectedEvent(XPerson person, short value, sbyte expectedCount, out short expectedValue)
+    {
+        expectedValue = value;
+        if (value >= 100) return true;
+        var expected = person.PrimaryAnimationBackwards ? expectedCount - person.PrimaryAnimationEventsRun - 1 : person.PrimaryAnimationEventsRun;
+        if (expected < 0 || expected >= expectedCount || value != expected) return false;
+        expectedValue = (short)expected;
+        person.PrimaryAnimationEventsRun++;
+        return true;
+    }
+
+    private static short? TakeNullPlaybackMissingExpectedEvent(XPerson person, sbyte expectedCount)
+    {
+        if (person.PrimaryAnimationEventsRun >= expectedCount) return null;
+        var expected = person.PrimaryAnimationBackwards ? expectedCount - person.PrimaryAnimationEventsRun - 1 : person.PrimaryAnimationEventsRun;
+        person.PrimaryAnimationEventsRun++;
+        return (short)expected;
     }
 
     private static void ClearCarryForPrimaryStart(XPerson person)

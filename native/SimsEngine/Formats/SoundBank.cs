@@ -8,7 +8,11 @@ public sealed record SoundResolution(
     string Group,
     float Duration,
     bool IsLoop,
-    bool IsPositionalObjectTrack = true
+    bool IsPositionalObjectTrack = true,
+    bool IsPlaylist = false,
+    float PitchScale = 1.0f,
+    float VolumeScale = 1.0f,
+    int? TrackId = null
 );
 
 /// <summary>Indexes audio archives, parses HIT equates and hitlists, decodes XA and UTK audio, and manages
@@ -40,6 +44,12 @@ public sealed class SoundBank : IDisposable
     private readonly Dictionary<string, string> diskFiles = new(StringComparer.OrdinalIgnoreCase);
 
     private readonly Dictionary<string, (int? TrackId, int? MusicMode, HotBank? Bank)> eventMappings = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, HitEventMapping> fullEventMappings = new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<HitBankModule> hitBankModules = [];
+    private readonly Dictionary<int, HotTrackDef> hotTracks = [];
+    private readonly Dictionary<int, HotPatchDef> hotPatches = [];
+    private readonly Dictionary<int, (int[] Items, int? ExplicitCrush)> autoHitLists = [];
+    private int nextAutoPatchId = 0x20000;
     private readonly Dictionary<int, TrackInfo> tracks = [];
     private readonly Dictionary<int, PatchInfo> patches = [];
     private readonly Dictionary<string, PatchInfo> patchesBySymbol = new(StringComparer.OrdinalIgnoreCase);
@@ -210,9 +220,29 @@ public sealed class SoundBank : IDisposable
             return scoreA.CompareTo(scoreB);
         });
 
+        var globalTkdSubroutines = new Dictionary<string, (HitBankModule Bank, int Offset)>(StringComparer.OrdinalIgnoreCase);
         foreach (var hotFile in hotFiles)
         {
-            ParseHotFile(hotFile);
+            ParseHotFile(hotFile, globalTkdSubroutines);
+        }
+
+        foreach (var mod in hitBankModules)
+        {
+            foreach (var (tid, trk) in mod.Tracks.ToArray())
+            {
+                if (trk.EntryOffset.HasValue || string.IsNullOrEmpty(trk.Tkd)) continue;
+                var rawSub = trk.Tkd.TrimStart('@');
+                var subName = rawSub.StartsWith("tkd_", StringComparison.OrdinalIgnoreCase) ? rawSub[4..] : rawSub;
+                if (globalTkdSubroutines.TryGetValue(subName, out var resolved))
+                {
+                    var updated = trk with { EntryOffset = resolved.Offset, CodeBank = resolved.Bank };
+                    mod.Tracks[tid] = updated;
+                    if (hotTracks.TryGetValue(tid, out var existing) && ReferenceEquals(existing, trk))
+                    {
+                        hotTracks[tid] = updated;
+                    }
+                }
+            }
         }
     }
 
@@ -235,7 +265,7 @@ public sealed class SoundBank : IDisposable
         return null;
     }
 
-    private void ParseHotFile(string hotFilePath)
+    private void ParseHotFile(string hotFilePath, Dictionary<string, (HitBankModule Bank, int Offset)> globalTkdSubroutines)
     {
         try
         {
@@ -283,10 +313,49 @@ public sealed class SoundBank : IDisposable
             }
 
             var bank = new HotBank();
-            var trackDataOffsets = new Dictionary<int, int>();
-            var pendingTracks = new List<(int TrackId, string Symbol, string Group, int PatchId, string Tkd, bool IsLooped, bool IsPositionalObjectTrack)>();
+            var module = new HitBankModule(Path.GetFileNameWithoutExtension(hotFilePath), hitBytes);
+            var equates = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["kSndobPlay"] = 1,
+                ["kSndobStop"] = 2,
+                ["kSndobKill"] = 3,
+                ["kSndobUpdate"] = 4,
+                ["kSndobCancelNote"] = 19,
+                ["kKillAll"] = 20,
+                ["kPause"] = 21,
+                ["kUnpause"] = 22,
+                ["kKillInstance"] = 23,
+                ["kTurnOnTv"] = 30,
+                ["kTurnOffTv"] = 31,
+                ["kSetMusicMode"] = 36,
+                ["kPlayPiano"] = 43,
+                ["kSequenceTrackHitList"] = 100,
+                ["kDuckPriAlways"] = 0,
+                ["kDuckPriLow"] = 10,
+                ["kDuckPriNormal"] = 20,
+                ["kDuckPriHigh"] = 30,
+                ["kDuckPriHigher"] = 40,
+                ["kDuckPriEvenHigher"] = 50,
+                ["kDuckPriNever"] = 100,
+                ["kSplInfinite"] = 0,
+                ["kSplLoud"] = 10,
+                ["kSplNormal"] = 20,
+                ["kSplQuiet"] = 100,
+                ["kSplStereo"] = 10001,
+                ["kSplVox"] = 20
+            };
+            var trackDataOffsets = module.TrackDataOffsets;
+            var pendingTracks = new List<(int TrackId, string Symbol, string Group, int InitialVol, int DuckPriority, int Spl, string PatchRaw, string Tkd, bool IsLooped, bool IsPositionalObjectTrack)>();
             var lines = File.ReadAllLines(hotFilePath, Encoding.Latin1);
             string? section = null;
+
+            int ParseEquateOrInt(string token, int fallback = 0)
+            {
+                var t = token.Trim();
+                if (equates.TryGetValue(t, out var eqVal)) return eqVal;
+                if (TryParseIntOrHex(t, out var num)) return num;
+                return fallback;
+            }
 
             foreach (var rawLine in lines)
             {
@@ -299,7 +368,15 @@ public sealed class SoundBank : IDisposable
                     continue;
                 }
 
-                if (section == "trackdata" && line.Contains('='))
+                if (section == "eventmappingequate" && line.Contains('='))
+                {
+                    var parts = line.Split('=', 2);
+                    if (TryParseIntOrHex(parts[1].Trim(), out var eqVal))
+                    {
+                        equates[parts[0].Trim()] = eqVal;
+                    }
+                }
+                else if (section == "trackdata" && line.Contains('='))
                 {
                     var parts = line.Split('=', 2);
                     if (TryParseIntOrHex(parts[0].Trim(), out var tkdId) && TryParseIntOrHex(parts[1].Trim(), out var byteOff))
@@ -313,23 +390,68 @@ public sealed class SoundBank : IDisposable
                     var evName = parts[0].Trim();
                     var valParts = parts[1].Split(',');
                     var action = valParts[0].Trim();
+                    int actionCode = ParseEquateOrInt(action, 0);
 
-                    if ((action.Equals("kSetMusicMode", StringComparison.OrdinalIgnoreCase) || action == "36") && valParts.Length > 1 && int.TryParse(valParts[1].Trim(), out var mode))
+                    if ((action.Equals("kSetMusicMode", StringComparison.OrdinalIgnoreCase) || actionCode == 36) && valParts.Length > 1 && int.TryParse(valParts[1].Trim(), out var mode))
                     {
                         eventMappings[evName] = (null, mode, bank);
+                        var mapping = new HitEventMapping(evName, HitEventAction.SetMusicMode, null, mode, module);
+                        module.EventMappings[evName] = mapping;
+                        fullEventMappings[evName] = mapping;
                     }
-                    else if (action.Equals("kPlayPiano", StringComparison.OrdinalIgnoreCase) || action == "43")
+                    else if (action.Equals("kPlayPiano", StringComparison.OrdinalIgnoreCase) || actionCode == 43)
                     {
                         var pianoTrk = valParts.Length > 1 && int.TryParse(valParts[1].Trim(), out var pTrk) && pTrk > 0 ? pTrk : 1906;
                         eventMappings[evName] = (pianoTrk, null, bank);
+                        var mapping = new HitEventMapping(evName, HitEventAction.PlayPiano, pianoTrk, null, module);
+                        module.EventMappings[evName] = mapping;
+                        fullEventMappings[evName] = mapping;
+                    }
+                    else if (action.Equals("kSndobCancelNote", StringComparison.OrdinalIgnoreCase) || (valParts.Length == 1 && actionCode == 19))
+                    {
+                        var mapping = new HitEventMapping(evName, HitEventAction.SndobCancelNote, null, null, module);
+                        module.EventMappings[evName] = mapping;
+                        fullEventMappings[evName] = mapping;
+                    }
+                    else if (action.Equals("kKillInstance", StringComparison.OrdinalIgnoreCase) || (valParts.Length == 1 && actionCode == 23))
+                    {
+                        var mapping = new HitEventMapping(evName, HitEventAction.KillInstance, null, null, module);
+                        module.EventMappings[evName] = mapping;
+                        fullEventMappings[evName] = mapping;
+                    }
+                    else if (action.Equals("kKillAll", StringComparison.OrdinalIgnoreCase) || (valParts.Length == 1 && actionCode == 20))
+                    {
+                        var mapping = new HitEventMapping(evName, HitEventAction.KillAll, null, null, module);
+                        module.EventMappings[evName] = mapping;
+                        fullEventMappings[evName] = mapping;
+                    }
+                    else if (action.Equals("kTurnOffTv", StringComparison.OrdinalIgnoreCase) || (valParts.Length == 1 && actionCode == 31))
+                    {
+                        var mapping = new HitEventMapping(evName, HitEventAction.TurnOffTv, null, null, module);
+                        module.EventMappings[evName] = mapping;
+                        fullEventMappings[evName] = mapping;
                     }
                     else if (valParts.Length > 1 && int.TryParse(valParts[1].Trim(), out var trkId))
                     {
                         eventMappings[evName] = (trkId, null, bank);
+                        var evAction = actionCode switch
+                        {
+                            2 => HitEventAction.SndobStop,
+                            3 => HitEventAction.SndobKill,
+                            30 => HitEventAction.TurnOnTv,
+                            100 => HitEventAction.SequenceTrackHitList,
+                            _ => HitEventAction.SndobPlay
+                        };
+                        var mapping = new HitEventMapping(evName, evAction, trkId, null, module);
+                        module.EventMappings[evName] = mapping;
+                        fullEventMappings[evName] = mapping;
                     }
                     else if (int.TryParse(action, out var directTrkId))
                     {
                         eventMappings[evName] = (directTrkId, null, bank);
+                        var mapping = new HitEventMapping(evName, HitEventAction.SndobPlay, directTrkId, null, module);
+                        module.EventMappings[evName] = mapping;
+                        fullEventMappings[evName] = mapping;
                     }
                 }
                 else if (section == "track" && line.Contains('='))
@@ -341,19 +463,17 @@ public sealed class SoundBank : IDisposable
                         if (vals.Length >= 8)
                         {
                             var sym = vals[1].Trim();
+                            var initialVol = ParseEquateOrInt(vals[2], HitReg.DefaultVolume);
                             var argsRaw = vals[3].Trim();
+                            var duckPriority = ParseEquateOrInt(vals[4], 10);
                             var grpRaw = vals[5].Trim();
                             var group = grpRaw.Contains("Vox", StringComparison.OrdinalIgnoreCase) || grpRaw == "3" ? "VOX" :
                                         grpRaw.Contains("Music", StringComparison.OrdinalIgnoreCase) || grpRaw == "2" ? "MUSIC" : "FX";
+                            var spl = ParseEquateOrInt(vals[6], 20);
                             var tkd = vals[7].Trim();
-                            // Parameter 8 specifies the initial patch ID rather than a loop flag.
+                            // Parameter 8 specifies the initial patch ID (or @PatchSymbol) rather than a loop flag.
                             var isLooped = tkd.Contains("GenericLooped", StringComparison.OrdinalIgnoreCase);
-
-                            int patchId = 0;
-                            if (vals.Length > 8)
-                            {
-                                TryParseIntOrHex(vals[8].Trim(), out patchId);
-                            }
+                            var patchRaw = vals.Length > 8 ? vals[8].Trim() : string.Empty;
 
                             var isStationOrPianoTrack =
                                 sym.StartsWith("TrkRadio", StringComparison.OrdinalIgnoreCase) ||
@@ -368,7 +488,7 @@ public sealed class SoundBank : IDisposable
                                 argsRaw != "0" &&
                                 !(group == "MUSIC" && !isStationOrPianoTrack);
 
-                            pendingTracks.Add((trkId, sym, group, patchId, tkd, isLooped, isPositionalObjectTrack));
+                            pendingTracks.Add((trkId, sym, group, initialVol, duckPriority, spl, patchRaw, tkd, isLooped, isPositionalObjectTrack));
                         }
                     }
                 }
@@ -387,11 +507,16 @@ public sealed class SoundBank : IDisposable
                                 if (vals[idx].Trim().StartsWith('"')) { pathIndex = idx; break; }
                             }
                             var path = vals[pathIndex].Trim().Trim('"');
-                            bool isLoop = false;
-                            if (vals.Length > pathIndex + 1 && int.TryParse(vals[pathIndex + 1].Trim(), out var loopVal))
-                            {
-                                isLoop = loopVal != 0;
-                            }
+                            bool BoolCol(int offset) =>
+                                vals.Length > pathIndex + offset &&
+                                int.TryParse(vals[pathIndex + offset].Trim(), out var v) &&
+                                v != 0;
+
+                            bool isLoop = BoolCol(1);
+                            bool isStreamed = BoolCol(2);
+                            bool preload = BoolCol(3);
+                            bool is3d = BoolCol(4);
+                            bool isHeadRelative = BoolCol(5);
 
                             var patch = new PatchInfo(patchId, sym, path, isLoop);
                             bank.Patches[patchId] = patch;
@@ -399,6 +524,11 @@ public sealed class SoundBank : IDisposable
                             patches[patchId] = patch;
                             patchesBySymbol[sym] = patch;
                             allPatches.Add(patch);
+
+                            var hotPatch = new HotPatchDef(patchId, sym, path, isLoop, isStreamed, preload, is3d, isHeadRelative);
+                            module.Patches[patchId] = hotPatch;
+                            module.PatchesBySymbol[sym] = hotPatch;
+                            hotPatches[patchId] = hotPatch;
                         }
                     }
                 }
@@ -429,12 +559,38 @@ public sealed class SoundBank : IDisposable
                         {
                             bank.HitLists[hitId] = list;
                             hitLists[hitId] = list;
+                            module.GlobalHitLists[hitId] = list.ToArray();
                         }
                     }
                 }
             }
 
             int[] subroutineBoundaries = [];
+            if (hitBytes != null)
+            {
+                bool isCanonical = module.Name.Equals("SimsSound", StringComparison.OrdinalIgnoreCase) ||
+                                   module.Name.Equals("SimsGeneratedHitSource", StringComparison.OrdinalIgnoreCase);
+                foreach (var (subSym, tkdId) in hsmTkdIds)
+                {
+                    if (trackDataOffsets.TryGetValue(tkdId, out var tdOff) && tdOff >= 0 && tdOff < hitBytes.Length)
+                    {
+                        if (isCanonical)
+                            globalTkdSubroutines[subSym] = (module, tdOff);
+                        else
+                            globalTkdSubroutines.TryAdd(subSym, (module, tdOff));
+                    }
+                }
+                foreach (var (subSym, hsmOff) in hsmSubroutineOffsets)
+                {
+                    if (hsmOff >= 0 && hsmOff < hitBytes.Length)
+                    {
+                        if (isCanonical)
+                            globalTkdSubroutines[subSym] = (module, hsmOff);
+                        else
+                            globalTkdSubroutines.TryAdd(subSym, (module, hsmOff));
+                    }
+                }
+            }
             if (hitBytes != null && pendingTracks.Count > 0)
             {
                 subroutineBoundaries = hsmSubroutineOffsets.Values
@@ -447,24 +603,37 @@ public sealed class SoundBank : IDisposable
 
             foreach (var pending in pendingTracks)
             {
+                int patchId = 0;
+                if (!string.IsNullOrEmpty(pending.PatchRaw))
+                {
+                    if (!TryParseIntOrHex(pending.PatchRaw, out patchId))
+                    {
+                        var pSym = pending.PatchRaw.TrimStart('@');
+                        if (bank.PatchesBySymbol.TryGetValue(pSym, out var bp))
+                            patchId = bp.PatchId;
+                        else if (patchesBySymbol.TryGetValue(pSym, out var gp))
+                            patchId = gp.PatchId;
+                    }
+                }
+
                 int? reg5 = null, reg6 = null, reg7 = null, loopPatchId = null, killedTrackId = null;
                 var isLooped = pending.IsLooped;
+                int? resolvedOffset = null;
                 if (hitBytes != null && pending.Tkd.Length > 0)
                 {
                     var rawSub = pending.Tkd.TrimStart('@');
                     var subName = rawSub.StartsWith("tkd_", StringComparison.OrdinalIgnoreCase) ? rawSub[4..] : rawSub;
-                    int? offset = null;
                     if (TryParseIntOrHex(rawSub, out var numericTkdId) && trackDataOffsets.TryGetValue(numericTkdId, out var numOff))
-                        offset = numOff;
+                        resolvedOffset = numOff;
                     else if (hsmTkdIds.TryGetValue(subName, out var tkdId) && trackDataOffsets.TryGetValue(tkdId, out var tdOff))
-                        offset = tdOff;
+                        resolvedOffset = tdOff;
                     else if (hsmSubroutineOffsets.TryGetValue(subName, out var hsmOff))
-                        offset = hsmOff;
+                        resolvedOffset = hsmOff;
 
-                    if (offset.HasValue && offset.Value >= 0 && offset.Value < hitBytes.Length)
+                    if (resolvedOffset.HasValue && resolvedOffset.Value >= 0 && resolvedOffset.Value < hitBytes.Length)
                     {
-                        var subInfo = AnalyzeHitSubroutine(hitBytes, offset.Value, subroutineBoundaries, trackDataOffsets);
-                        if (pending.PatchId is 0 or 1)
+                        var subInfo = AnalyzeHitSubroutine(hitBytes, resolvedOffset.Value, subroutineBoundaries, trackDataOffsets);
+                        if (patchId is 0 or 1)
                         {
                             reg5 = subInfo.Reg5;
                             reg6 = subInfo.Reg6;
@@ -480,14 +649,31 @@ public sealed class SoundBank : IDisposable
                 }
 
                 var trackInfo = new TrackInfo(
-                    pending.TrackId, pending.Symbol, pending.Group, pending.PatchId, pending.Tkd,
+                    pending.TrackId, pending.Symbol, pending.Group, patchId, pending.Tkd,
                     isLooped, reg5, reg6, reg7, pending.IsPositionalObjectTrack, loopPatchId, killedTrackId)
                 {
                     Bank = bank
                 };
                 bank.Tracks[pending.TrackId] = trackInfo;
                 tracks[pending.TrackId] = trackInfo;
+
+                var hotTrack = new HotTrackDef(
+                    pending.TrackId,
+                    pending.Symbol,
+                    pending.Group,
+                    pending.InitialVol,
+                    pending.DuckPriority,
+                    pending.Spl,
+                    patchId,
+                    pending.Tkd,
+                    resolvedOffset,
+                    isLooped,
+                    pending.IsPositionalObjectTrack,
+                    module);
+                module.Tracks[pending.TrackId] = hotTrack;
+                hotTracks[pending.TrackId] = hotTrack;
             }
+            hitBankModules.Add(module);
         }
         catch { }
     }
@@ -501,7 +687,15 @@ public sealed class SoundBank : IDisposable
                 var dir = Path.Combine(gameDirectory, relativeDir);
                 if (Directory.Exists(dir))
                 {
-                    var files = Directory.EnumerateFiles(dir, "*.mp3", SearchOption.AllDirectories).OrderBy(f => f).ToList();
+                    var files = Directory.EnumerateFiles(dir, "*.mp3", SearchOption.AllDirectories)
+                        .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
+                        .ToList();
+                    if (files.Count == 0)
+                    {
+                        files = Directory.EnumerateFiles(dir, "*.wav", SearchOption.AllDirectories)
+                            .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
+                            .ToList();
+                    }
                     if (files.Count > 0)
                     {
                         musicModes[mode] = files;
@@ -511,23 +705,72 @@ public sealed class SoundBank : IDisposable
             }
         }
 
-        void AddStationAudio(string stationKey, params string[] relativeDirs)
+        void AddStationAudio(string stationKey, string relativeDir, params int[] autoPatchHitListIds)
+        {
+            AddStationAudioMulti(stationKey, [relativeDir], autoPatchHitListIds);
+        }
+
+        void AddStationAudioMulti(string stationKey, string[] relativeDirs, params int[] autoPatchHitListIds)
         {
             var collected = new List<string>();
+            var subListIds = new List<int>();
             foreach (var relativeDir in relativeDirs)
             {
                 var dir = Path.Combine(gameDirectory, relativeDir);
-                if (Directory.Exists(dir))
+                if (!Directory.Exists(dir)) continue;
+
+                // RadioStationAutoPatch (00574d8b.c, 00575062.c): group by immediate subdirectories when
+                // present (e.g. TVStations/TV_Action/a..g), or treat the root directory as one sub-list.
+                var subDirs = Directory.EnumerateDirectories(dir)
+                    .OrderBy(d => d, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                var scanDirs = subDirs.Count > 0 ? subDirs : [dir];
+                foreach (var scanDir in scanDirs)
                 {
+                    var subFiles = new List<string>();
                     foreach (var ext in new[] { "*.mp3", "*.xa", "*.wav", "*.utk" })
                     {
-                        collected.AddRange(Directory.EnumerateFiles(dir, ext, SearchOption.AllDirectories));
+                        subFiles.AddRange(Directory.EnumerateFiles(scanDir, ext, SearchOption.AllDirectories));
+                    }
+                    if (subFiles.Count == 0) continue;
+
+                    subFiles.Sort(StringComparer.OrdinalIgnoreCase);
+                    collected.AddRange(subFiles);
+
+                    if (autoPatchHitListIds.Length > 0)
+                    {
+                        var subPatchIds = new List<int>(subFiles.Count);
+                        foreach (var filePath in subFiles)
+                        {
+                            int pid = nextAutoPatchId++;
+                            var relPath = Path.GetRelativePath(gameDirectory, filePath).Replace('\\', '/');
+                            var sym = $"RadioStationAutoPatch_{Path.GetFileNameWithoutExtension(filePath)}_{pid}";
+                            var hotPatch = new HotPatchDef(pid, sym, relPath, IsLoop: false);
+                            hotPatches[pid] = hotPatch;
+                            var patchInfo = new PatchInfo(pid, sym, relPath, false);
+                            patches[pid] = patchInfo;
+                            patchesBySymbol[sym] = patchInfo;
+                            subPatchIds.Add(pid);
+                        }
+                        int subListId = nextAutoPatchId++;
+                        autoHitLists[subListId] = (subPatchIds.ToArray(), 1_000_000);
+                        hitLists[subListId] = subPatchIds;
+                        subListIds.Add(subListId);
                     }
                 }
             }
             if (collected.Count > 0)
             {
                 stationDirectories[stationKey] = collected.OrderBy(f => f, StringComparer.OrdinalIgnoreCase).ToList();
+                if (subListIds.Count > 0)
+                {
+                    var topArr = subListIds.ToArray();
+                    foreach (var hitId in autoPatchHitListIds)
+                    {
+                        autoHitLists[hitId] = (topArr, 1_000_000);
+                        hitLists[hitId] = [.. subListIds];
+                    }
+                }
             }
         }
 
@@ -548,30 +791,30 @@ public sealed class SoundBank : IDisposable
         AddModeMusic(18, Path.Combine("Music", "Modes", "MM_Buy"));
         AddModeMusic(19, Path.Combine("Music", "Modes", "MM_Credits"), Path.Combine("Music", "Modes", "MM_credits"));
 
-        AddStationAudio("radio_country", Path.Combine("Music", "Stations", "Country"));
-        AddStationAudio("radio_rock", Path.Combine("Music", "Stations", "Rock"));
-        AddStationAudio("radio_latin", Path.Combine("Music", "Stations", "Latin"));
-        AddStationAudio("radio_classical", Path.Combine("Music", "Stations", "Classica"));
-        AddStationAudio("radio_countrydance", Path.Combine("Music", "Stations", "CountryD"));
-        AddStationAudio("radio_rap", Path.Combine("Music", "Stations", "Rap"));
-        AddStationAudio("radio_rave", Path.Combine("Music", "Stations", "Rave"));
-        AddStationAudio("radio_disco", Path.Combine("Music", "Stations", "Disco"));
-        AddStationAudio("radio_beach", Path.Combine("Music", "Stations", "Beach"));
-        AddStationAudio("station_ezcheap", Path.Combine("Music", "Stations", "EZ"));
-        AddStationAudio("station_ezexp", Path.Combine("Music", "Stations", "EZExp"));
-        AddStationAudio("station_unlcheap", Path.Combine("Music", "Stations", "UnlCheap"));
-        AddStationAudio("station_unlspeak", Path.Combine("Music", "Stations", "UnlSpeak"));
-        AddStationAudio("stereo_superstar", Path.Combine("Music", "Stations", "Superstar"));
+        AddStationAudio("radio_country", Path.Combine("Music", "Stations", "Country"), 232);
+        AddStationAudio("radio_rock", Path.Combine("Music", "Stations", "Rock"), 233);
+        AddStationAudio("radio_latin", Path.Combine("Music", "Stations", "Latin"), 234);
+        AddStationAudio("radio_classical", Path.Combine("Music", "Stations", "Classica"), 235);
+        AddStationAudio("radio_countrydance", Path.Combine("Music", "Stations", "CountryD"), 1586);
+        AddStationAudio("radio_rap", Path.Combine("Music", "Stations", "Rap"), 1587);
+        AddStationAudio("radio_rave", Path.Combine("Music", "Stations", "Rave"), 1588);
+        AddStationAudio("radio_disco", Path.Combine("Music", "Stations", "Disco"), 1589);
+        AddStationAudio("radio_beach", Path.Combine("Music", "Stations", "Beach"), 1590);
+        AddStationAudio("station_ezcheap", Path.Combine("Music", "Stations", "EZ"), 65536);
+        AddStationAudio("station_ezexp", Path.Combine("Music", "Stations", "EZExp"), 65537);
+        AddStationAudio("station_unlcheap", Path.Combine("Music", "Stations", "UnlCheap"), 20900);
+        AddStationAudio("station_unlspeak", Path.Combine("Music", "Stations", "UnlSpeak"), 20901, 20902);
+        AddStationAudio("stereo_superstar", Path.Combine("Music", "Stations", "Superstar"), 100100);
 
-        AddStationAudio("tv_action", Path.Combine("SoundData", "TVStations", "TV_Action"));
-        AddStationAudio("tv_cartoon", Path.Combine("SoundData", "TVStations", "TV_Comedy_cartoon"));
-        AddStationAudio("tv_romance", Path.Combine("SoundData", "TVStations", "TV_Romance"));
-        AddStationAudio("tv_mystery", Path.Combine("SoundData", "TVStations", "TV_Mystery"));
+        AddStationAudio("tv_action", Path.Combine("SoundData", "TVStations", "TV_Action"), 529);
+        AddStationAudio("tv_cartoon", Path.Combine("SoundData", "TVStations", "TV_Comedy_cartoon"), 530);
+        AddStationAudio("tv_romance", Path.Combine("SoundData", "TVStations", "TV_Romance"), 528);
+        AddStationAudio("tv_mystery", Path.Combine("SoundData", "TVStations", "TV_Mystery"), 531);
         AddStationAudio("tv_horror", Path.Combine("SoundData", "TVStations", "TV_Mystery"));
-        AddStationAudio("tv_superstar_animal", Path.Combine("ExpansionPack6", "Sound", "TVStations", "Animal"));
-        AddStationAudio("tv_superstar_entertainment", Path.Combine("ExpansionPack6", "Sound", "TVStations", "Entertainment"));
-        AddStationAudio("tv_superstar_news", Path.Combine("ExpansionPack6", "Sound", "TVStations", "News"));
-        AddStationAudio("tv_superstar_sports", Path.Combine("ExpansionPack6", "Sound", "TVStations", "Sports"));
+        AddStationAudio("tv_superstar_animal", Path.Combine("ExpansionPack6", "Sound", "TVStations", "Animal"), 103000);
+        AddStationAudio("tv_superstar_entertainment", Path.Combine("ExpansionPack6", "Sound", "TVStations", "Entertainment"), 103001);
+        AddStationAudio("tv_superstar_news", Path.Combine("ExpansionPack6", "Sound", "TVStations", "News"), 103002);
+        AddStationAudio("tv_superstar_sports", Path.Combine("ExpansionPack6", "Sound", "TVStations", "Sports"), 103003);
     }
 
     private static bool TryParseIntOrHex(string value, out int result)
@@ -747,18 +990,18 @@ public sealed class SoundBank : IDisposable
         return next;
     }
 
-    public SoundResolution? Resolve(string name)
+    public SoundResolution? Resolve(string name, int? pianoSkillLevel = null)
     {
         if (string.IsNullOrWhiteSpace(name)) return null;
 
         lock (sync)
         {
-            if (!multiVariationEvents.Contains(name) && resolutionCache.TryGetValue(name, out var cached)) return cached;
+            if (pianoSkillLevel is null && !multiVariationEvents.Contains(name) && resolutionCache.TryGetValue(name, out var cached)) return cached;
 
             SoundResolution? res = null;
             if (!IsMock)
             {
-                res = ResolveMusic(name) ?? ResolveAmbience(name) ?? ResolveHotEvent(name) ?? ResolveDirect(name);
+                res = ResolveMusic(name, pianoSkillLevel) ?? ResolveAmbience(name) ?? ResolveHotEvent(name) ?? ResolveDirect(name);
             }
 
             if (res == null && IsMock)
@@ -766,7 +1009,7 @@ public sealed class SoundBank : IDisposable
                 res = CreateMockResolution(name);
             }
 
-            if (res != null && res.Group != "MUSIC" && !multiVariationEvents.Contains(name)) resolutionCache[name] = res;
+            if (res != null && pianoSkillLevel is null && res.Group != "MUSIC" && !multiVariationEvents.Contains(name)) resolutionCache[name] = res;
             return res;
         }
     }
@@ -924,59 +1167,213 @@ public sealed class SoundBank : IDisposable
 
     private readonly Dictionary<int, int> modeTrackIndices = new();
 
-    private SoundResolution? ResolveMusic(string name)
+    public HitVm CreateVm(Func<int, int, int>? getSourceDataField = null, Random? rng = null)
     {
-        int? mode = null;
-        if (name.Equals("bkground_buy1", StringComparison.OrdinalIgnoreCase) || name.Equals("buy", StringComparison.OrdinalIgnoreCase)) mode = 1;
-        else if (name.Equals("bkground_build", StringComparison.OrdinalIgnoreCase) || name.Equals("bkground_camera", StringComparison.OrdinalIgnoreCase) || name.Equals("build", StringComparison.OrdinalIgnoreCase)) mode = 2;
-        else if (name.Equals("bkground_nhood1", StringComparison.OrdinalIgnoreCase) || name.Equals("bkground_nhood", StringComparison.OrdinalIgnoreCase) || name.Equals("nhood", StringComparison.OrdinalIgnoreCase)) mode = 3;
-        else if (name.Equals("bkground_load", StringComparison.OrdinalIgnoreCase) || name.Equals("load", StringComparison.OrdinalIgnoreCase)) mode = 5;
-        else if (name.Equals("bkground_credits", StringComparison.OrdinalIgnoreCase) || name.Equals("credits", StringComparison.OrdinalIgnoreCase)) mode = 6;
-        else if (name.Equals("station_dtnhood", StringComparison.OrdinalIgnoreCase) || name.Equals("station_dtbuy", StringComparison.OrdinalIgnoreCase)) mode = 10;
-        else if (name.Equals("station_vacation", StringComparison.OrdinalIgnoreCase)) mode = 11;
-        else if (name.Equals("station_unleashed", StringComparison.OrdinalIgnoreCase) || name.Equals("nhoodus", StringComparison.OrdinalIgnoreCase)) mode = 12;
-        else if (name.Equals("station_superstar", StringComparison.OrdinalIgnoreCase)) mode = 13;
-        else if (name.Equals("music_superstar_transition", StringComparison.OrdinalIgnoreCase)) mode = 14;
-        else if (name.Equals("music_magictown", StringComparison.OrdinalIgnoreCase)) mode = 15;
-        else if (name.Equals("music_magictown_credits", StringComparison.OrdinalIgnoreCase)) mode = 16;
-        else if (name.Equals("music_magictown_build", StringComparison.OrdinalIgnoreCase)) mode = 17;
-        else if (name.Equals("music_magictown_buy", StringComparison.OrdinalIgnoreCase)) mode = 18;
-        else if (name.Equals("bkground_live", StringComparison.OrdinalIgnoreCase) || name.Equals("live", StringComparison.OrdinalIgnoreCase)) mode = 0;
-        else if (name.Equals("bkground_option", StringComparison.OrdinalIgnoreCase) || name.Equals("bkground_options", StringComparison.OrdinalIgnoreCase)) mode = 7;
-        else if (eventMappings.TryGetValue(name, out var mapping) && mapping.MusicMode.HasValue) mode = mapping.MusicMode.Value;
-
-        if (!mode.HasValue)
+        lock (sync)
         {
-            return ResolveStationOrPiano(name);
+            return new HitVm(hitBankModules, autoHitLists, hotPatches, getSourceDataField, rng);
         }
-
-        if (mode.Value is 0 or 7 || !musicModes.TryGetValue(mode.Value, out var files) || files.Count == 0) return null;
-
-        int trackIndex = 0;
-        if (modeTrackIndices.TryGetValue(mode.Value, out var currentIdx))
-        {
-            trackIndex = currentIdx % files.Count;
-            modeTrackIndices[mode.Value] = (trackIndex + 1) % files.Count;
-        }
-        else
-        {
-            modeTrackIndices[mode.Value] = 1 % files.Count;
-        }
-
-        var sourceFile = files[trackIndex];
-        var trackBase = Path.GetFileNameWithoutExtension(sourceFile);
-        var destFileName = $"{Sanitize(name)}_{trackIndex}_{Sanitize(trackBase)}.mp3";
-        var destPath = Path.Combine(SessionAudioDirectory, destFileName);
-        if (!File.Exists(destPath))
-        {
-            try { File.Copy(sourceFile, destPath, true); } catch { }
-        }
-
-        float duration = CalculateMp3Duration(sourceFile);
-        return new SoundResolution("audio/" + destFileName, "MUSIC", duration, true, IsPositionalObjectTrack: false);
     }
 
-    private SoundResolution? ResolveStationOrPiano(string name)
+    public HitEventMapping? GetEventMapping(string name)
+    {
+        if (IsMock || string.IsNullOrWhiteSpace(name)) return null;
+        lock (sync)
+        {
+            return fullEventMappings.GetValueOrDefault(name);
+        }
+    }
+
+    public int? GetMusicMode(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return null;
+        if (name.Equals("bkground_buy1", StringComparison.OrdinalIgnoreCase) || name.Equals("buy", StringComparison.OrdinalIgnoreCase)) return 1;
+        if (name.Equals("bkground_build", StringComparison.OrdinalIgnoreCase) || name.Equals("bkground_camera", StringComparison.OrdinalIgnoreCase) || name.Equals("build", StringComparison.OrdinalIgnoreCase)) return 2;
+        if (name.Equals("bkground_nhood1", StringComparison.OrdinalIgnoreCase) || name.Equals("bkground_nhood", StringComparison.OrdinalIgnoreCase) || name.Equals("nhood", StringComparison.OrdinalIgnoreCase)) return 3;
+        if (name.Equals("bkground_load", StringComparison.OrdinalIgnoreCase) || name.Equals("load", StringComparison.OrdinalIgnoreCase)) return 5;
+        if (name.Equals("bkground_credits", StringComparison.OrdinalIgnoreCase) || name.Equals("credits", StringComparison.OrdinalIgnoreCase)) return 6;
+        if (name.Equals("station_dtnhood", StringComparison.OrdinalIgnoreCase) || name.Equals("station_dtbuy", StringComparison.OrdinalIgnoreCase)) return 10;
+        if (name.Equals("station_vacation", StringComparison.OrdinalIgnoreCase)) return 11;
+        if (name.Equals("station_unleashed", StringComparison.OrdinalIgnoreCase) || name.Equals("nhoodus", StringComparison.OrdinalIgnoreCase)) return 12;
+        if (name.Equals("station_superstar", StringComparison.OrdinalIgnoreCase)) return 13;
+        if (name.Equals("music_superstar_transition", StringComparison.OrdinalIgnoreCase)) return 14;
+        if (name.Equals("music_magictown", StringComparison.OrdinalIgnoreCase)) return 15;
+        if (name.Equals("music_magictown_credits", StringComparison.OrdinalIgnoreCase)) return 16;
+        if (name.Equals("music_magictown_build", StringComparison.OrdinalIgnoreCase)) return 17;
+        if (name.Equals("music_magictown_buy", StringComparison.OrdinalIgnoreCase)) return 18;
+        if (name.Equals("bkground_live", StringComparison.OrdinalIgnoreCase) || name.Equals("live", StringComparison.OrdinalIgnoreCase)) return 0;
+        if (name.Equals("bkground_option", StringComparison.OrdinalIgnoreCase) || name.Equals("bkground_options", StringComparison.OrdinalIgnoreCase)) return 7;
+        if (name.Equals("bkground_family", StringComparison.OrdinalIgnoreCase)) return 8;
+        if (name.Equals("bkground_fade", StringComparison.OrdinalIgnoreCase)) return 9;
+        lock (sync)
+        {
+            if (eventMappings.TryGetValue(name, out var mapping) && mapping.MusicMode.HasValue)
+                return mapping.MusicMode.Value;
+        }
+        return null;
+    }
+
+    public HotTrackDef? GetTrackForEvent(string name)
+    {
+        if (IsMock || string.IsNullOrWhiteSpace(name)) return null;
+        lock (sync)
+        {
+            if (fullEventMappings.TryGetValue(name, out var mapping))
+            {
+                if (mapping.Action is HitEventAction.KillInstance or HitEventAction.KillAll or HitEventAction.SndobCancelNote or HitEventAction.SetMusicMode or HitEventAction.TurnOffTv)
+                    return null;
+                if (mapping.TrackId is { } tid)
+                {
+                    if (mapping.Bank != null && mapping.Bank.Tracks.TryGetValue(tid, out var bankTrack))
+                        return bankTrack;
+                    if (hotTracks.TryGetValue(tid, out var globalTrack))
+                        return globalTrack;
+                }
+            }
+            return hotTracks.Values.FirstOrDefault(t => t.Symbol.Equals(name, StringComparison.OrdinalIgnoreCase));
+        }
+    }
+
+    public SoundResolution? ResolvePatchById(
+        int patchId,
+        string group,
+        bool isLoop,
+        bool isPositionalObjectTrack,
+        float pitchScale = 1.0f,
+        float volumeScale = 1.0f,
+        int? trackId = null,
+        HitBankModule? bank = null)
+    {
+        if (IsMock) return null;
+        lock (sync)
+        {
+            HotPatchDef? patch = null;
+            if (bank != null)
+            {
+                bank.Patches.TryGetValue(patchId, out patch);
+            }
+            if (patch == null && trackId.HasValue && hotTracks.TryGetValue(trackId.Value, out var mappedTrack) && mappedTrack.Bank != null)
+            {
+                mappedTrack.Bank.Patches.TryGetValue(patchId, out patch);
+            }
+            if (patch == null && !hotPatches.TryGetValue(patchId, out patch))
+                return null;
+
+            var normAsset = patch.AssetPath.Replace('\\', '/').TrimStart('/');
+            string? diskPath = null;
+            if (diskFiles.TryGetValue(normAsset, out var dp) && File.Exists(dp))
+            {
+                diskPath = dp;
+            }
+            else if (!string.IsNullOrEmpty(GameDirectory))
+            {
+                var candidate = Path.Combine(GameDirectory, normAsset.Replace('/', Path.DirectorySeparatorChar));
+                if (File.Exists(candidate)) diskPath = candidate;
+            }
+
+            if (Path.GetExtension(normAsset).Equals(".mp3", StringComparison.OrdinalIgnoreCase))
+            {
+                if (diskPath == null)
+                {
+                    var foundMp3 = FindAsset(normAsset);
+                    if (!foundMp3.HasValue) return null;
+                    var destName = $"{Sanitize(patch.Symbol)}_{patchId}.mp3";
+                    var destFile = Path.Combine(SessionAudioDirectory, destName);
+                    if (!File.Exists(destFile))
+                    {
+                        try { File.WriteAllBytes(destFile, foundMp3.Value.Archive.Read(foundMp3.Value.Entry).ToArray()); } catch { return null; }
+                    }
+                    return new SoundResolution("audio/" + destName, group, CalculateMp3Duration(destFile), isLoop, isPositionalObjectTrack, IsPlaylist: false, PitchScale: pitchScale, VolumeScale: volumeScale, TrackId: trackId);
+                }
+                else
+                {
+                    var destName = $"{Sanitize(patch.Symbol)}_{patchId}.mp3";
+                    var destFile = Path.Combine(SessionAudioDirectory, destName);
+                    if (!File.Exists(destFile))
+                    {
+                        try { File.Copy(diskPath, destFile, true); } catch { return null; }
+                    }
+                    return new SoundResolution("audio/" + destName, group, CalculateMp3Duration(diskPath), isLoop, isPositionalObjectTrack, IsPlaylist: false, PitchScale: pitchScale, VolumeScale: volumeScale, TrackId: trackId);
+                }
+            }
+
+            byte[]? data = null;
+            var found = FindAsset(patch.AssetPath);
+            if (found.HasValue)
+                data = found.Value.Archive.Read(found.Value.Entry).ToArray();
+            else if (diskPath != null)
+                data = File.ReadAllBytes(diskPath);
+
+            if (data == null || data.Length == 0) return null;
+            var raw = DecodeRawAudio($"{patch.Symbol}_{patchId}", data, group, isLoop, isPositionalObjectTrack);
+            return raw == null
+                ? null
+                : raw with { PitchScale = pitchScale, VolumeScale = volumeScale, TrackId = trackId };
+        }
+    }
+
+    private SoundResolution? ResolveMusic(string name, int? pianoSkillLevel = null)
+    {
+        var mode = GetMusicMode(name);
+        if (!mode.HasValue)
+        {
+            return ResolveStationOrPiano(name, pianoSkillLevel);
+        }
+
+        if (mode.Value is 0 or 7 or 8 or 9 || !musicModes.TryGetValue(mode.Value, out var files) || files.Count == 0) return null;
+
+        for (int attempt = 0; attempt < files.Count; attempt++)
+        {
+            int trackIndex = 0;
+            if (modeTrackIndices.TryGetValue(mode.Value, out var currentIdx))
+            {
+                trackIndex = currentIdx % files.Count;
+                modeTrackIndices[mode.Value] = (trackIndex + 1) % files.Count;
+            }
+            else
+            {
+                modeTrackIndices[mode.Value] = 1 % files.Count;
+            }
+
+            var sourceFile = files[trackIndex];
+            try
+            {
+                if (new FileInfo(sourceFile).Length <= 0) continue;
+            }
+            catch { continue; }
+
+            var ext = Path.GetExtension(sourceFile).ToLowerInvariant();
+            var trackBase = Path.GetFileNameWithoutExtension(sourceFile);
+
+            if (ext == ".wav")
+            {
+                var destFileName = $"{Sanitize(name)}_{trackIndex}_{Sanitize(trackBase)}.wav";
+                var destPath = Path.Combine(SessionAudioDirectory, destFileName);
+                if (!File.Exists(destPath))
+                {
+                    try { File.Copy(sourceFile, destPath, true); } catch { continue; }
+                }
+                float duration = ReadWavDuration(destPath);
+                bool isLoopWav = trackBase.Contains("loop", StringComparison.OrdinalIgnoreCase);
+                return new SoundResolution("audio/" + destFileName, "MUSIC", duration, isLoopWav, IsPositionalObjectTrack: false, IsPlaylist: !isLoopWav);
+            }
+            else
+            {
+                var destFileName = $"{Sanitize(name)}_{trackIndex}_{Sanitize(trackBase)}.mp3";
+                var destPath = Path.Combine(SessionAudioDirectory, destFileName);
+                if (!File.Exists(destPath))
+                {
+                    try { File.Copy(sourceFile, destPath, true); } catch { continue; }
+                }
+
+                float duration = CalculateMp3Duration(sourceFile);
+                return new SoundResolution("audio/" + destFileName, "MUSIC", duration, false, IsPositionalObjectTrack: false, IsPlaylist: true);
+            }
+        }
+        return null;
+    }
+
+    private SoundResolution? ResolveStationOrPiano(string name, int? pianoSkillLevel = null)
     {
         int? trackId = null;
         if (eventMappings.TryGetValue(name, out var mapping) && mapping.TrackId.HasValue)
@@ -1038,22 +1435,22 @@ public sealed class SoundBank : IDisposable
             stationKey = "tv_mystery";
             group = "FX";
         }
-        else if (name.Equals("tv_superstar_animal", StringComparison.OrdinalIgnoreCase) || trackId == 103000)
+        else if (name.Equals("tv_superstar_animal", StringComparison.OrdinalIgnoreCase) || name.StartsWith("tv_superstar_animal", StringComparison.OrdinalIgnoreCase) || trackId == 103000)
         {
             stationKey = "tv_superstar_animal";
             group = "FX";
         }
-        else if (name.Equals("tv_superstar_entertainment", StringComparison.OrdinalIgnoreCase) || trackId == 103001)
+        else if (name.Equals("tv_superstar_entertainment", StringComparison.OrdinalIgnoreCase) || name.StartsWith("tv_superstar_entertainment", StringComparison.OrdinalIgnoreCase) || trackId == 103001)
         {
             stationKey = "tv_superstar_entertainment";
             group = "FX";
         }
-        else if (name.Equals("tv_superstar_news", StringComparison.OrdinalIgnoreCase) || trackId == 103002)
+        else if (name.Equals("tv_superstar_news", StringComparison.OrdinalIgnoreCase) || name.StartsWith("tv_superstar_news", StringComparison.OrdinalIgnoreCase) || trackId == 103002)
         {
             stationKey = "tv_superstar_news";
             group = "FX";
         }
-        else if (name.Equals("tv_superstar_sports", StringComparison.OrdinalIgnoreCase) || trackId == 103003)
+        else if (name.Equals("tv_superstar_sports", StringComparison.OrdinalIgnoreCase) || name.StartsWith("tv_superstar_sports", StringComparison.OrdinalIgnoreCase) || trackId == 103003)
         {
             stationKey = "tv_superstar_sports";
             group = "FX";
@@ -1062,40 +1459,50 @@ public sealed class SoundBank : IDisposable
         if (stationKey != null && stationDirectories.TryGetValue(stationKey, out var files) && files.Count > 0)
         {
             multiVariationEvents.Add(name);
-            int trackIndex = 0;
-            if (stationTrackIndices.TryGetValue(stationKey, out var currentIdx))
+            for (int attempt = 0; attempt < files.Count; attempt++)
             {
-                trackIndex = currentIdx % files.Count;
-                stationTrackIndices[stationKey] = (trackIndex + 1) % files.Count;
-            }
-            else
-            {
-                stationTrackIndices[stationKey] = 1 % files.Count;
-            }
-
-            var sourceFile = files[trackIndex];
-            var ext = Path.GetExtension(sourceFile);
-            if (ext.Equals(".mp3", StringComparison.OrdinalIgnoreCase))
-            {
-                var trackBase = Path.GetFileNameWithoutExtension(sourceFile);
-                var destFileName = $"{Sanitize(stationKey)}_{trackIndex}_{Sanitize(trackBase)}.mp3";
-                var destPath = Path.Combine(SessionAudioDirectory, destFileName);
-                if (!File.Exists(destPath))
+                int trackIndex = 0;
+                if (stationTrackIndices.TryGetValue(stationKey, out var currentIdx))
                 {
-                    try { File.Copy(sourceFile, destPath, true); } catch { }
+                    trackIndex = currentIdx % files.Count;
+                    stationTrackIndices[stationKey] = (trackIndex + 1) % files.Count;
                 }
-                float duration = CalculateMp3Duration(sourceFile);
-                return new SoundResolution("audio/" + destFileName, group, duration, true);
-            }
-            else
-            {
+                else
+                {
+                    stationTrackIndices[stationKey] = 1 % files.Count;
+                }
+
+                var sourceFile = files[trackIndex];
                 try
                 {
-                    var bytes = File.ReadAllBytes(sourceFile);
-                    var trackBase = Path.GetFileNameWithoutExtension(sourceFile);
-                    return DecodeRawAudio($"{stationKey}_{trackIndex}_{trackBase}", bytes, group, true);
+                    if (new FileInfo(sourceFile).Length <= 0) continue;
                 }
-                catch { }
+                catch { continue; }
+
+                var ext = Path.GetExtension(sourceFile);
+                if (ext.Equals(".mp3", StringComparison.OrdinalIgnoreCase))
+                {
+                    var trackBase = Path.GetFileNameWithoutExtension(sourceFile);
+                    var destFileName = $"{Sanitize(stationKey)}_{trackIndex}_{Sanitize(trackBase)}.mp3";
+                    var destPath = Path.Combine(SessionAudioDirectory, destFileName);
+                    if (!File.Exists(destPath))
+                    {
+                        try { File.Copy(sourceFile, destPath, true); } catch { continue; }
+                    }
+                    float duration = CalculateMp3Duration(sourceFile);
+                    return new SoundResolution("audio/" + destFileName, group, duration, false, IsPositionalObjectTrack: true, IsPlaylist: true);
+                }
+                else
+                {
+                    try
+                    {
+                        var bytes = File.ReadAllBytes(sourceFile);
+                        var trackBase = Path.GetFileNameWithoutExtension(sourceFile);
+                        var raw = DecodeRawAudio($"{stationKey}_{trackIndex}_{trackBase}", bytes, group, false);
+                        if (raw != null) return raw with { IsPlaylist = true };
+                    }
+                    catch { }
+                }
             }
         }
 
@@ -1105,13 +1512,27 @@ public sealed class SoundBank : IDisposable
         {
             multiVariationEvents.Add(name);
             var pianoPatches = new List<PatchInfo>();
-            for (int hitId = 1210; hitId <= 1220; hitId++)
+            if (pianoSkillLevel is { } skill)
             {
-                if (hitLists.TryGetValue(hitId, out var pIds))
+                var skillHitId = 1210 + Math.Clamp(skill, 0, 10);
+                if (hitLists.TryGetValue(skillHitId, out var skillPatchIds))
                 {
-                    foreach (var pid in pIds)
+                    foreach (var pid in skillPatchIds)
                     {
                         if (patches.TryGetValue(pid, out var p)) pianoPatches.Add(p);
+                    }
+                }
+            }
+            if (pianoPatches.Count == 0)
+            {
+                for (int hitId = 1210; hitId <= 1220; hitId++)
+                {
+                    if (hitLists.TryGetValue(hitId, out var pIds))
+                    {
+                        foreach (var pid in pIds)
+                        {
+                            if (patches.TryGetValue(pid, out var p)) pianoPatches.Add(p);
+                        }
                     }
                 }
             }
@@ -1124,8 +1545,9 @@ public sealed class SoundBank : IDisposable
             }
             if (pianoPatches.Count > 0)
             {
-                var chosen = pianoPatches[ChooseNonRepeatingIndex("piano:play", pianoPatches.Count)];
-                return DecodePatch(chosen, "MUSIC", false);
+                var key = pianoSkillLevel is { } level ? $"piano:play:{Math.Clamp(level, 0, 10)}" : "piano:play";
+                var chosen = pianoPatches[ChooseNonRepeatingIndex(key, pianoPatches.Count)];
+                return DecodePatch(chosen, "MUSIC", true);
             }
         }
 
@@ -1138,7 +1560,22 @@ public sealed class SoundBank : IDisposable
         {
             var bitrates = new[] { 0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0 };
             using var stream = File.OpenRead(filePath);
-            var header = new byte[1000];
+            var id3Header = new byte[10];
+            if (stream.Read(id3Header, 0, 10) == 10 &&
+                id3Header[0] == (byte)'I' && id3Header[1] == (byte)'D' && id3Header[2] == (byte)'3')
+            {
+                int tagSize = ((id3Header[6] & 0x7F) << 21) |
+                              ((id3Header[7] & 0x7F) << 14) |
+                              ((id3Header[8] & 0x7F) << 7) |
+                              (id3Header[9] & 0x7F);
+                stream.Position = Math.Min(stream.Length, 10L + tagSize);
+            }
+            else
+            {
+                stream.Position = 0;
+            }
+
+            var header = new byte[2048];
             int read = stream.Read(header, 0, header.Length);
             for (int i = 0; i < read - 4; i++)
             {
@@ -1148,8 +1585,8 @@ public sealed class SoundBank : IDisposable
                     int br = bitrates[brIdx] * 1000;
                     if (br > 0)
                     {
-                        var len = stream.Length;
-                        return Math.Clamp((float)(len * 8.0 / br), 10.0f, 600.0f);
+                        var len = stream.Length - stream.Position + read;
+                        return Math.Clamp((float)(Math.Max(1, len) * 8.0 / br), 10.0f, 600.0f);
                     }
                 }
             }
@@ -1390,16 +1827,30 @@ public sealed class SoundBank : IDisposable
 
         if (XaAudio.IsXa(data))
         {
-            var (wav, _, _, _, duration) = XaAudio.Decode(data);
-            File.WriteAllBytes(destPath, wav);
-            return new SoundResolution("audio/" + destFileName, group, duration, isLoop, isPositionalObjectTrack);
+            try
+            {
+                var (wav, _, _, _, duration) = XaAudio.Decode(data);
+                File.WriteAllBytes(destPath, wav);
+                return new SoundResolution("audio/" + destFileName, group, duration, isLoop, isPositionalObjectTrack);
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         if (UtkAudio.IsUtk(data))
         {
-            var (wav, _, _, _, duration) = UtkAudio.Decode(data);
-            File.WriteAllBytes(destPath, wav);
-            return new SoundResolution("audio/" + destFileName, group, duration, isLoop, isPositionalObjectTrack);
+            try
+            {
+                var (wav, _, _, _, duration) = UtkAudio.Decode(data);
+                File.WriteAllBytes(destPath, wav);
+                return new SoundResolution("audio/" + destFileName, group, duration, isLoop, isPositionalObjectTrack);
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         if (data.Length >= 44 && data[0] == (byte)'R' && data[1] == (byte)'I' && data[2] == (byte)'F' && data[3] == (byte)'F')

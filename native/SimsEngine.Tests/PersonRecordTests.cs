@@ -8,7 +8,7 @@ public sealed class PersonRecordTests
     private static readonly int[] SavedFields =
     [
         2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 16, 20, 15, 26, 17, 18, 46, 47, 48, 49, 50, 51, 52, 53,
-        13, 14, 58, 60, 61, 56, 57, 63, 65, 67, 68, 69, 74, 55, 75, 76, 80, 81, 82,
+        13, 14, 58, 60, 61, 56, 57, 63, 65, 67, 68, 69, 74, 54, 55, 75, 76, 80, 81, 82, 83, 84, 85, 86,
     ];
 
     private static short[] Definition()
@@ -19,7 +19,7 @@ public sealed class PersonRecordTests
     }
 
     [Fact]
-    public void SavesOnlyTheVersionNinePersonFieldsToTheMatchingNeighbor()
+    public void SavesOnlyTheVersionTenPersonFieldsToTheMatchingNeighbor()
     {
         var world = new SimulationWorld();
         var person = world.Add(new XPerson(7, Definition()));
@@ -31,7 +31,7 @@ public sealed class PersonRecordTests
 
         world.SavePersonRecord(person);
 
-        Assert.Equal(9, neighbor.PersonRecordVersion);
+        Assert.Equal(10, neighbor.PersonRecordVersion);
         var saved = SavedFields.ToHashSet();
         for (var field = 0; field < neighbor.PersonData.Length; field++)
             Assert.Equal(saved.Contains(field) ? person.PersonData[field] : (short)-1, neighbor.PersonData[field]);

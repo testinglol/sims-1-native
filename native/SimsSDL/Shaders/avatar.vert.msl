@@ -41,6 +41,7 @@ struct main0_out
     float4 outTint [[user(locn1)]];
     float3 outNormal [[user(locn2)]];
     float outTextureOnly [[user(locn3)]];
+    float3 outSunDir [[user(locn4)]];
     float4 gl_Position [[position]];
 };
 
@@ -68,5 +69,6 @@ vertex main0_out main0(constant Quad& quad [[buffer(0)]], const device Vertices&
     out.outTint = quad.tint;
     out.outNormal = vertex0.normal.xyz;
     out.outTextureOnly = quad.uvRect.x;
+    out.outSunDir = quad.uvRect.yzw;
     return out;
 }

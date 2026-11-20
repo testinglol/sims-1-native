@@ -175,6 +175,9 @@ public sealed class CharacterSearchPath
             files.AddRange(found);
         }
 
+        var seenDownloadDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seenArchivePrefixes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
         foreach (var windowsFolder in windowsFolders)
             Add(windowsFolder, ObjectRegistry.Resolve(game, windowsFolder));
         if (registry is not null)
@@ -182,6 +185,13 @@ public sealed class CharacterSearchPath
             {
                 if (folder.ArchivePrefix is null)
                 {
+                    var fullDir = Path.GetFullPath(folder.Path);
+                    seenDownloadDirs.Add(fullDir);
+                    if (Directory.Exists(fullDir))
+                    {
+                        foreach (var farPath in Directory.EnumerateFiles(fullDir, "*.far").Order(StringComparer.OrdinalIgnoreCase))
+                            seenArchivePrefixes.Add(Path.GetFullPath(farPath) + "\0");
+                    }
                     Add(Path.GetRelativePath(game, folder.Path).Replace('/', '\\'), folder.Path);
                     continue;
                 }
@@ -190,6 +200,7 @@ public sealed class CharacterSearchPath
                 var logicalFolder = Path.GetRelativePath(game, folder.Path).Replace('/', '\\') + "\\" + folder.ArchivePrefix.Replace('/', '\\');
                 var dirIndex = DirectoryIndex(archive);
                 var normalizedPrefix = folder.ArchivePrefix.Replace('\\', '/');
+                seenArchivePrefixes.Add(Path.GetFullPath(folder.Path) + "\0" + normalizedPrefix);
                 if (dirIndex.TryGetValue(normalizedPrefix, out var bucket) && bucket.Count > 0)
                 {
                     var found = new List<CharacterFile>(bucket.Count);
@@ -202,7 +213,114 @@ public sealed class CharacterSearchPath
                     files.AddRange(found);
                 }
             }
+
+        var disabledDownloads = LoadDisabledDownloads(game);
+        if (ObjectRegistry.Resolve(game, "Downloads") is { } downloadRoot)
+        {
+            void WalkDownloads(string dir)
+            {
+                var fullDir = Path.GetFullPath(dir);
+                var logicalFolder = Path.GetRelativePath(game, dir).Replace('/', '\\');
+                if (seenDownloadDirs.Add(fullDir))
+                {
+                    var looseFound = new List<CharacterFile>();
+                    foreach (var path in Directory.EnumerateFiles(dir).Order(StringComparer.OrdinalIgnoreCase))
+                    {
+                        if (!path.EndsWith(".far", StringComparison.OrdinalIgnoreCase))
+                            looseFound.Add(new CharacterFile(Path.GetFileName(path), logicalFolder, path, () => File.ReadAllBytes(path)));
+                    }
+                    if (looseFound.Count > 0)
+                    {
+                        folders.Add((logicalFolder, [dir]));
+                        files.AddRange(looseFound);
+                    }
+                }
+
+                foreach (var farPath in Directory.EnumerateFiles(dir, "*.far").Order(StringComparer.OrdinalIgnoreCase))
+                {
+                    var archive = Archive(farPath);
+                    var dirIndex = DirectoryIndex(archive);
+                    var fullFar = Path.GetFullPath(farPath);
+                    foreach (var (prefix, bucket) in dirIndex.OrderBy(static kv => kv.Key, StringComparer.OrdinalIgnoreCase))
+                    {
+                        if (bucket.Count == 0 || !seenArchivePrefixes.Add(fullFar + "\0" + prefix)) continue;
+                        var archiveLogical = prefix.Length == 0
+                            ? logicalFolder
+                            : logicalFolder + "\\" + prefix.Replace('/', '\\');
+                        var sourceLabel = prefix.Length == 0 ? farPath : farPath + "::" + prefix + "/";
+                        var found = new List<CharacterFile>(bucket.Count);
+                        foreach (var (fileName, entry) in bucket)
+                        {
+                            var captured = entry;
+                            found.Add(new CharacterFile(fileName, archiveLogical, farPath + "::" + captured.Name, () => archive.Read(captured)));
+                        }
+                        folders.Add((archiveLogical, [sourceLabel]));
+                        files.AddRange(found);
+                    }
+                }
+
+                var isTopLevel = string.Equals(fullDir, Path.GetFullPath(downloadRoot), StringComparison.OrdinalIgnoreCase);
+                foreach (var subDir in Directory.EnumerateDirectories(dir).Order(StringComparer.OrdinalIgnoreCase))
+                {
+                    if (isTopLevel && disabledDownloads is not null && disabledDownloads.Contains(Path.GetFileName(subDir)))
+                        continue;
+                    WalkDownloads(subDir);
+                }
+            }
+
+            WalkDownloads(downloadRoot);
+        }
+        else if (File.Exists(Path.Combine(game, "Downloads.far")))
+        {
+            var farPath = Path.Combine(game, "Downloads.far");
+            var fullFar = Path.GetFullPath(farPath);
+            var archive = Archive(farPath);
+            var dirIndex = DirectoryIndex(archive);
+            foreach (var (prefix, bucket) in dirIndex.OrderBy(static kv => kv.Key, StringComparer.OrdinalIgnoreCase))
+            {
+                if (bucket.Count == 0 || !seenArchivePrefixes.Add(fullFar + "\0" + prefix)) continue;
+                var logicalFolder = prefix.Length == 0
+                    ? "Downloads"
+                    : @"Downloads\" + prefix.Replace('/', '\\');
+                var sourceLabel = prefix.Length == 0 ? farPath : farPath + "::" + prefix + "/";
+                var found = new List<CharacterFile>(bucket.Count);
+                foreach (var (fileName, entry) in bucket)
+                {
+                    var captured = entry;
+                    found.Add(new CharacterFile(fileName, logicalFolder, farPath + "::" + captured.Name, () => archive.Read(captured)));
+                }
+                folders.Add((logicalFolder, [sourceLabel]));
+                files.AddRange(found);
+            }
+        }
         return new CharacterSearchPath(folders, files);
+    }
+
+    private static HashSet<string>? LoadDisabledDownloads(string game)
+    {
+        HashSet<string>? disabledDownloads = null;
+        var disabledMarkerPath = Path.Combine(game, ".disabled-downloads.txt");
+        if (File.Exists(disabledMarkerPath))
+        {
+            try
+            {
+                disabledDownloads = new HashSet<string>(
+                    File.ReadAllLines(disabledMarkerPath)
+                        .Select(static s => s.Trim())
+                        .Where(static s => s.Length > 0),
+                    StringComparer.OrdinalIgnoreCase);
+            }
+            catch
+            {
+            }
+        }
+        if (Environment.GetEnvironmentVariable("SIMS_DISABLED_DOWNLOADS") is { Length: > 0 } envDisabled)
+        {
+            disabledDownloads ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var token in envDisabled.Split([';', '\n', '\r'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                disabledDownloads.Add(token);
+        }
+        return disabledDownloads;
     }
 
     private static IEnumerable<(string Path, string? ArchivePrefix)> DownloadFolders(ObjectRegistry registry, bool lastRegisteredFirst)

@@ -18,7 +18,9 @@ public sealed record PackReport(
     [property: JsonPropertyName("panels"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     IReadOnlyList<PackPanelReport>? Panels = null,
     [property: JsonPropertyName("packDetails"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    IReadOnlyList<PackDetailReport>? PackDetails = null)
+    IReadOnlyList<PackDetailReport>? PackDetails = null,
+    [property: JsonPropertyName("coreFingerprint"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? CoreFingerprint = null)
 {
     public sealed record Resource(
         [property: JsonPropertyName("path")] string Path,
@@ -81,6 +83,36 @@ public sealed partial class PackStack
         var fingerprintLines = packIDs.Concat(fingerprints).Concat(reserved).Concat(code);
         var fingerprint = PackContentPaths.Sha256Hex(string.Join('\n', fingerprintLines));
 
+        string? coreFingerprint = null;
+        if (Ordered.Any(static p => SaveCompatibility.OptionalFeaturePackIds.Contains(p.Manifest.Id)))
+        {
+            var coreOrdered = Ordered
+                .Where(static p => !SaveCompatibility.OptionalFeaturePackIds.Contains(p.Manifest.Id))
+                .ToArray();
+            if (coreOrdered.Length == 0)
+            {
+                coreFingerprint = "unmounted-base-1.90";
+            }
+            else
+            {
+                var corePackIds = coreOrdered.Select(static p => p.Manifest.Id + "@" + p.Manifest.Version);
+                var coreFingerprints = resources
+                    .Where(static r => !SaveCompatibility.OptionalFeaturePackIds.Contains(r.Owner))
+                    .Select(static r => r.Path + ":" + r.Sha256);
+                var coreReserved = Reservations
+                    .Where(static r => !SaveCompatibility.OptionalFeaturePackIds.Contains(r.Owner))
+                    .Select(static r => $"object-guid:{r.Owner}:{r.Name}:{r.Guid}");
+                var coreCode = plugins
+                    .Where(static p => !SaveCompatibility.OptionalFeaturePackIds.Contains(p.PackID))
+                    .Select(static p => $"plugin:{p.PackID}:{p.Sha256}:{p.StateVersion}")
+                    .Concat(panels
+                        .Where(static p => !SaveCompatibility.OptionalFeaturePackIds.Contains(p.PackID))
+                        .Select(static p => $"panel:{p.PackID}:{p.Id}:{p.Sha256}"));
+                var coreLines = corePackIds.Concat(coreFingerprints).Concat(coreReserved).Concat(coreCode);
+                coreFingerprint = PackContentPaths.Sha256Hex(string.Join('\n', coreLines));
+            }
+        }
+
         return new PackReport(
             SchemaVersion: 1,
             BaseGameVersion: "1.90",
@@ -92,6 +124,7 @@ public sealed partial class PackStack
             Reservations: Reservations,
             Plugins: plugins.Count == 0 ? null : plugins,
             Panels: panels.Count == 0 ? null : panels,
-            PackDetails: PackDetails());
+            PackDetails: PackDetails(),
+            CoreFingerprint: coreFingerprint);
     }
 }

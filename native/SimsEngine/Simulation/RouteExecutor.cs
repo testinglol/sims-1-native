@@ -1,3 +1,4 @@
+using SimsEngine.Formats;
 using System.Buffers;
 
 namespace SimsEngine.Simulation;
@@ -75,8 +76,7 @@ internal static class RouteExecutor
         if (points.Count < 2) throw new ArgumentException("A follow path needs at least two points.", nameof(points));
         person.AnimatorControlState = 3;
         person.AnimatorRouteTransitionState = 0;
-        person.AnimationPlayback = null;
-        person.AnimatorCurrentSkill = -1;
+        world.StopCurrentAnimation(person);
         person.AnimatorRootX = person.Position.X;
         person.AnimatorRootY = person.Position.Y;
         person.AnimatorRootDirection = person[ObjectData.Direction];
@@ -99,7 +99,7 @@ internal static class RouteExecutor
             MotionAnimationIndex: -1,
             MotionDirection: (short)(person[ObjectData.Direction] & 7), StandChecked: true, AnimatorFollowState: -1)
         {
-            MotionPath = path,
+            MotionPath = [path[0]],
             MotionTargetPathIndex = 1,
             FollowPath = path,
             FollowWaypointIndex = 1,
@@ -109,6 +109,24 @@ internal static class RouteExecutor
         };
         frame.Waiting = true;
         return PrimitiveResult.Stop;
+    }
+
+    internal static bool IsGatewayPortal(XObject portal)
+    {
+        // Gateway portals are identified by the pedestrian portal GUID, or an ObjectClass.Portal
+        // using the off-lot sentinel room (0xFFFB) or positioned along the outer lot perimeter.
+        var guid = unchecked((uint)(portal.TypeRecord?.Key ?? 0));
+        if (guid == Neighborhood.GatewayRouting.PedestrianPortalGuid) return true;
+        if (portal.TypeRecord?.ObjectType == 7 ||
+            (portal.Definition.Length > (int)ObjdField.Type && portal.Definition[(int)ObjdField.Type] == 7))
+            return false;
+        if (portal.RuntimeClass != Formats.ObjectClass.Portal)
+            return false;
+        var roomWord = unchecked((ushort)portal.RoomWord84);
+        if (roomWord == 0xFFFB) return true;
+        var tx = portal.Position.X >> 4;
+        var ty = portal.Position.Y >> 4;
+        return tx <= 2 || ty <= 2 || tx >= LotGeometry.LotDimension - 3 || ty >= LotGeometry.LotDimension - 3;
     }
 
     internal static PrimitiveResult BeginDirectWalkFollow(SimulationWorld world, XPerson person, StackFrame frame,
@@ -142,7 +160,7 @@ internal static class RouteExecutor
         };
         var clip = ResolveWalkAnimation(world, person, person.NativeRoute.MotionAnimationIndex);
         if (clip?.StandardRootMotionSamples is { Count: > 1 } samples)
-            ShowWalkSkill(person, clip, 0f, samples.Count);
+            ShowWalkSkill(world, person, clip, 0f, samples.Count);
         frame.Waiting = true;
         return PrimitiveResult.Stop;
     }
@@ -568,12 +586,20 @@ internal static class RouteExecutor
 
         if (route.AnimatorFollowState == 2)
         {
-            var rootX = person.AnimatorRootX ?? route.MotionX;
-            var rootY = person.AnimatorRootY ?? route.MotionY;
-            var completedProjection = FindNearestRoutePoint(path, FTileIntegerCoordinate(rootX), FTileIntegerCoordinate(rootY));
-            var position = completedProjection is { } point
-                ? new ObjectPosition(point.X, point.Y, person.Position.Height)
-                : new ObjectPosition(FTileIntegerCoordinate(rootX), FTileIntegerCoordinate(rootY), person.Position.Height);
+            ObjectPosition position;
+            if (route.LookTowardsHeading is not null)
+            {
+                position = route.Destination with { Height = person.Position.Height };
+            }
+            else
+            {
+                var rootX = person.AnimatorRootX ?? route.MotionX;
+                var rootY = person.AnimatorRootY ?? route.MotionY;
+                var completedProjection = FindNearestRoutePoint(path, FTileIntegerCoordinate(rootX), FTileIntegerCoordinate(rootY));
+                position = completedProjection is { } point
+                    ? new ObjectPosition(point.X, point.Y, person.Position.Height)
+                    : new ObjectPosition(FTileIntegerCoordinate(rootX), FTileIntegerCoordinate(rootY), person.Position.Height);
+            }
             person[ObjectData.Direction] = QuantizeRootDirection(
                 person.AnimatorRootDirection ?? person[ObjectData.Direction]);
             var placementAccepted = CanPlaceArrival(world, person, anchor, route.Slot, position, stack);
@@ -1097,24 +1123,30 @@ internal static class RouteExecutor
         person.NativeRoute = route;
         var practiceClip = ResolveWalkAnimation(world, person, route.MotionAnimationIndex) ?? clip;
         var practiceSamples = practiceClip.StandardRootMotionSamples?.Count ?? samples.Count;
-        ShowWalkSkill(person, practiceClip, nextPracticeFrame, practiceSamples);
+        ShowWalkSkill(world, person, practiceClip, nextPracticeFrame, practiceSamples);
         return PrimitiveResult.Stop;
     }
 
     // Root-only animation updates hold the visible skeletal pose fixed while advancing root displacement
     // along the route.
-    internal static void ShowWalkSkill(XPerson person, AvatarAnimationClip clip, float routeFrame, int sampleCount)
+    internal static void ShowWalkSkill(SimulationWorld world, XPerson person, AvatarAnimationClip clip, float routeFrame, int sampleCount)
     {
         var loop = true;
+        short? currentSkill = null;
         if (person.NativeRoute is { } route)
         {
-            person.AnimatorCurrentSkill = route.MotionAnimationIndex;
+            currentSkill = route.MotionAnimationIndex;
             loop = route.MotionAnimationIndex is not (>= 4 and <= 18);
         }
         if (person.AnimationPlayback is not { RouteDriven: true } playback || playback.Clip.Name != clip.Name)
-            person.AnimationPlayback = playback = new AvatarAnimationPlayback(clip, backwards: false, loop: loop,
+        {
+            playback = new AvatarAnimationPlayback(clip, backwards: false, loop: loop,
                 startedAtMils: person.AnimatorMilliseconds)
                 { RouteDriven = true, Interruptible = true };
+            world.BeginPrimaryAnimation(person, playback);
+        }
+        if (currentSkill is { } skill)
+            person.AnimatorCurrentSkill = skill;
         playback.SetFrame(Math.Min(routeFrame * clip.FrameCount / Math.Max(sampleCount, 1), clip.FrameCount - 0.001f));
     }
 
@@ -1331,7 +1363,8 @@ internal static class RouteExecutor
         // Heading error thresholds are tightened for special body types and scaled by walking speed.
         if (distance <= 0.000001f && MathF.Abs(headingError) <= 0.000001f) return false;
         var angleThreshold = (specialBody ? 0.0625f : 0.25f) / person.AnimatorWalkingScale;
-        if (MathF.Abs(headingError) >= angleThreshold || (route.AnimatorFollowState != 1 && distance >= maximumDistance))
+        if (MathF.Abs(headingError) >= angleThreshold ||
+            (route.LookTowardsHeading is null && route.AnimatorFollowState != 1 && distance >= maximumDistance))
             return TryBeginRouteBodyTurn(world, person, route, rootX, rootY, targetDirection, currentDirection,
                 headingError);
         // During active following within angle threshold, distant targets enter locomotion rather than
@@ -1388,8 +1421,8 @@ internal static class RouteExecutor
             TurnRootPracticeDirection = practiceDirection,
         };
         person.NativeRoute = route;
-        person.AnimationPlayback = null;
-        ShowWalkSkill(person, clip, 0f, clip.StandardRootMotionSamples.Count);
+        world.StopCurrentAnimation(person);
+        ShowWalkSkill(world, person, clip, 0f, clip.StandardRootMotionSamples.Count);
         person.AnimatorControlState = 5;
         return true;
     }
@@ -1402,9 +1435,10 @@ internal static class RouteExecutor
         var clip = ResolveWalkAnimation(world, person, skill);
         if (clip?.StandardRootMotionSamples is not { Count: > 1 } samples) return false;
         var practiceDirection = currentDirection + headingError - correction;
-        // Body turns during active path following rotate in place rather than translating along the
-        // segment, whereas direct transitions interpolate toward the target.
-        var turnInPlace = route.AnimatorFollowState == 1 && route.MotionPath is { Count: > 1 };
+        // Body turns during active path following (or in-place LookTowards) rotate in place rather than
+        // translating along the segment, whereas direct transitions interpolate toward the target.
+        var turnInPlace = route.LookTowardsHeading is not null ||
+                          (route.AnimatorFollowState == 1 && route.MotionPath is { Count: > 1 });
         var turnTargetX = turnInPlace ? rootX : (float)route.MotionTargetX;
         var turnTargetY = turnInPlace ? rootY : (float)route.MotionTargetY;
         route = route with
@@ -1426,8 +1460,8 @@ internal static class RouteExecutor
             TurnRootPracticeDirection = practiceDirection,
         };
         person.NativeRoute = route;
-        person.AnimationPlayback = null;
-        ShowWalkSkill(person, clip, 0f, samples.Count);
+        world.StopCurrentAnimation(person);
+        ShowWalkSkill(world, person, clip, 0f, samples.Count);
         person.AnimatorControlState = 4;
         return true;
     }
@@ -1489,15 +1523,15 @@ internal static class RouteExecutor
                 route.MotionPracticeFrame + sampleCount * elapsedMils * turnScale / turnClip.DurationMilliseconds);
             route = route with { MotionFrame = advanced, MotionPracticeFrame = advanced };
             person.NativeRoute = route;
-            ShowWalkSkill(person, turnClip, advanced, sampleCount);
+            ShowWalkSkill(world, person, turnClip, advanced, sampleCount);
         }
         var phase = route.MotionPracticeFrame / sampleCount;
         if (phase >= 1f)
         {
             person.AnimatorRootX = targetX;
             person.AnimatorRootY = targetY;
-            person.AnimationPlayback = null;
-            person.AnimatorCurrentSkill = -1;
+            person.AnimatorDiscontinuityPending = true;
+            world.StopCurrentAnimation(person);
             person.AnimatorControlState = 3;
             if (route.TurnRootSavedDirection is { } savedDirection)
             {
@@ -1548,6 +1582,9 @@ internal static class RouteExecutor
     internal static RouteLookahead ResolveRouteLookahead(SimulationWorld world, XPerson person, RouteState route,
         float rootX, float rootY)
     {
+        if (route.LookTowardsHeading is not null || route.AnimatorFollowState == -1)
+            return new RouteLookahead(route, -1, route.MotionTargetX, route.MotionTargetY, false, false);
+
         var motionPath = route.MotionPath;
         var activeTargetIndex = route.MotionTargetPathIndex;
         if (motionPath is { Count: > 1 } && (activeTargetIndex < 1 || activeTargetIndex >= motionPath.Count))
@@ -3508,59 +3545,133 @@ internal static class RouteExecutor
                 penaltyRects.Add((minX, minY, maxX, maxY, cost, room));
         }
 
-        var cells = new List<PartitionCell>(map.Width * map.Height);
-        for (var tileY = 0; tileY < map.Height; tileY++)
-        for (var tileX = 0; tileX < map.Width; tileX++)
+        var mapWidth = map.Width;
+        var mapHeight = map.Height;
+        var tileCount = mapWidth * mapHeight;
+        var singleTileCells = new PartitionCell[tileCount];
+        var tilePresent = new bool[tileCount];
+        List<PartitionCell>[]? splitTileCells = null;
+
+        for (var tileY = 0; tileY < mapHeight; tileY++)
+        for (var tileX = 0; tileX < mapWidth; tileX++)
         {
             var room = map.RoomAt(tileX, tileY);
             if (room == SimsEngine.World.RoomMap.NoRoom || (!allowCrossRoom && room != startRoom)) continue;
             var minX = tileX * 16; var minY = tileY * 16;
             var maxX = minX + 16; var maxY = minY + 16;
-            cells.Add(new PartitionCell(minX, minY, maxX, maxY, minX + 8, minY + 8, room, 0));
+            var tileIdx = tileY * mapWidth + tileX;
+            singleTileCells[tileIdx] = new PartitionCell(minX, minY, maxX, maxY, minX + 8, minY + 8, room, 0);
+            tilePresent[tileIdx] = true;
         }
 
-        // Expands only the partition nodes intersected by each penalty rectangle to avoid projecting
-        // boundaries across unrelated rooms.
+        // Expands only the tiles intersected by each penalty rectangle instead of scanning the entire lot.
         if (penaltyRects.Count > 0)
         {
-            var nextCells = new List<PartitionCell>(cells.Count + 64);
+            var nextTileCells = new List<PartitionCell>(16);
             Span<int> xValues = stackalloc int[4];
             Span<int> yValues = stackalloc int[4];
             foreach (var rect in penaltyRects)
             {
-                nextCells.Clear();
-                for (var i = 0; i < cells.Count; i++)
+                var txMin = Math.Max(0, rect.MinX >> 4);
+                var txMax = Math.Min(mapWidth - 1, (rect.MaxX - 1) >> 4);
+                var tyMin = Math.Max(0, rect.MinY >> 4);
+                var tyMax = Math.Min(mapHeight - 1, (rect.MaxY - 1) >> 4);
+                for (var ty = tyMin; ty <= tyMax; ty++)
+                for (var tx = txMin; tx <= txMax; tx++)
                 {
-                    var cell = cells[i];
-                    if ((rect.Room != SimsEngine.World.RoomMap.NoRoom && cell.Room != rect.Room) ||
-                        rect.MinX >= cell.MaxX || rect.MaxX <= cell.MinX ||
-                        rect.MinY >= cell.MaxY || rect.MaxY <= cell.MinY)
+                    var tileIdx = ty * mapWidth + tx;
+                    if (!tilePresent[tileIdx]) continue;
+                    var existingList = splitTileCells?[tileIdx];
+                    if (existingList is null)
                     {
-                        nextCells.Add(cell);
-                        continue;
-                    }
+                        var cell = singleTileCells[tileIdx];
+                        if ((rect.Room != SimsEngine.World.RoomMap.NoRoom && cell.Room != rect.Room) ||
+                            rect.MinX >= cell.MaxX || rect.MaxX <= cell.MinX ||
+                            rect.MinY >= cell.MaxY || rect.MaxY <= cell.MinY)
+                            continue;
 
-                    var xCount = SortedUnique4(cell.MinX, cell.MaxX,
-                        Math.Clamp(rect.MinX, cell.MinX, cell.MaxX),
-                        Math.Clamp(rect.MaxX, cell.MinX, cell.MaxX), xValues);
-                    var yCount = SortedUnique4(cell.MinY, cell.MaxY,
-                        Math.Clamp(rect.MinY, cell.MinY, cell.MaxY),
-                        Math.Clamp(rect.MaxY, cell.MinY, cell.MaxY), yValues);
-                    for (var y = 0; y < yCount - 1; y++)
-                    for (var x = 0; x < xCount - 1; x++)
+                        var xCount = SortedUnique4(cell.MinX, cell.MaxX,
+                            Math.Clamp(rect.MinX, cell.MinX, cell.MaxX),
+                            Math.Clamp(rect.MaxX, cell.MinX, cell.MaxX), xValues);
+                        var yCount = SortedUnique4(cell.MinY, cell.MaxY,
+                            Math.Clamp(rect.MinY, cell.MinY, cell.MaxY),
+                            Math.Clamp(rect.MaxY, cell.MinY, cell.MaxY), yValues);
+                        if (xCount == 2 && yCount == 2)
+                        {
+                            var inside = cell.CenterX >= rect.MinX && cell.CenterX < rect.MaxX &&
+                                         cell.CenterY >= rect.MinY && cell.CenterY < rect.MaxY;
+                            if (inside && rect.Cost > cell.Cost)
+                                singleTileCells[tileIdx] = cell with { Cost = rect.Cost };
+                            continue;
+                        }
+
+                        splitTileCells ??= new List<PartitionCell>[tileCount];
+                        var splitList = new List<PartitionCell>((xCount - 1) * (yCount - 1));
+                        for (var y = 0; y < yCount - 1; y++)
+                        for (var x = 0; x < xCount - 1; x++)
+                        {
+                            var minX = xValues[x]; var maxX = xValues[x + 1];
+                            var minY = yValues[y]; var maxY = yValues[y + 1];
+                            var centerX = minX + (maxX - minX) / 2;
+                            var centerY = minY + (maxY - minY) / 2;
+                            var inside = centerX >= rect.MinX && centerX < rect.MaxX &&
+                                         centerY >= rect.MinY && centerY < rect.MaxY;
+                            splitList.Add(new PartitionCell(minX, minY, maxX, maxY, centerX, centerY,
+                                cell.Room, inside ? Math.Max(cell.Cost, rect.Cost) : cell.Cost));
+                        }
+                        splitTileCells[tileIdx] = splitList;
+                    }
+                    else
                     {
-                        var minX = xValues[x]; var maxX = xValues[x + 1];
-                        var minY = yValues[y]; var maxY = yValues[y + 1];
-                        var centerX = minX + (maxX - minX) / 2;
-                        var centerY = minY + (maxY - minY) / 2;
-                        var inside = centerX >= rect.MinX && centerX < rect.MaxX &&
-                                     centerY >= rect.MinY && centerY < rect.MaxY;
-                        nextCells.Add(new PartitionCell(minX, minY, maxX, maxY, centerX, centerY,
-                            cell.Room, inside ? Math.Max(cell.Cost, rect.Cost) : cell.Cost));
+                        nextTileCells.Clear();
+                        var changed = false;
+                        for (var i = 0; i < existingList.Count; i++)
+                        {
+                            var cell = existingList[i];
+                            if ((rect.Room != SimsEngine.World.RoomMap.NoRoom && cell.Room != rect.Room) ||
+                                rect.MinX >= cell.MaxX || rect.MaxX <= cell.MinX ||
+                                rect.MinY >= cell.MaxY || rect.MaxY <= cell.MinY)
+                            {
+                                nextTileCells.Add(cell);
+                                continue;
+                            }
+
+                            changed = true;
+                            var xCount = SortedUnique4(cell.MinX, cell.MaxX,
+                                Math.Clamp(rect.MinX, cell.MinX, cell.MaxX),
+                                Math.Clamp(rect.MaxX, cell.MinX, cell.MaxX), xValues);
+                            var yCount = SortedUnique4(cell.MinY, cell.MaxY,
+                                Math.Clamp(rect.MinY, cell.MinY, cell.MaxY),
+                                Math.Clamp(rect.MaxY, cell.MinY, cell.MaxY), yValues);
+                            for (var y = 0; y < yCount - 1; y++)
+                            for (var x = 0; x < xCount - 1; x++)
+                            {
+                                var minX = xValues[x]; var maxX = xValues[x + 1];
+                                var minY = yValues[y]; var maxY = yValues[y + 1];
+                                var centerX = minX + (maxX - minX) / 2;
+                                var centerY = minY + (maxY - minY) / 2;
+                                var inside = centerX >= rect.MinX && centerX < rect.MaxX &&
+                                             centerY >= rect.MinY && centerY < rect.MaxY;
+                                nextTileCells.Add(new PartitionCell(minX, minY, maxX, maxY, centerX, centerY,
+                                    cell.Room, inside ? Math.Max(cell.Cost, rect.Cost) : cell.Cost));
+                            }
+                        }
+                        if (changed)
+                        {
+                            existingList.Clear();
+                            existingList.AddRange(nextTileCells);
+                        }
                     }
                 }
-                (cells, nextCells) = (nextCells, cells);
             }
+        }
+
+        var cells = new List<PartitionCell>(tileCount + 64);
+        for (var tileIdx = 0; tileIdx < tileCount; tileIdx++)
+        {
+            if (!tilePresent[tileIdx]) continue;
+            if (splitTileCells?[tileIdx] is { } list) cells.AddRange(list);
+            else cells.Add(singleTileCells[tileIdx]);
         }
 
         var startId = cells.FindIndex(cell => startLookupX >= cell.MinX && startLookupX < cell.MaxX &&
@@ -3568,11 +3679,11 @@ internal static class RouteExecutor
         if (startId < 0) return null;
 
         var neighbors = new List<(int Id, int X, int Y)>[cells.Count];
-        for (var i = 0; i < cells.Count; i++) neighbors[i] = [];
-        var minXEdges = new Dictionary<int, List<int>>();
-        var maxXEdges = new Dictionary<int, List<int>>();
-        var minYEdges = new Dictionary<int, List<int>>();
-        var maxYEdges = new Dictionary<int, List<int>>();
+        for (var i = 0; i < cells.Count; i++) neighbors[i] = new List<(int Id, int X, int Y)>(4);
+        var minXEdges = new Dictionary<int, List<int>>(mapWidth * 2);
+        var maxXEdges = new Dictionary<int, List<int>>(mapWidth * 2);
+        var minYEdges = new Dictionary<int, List<int>>(mapHeight * 2);
+        var maxYEdges = new Dictionary<int, List<int>>(mapHeight * 2);
         for (var id = 0; id < cells.Count; id++)
         {
             var cell = cells[id];
@@ -3585,26 +3696,44 @@ internal static class RouteExecutor
             neighbors[firstId].Add((secondId, point.X, point.Y));
             neighbors[secondId].Add((firstId, point.X, point.Y));
         }
+        var compareByMinY = Comparer<int>.Create((a, b) => cells[a].MinY.CompareTo(cells[b].MinY));
+        var compareByMinX = Comparer<int>.Create((a, b) => cells[a].MinX.CompareTo(cells[b].MinX));
         foreach (var edge in maxXEdges)
         {
             if (!minXEdges.TryGetValue(edge.Key, out var rightCells)) continue;
-            foreach (var leftId in edge.Value)
-            foreach (var rightId in rightCells)
+            var leftCells = edge.Value;
+            leftCells.Sort(compareByMinY);
+            rightCells.Sort(compareByMinY);
+            int li = 0, ri = 0;
+            while (li < leftCells.Count && ri < rightCells.Count)
             {
-                var left = cells[leftId]; var right = cells[rightId];
+                var leftId = leftCells[li];
+                var rightId = rightCells[ri];
+                var left = cells[leftId];
+                var right = cells[rightId];
                 if (Math.Max(left.MinY, right.MinY) < Math.Min(left.MaxY, right.MaxY))
                     Connect(leftId, rightId);
+                if (left.MaxY <= right.MaxY) li++;
+                else ri++;
             }
         }
         foreach (var edge in maxYEdges)
         {
             if (!minYEdges.TryGetValue(edge.Key, out var lowerCells)) continue;
-            foreach (var upperId in edge.Value)
-            foreach (var lowerId in lowerCells)
+            var upperCells = edge.Value;
+            upperCells.Sort(compareByMinX);
+            lowerCells.Sort(compareByMinX);
+            int ui = 0, li = 0;
+            while (ui < upperCells.Count && li < lowerCells.Count)
             {
-                var upper = cells[upperId]; var lower = cells[lowerId];
+                var upperId = upperCells[ui];
+                var lowerId = lowerCells[li];
+                var upper = cells[upperId];
+                var lower = cells[lowerId];
                 if (Math.Max(upper.MinX, lower.MinX) < Math.Min(upper.MaxX, lower.MaxX))
                     Connect(upperId, lowerId);
+                if (upper.MaxX <= lower.MaxX) ui++;
+                else li++;
             }
         }
 

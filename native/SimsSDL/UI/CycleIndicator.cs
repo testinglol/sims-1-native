@@ -8,11 +8,11 @@ public static class CycleIndicator
         Season
     }
 
-    public const int Width = 13;
-    public const int Height = 11;
-    public static readonly CGPoint GlyphOrigin = new(81, 135);
+    public const int Width = 10;
+    public const int Height = 10;
+    public static readonly CGPoint GlyphOrigin = new(149, 88);
     public static CGRect GlyphRect => new(GlyphOrigin.X, GlyphOrigin.Y, Width, Height);
-    public static readonly CGRect ReelRect = new(97, 134, 13, 13);
+    public static readonly CGRect ReelRect = new(149, 88, Width, Height);
     public const int Cell = 12;
     public const int Symbol = 11;
     public const int SpinFrames = 72;

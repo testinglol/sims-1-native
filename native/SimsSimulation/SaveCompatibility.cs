@@ -17,8 +17,13 @@ internal static class SaveCompatibility
 
     public const int MaxBackupsPerSlot = 5;
 
+    internal static readonly HashSet<string> OptionalFeaturePackIds = new(StringComparer.Ordinal)
+    {
+        "local.connected-neighborhood",
+    };
+
     public static Result Check(string savedFingerprint, PackRecord[]? savedPacks, string currentFingerprint, IReadOnlyList<PluginHost.PackDescriptor> currentPacks,
-        bool removeMissing = false)
+        bool removeMissing = false, string? savedCoreFingerprint = null, string? currentCoreFingerprint = null)
     {
         if (savedFingerprint == currentFingerprint) return new Result(false, [], [], []);
         if (savedPacks == null) throw new InvalidDataException("Save requires the same engine and content pack stack");
@@ -26,8 +31,19 @@ internal static class SaveCompatibility
         var upgraded = new List<string>();
         var removed = new List<string>();
         var objects = new Dictionary<uint, uint>();
+        var optionalChanged = false;
+        var savedHasOptional = false;
+        var savedNonOptionalCount = 0;
         foreach (var saved in savedPacks)
         {
+            if (OptionalFeaturePackIds.Contains(saved.Id))
+            {
+                savedHasOptional = true;
+                if (!current.TryGetValue(saved.Id, out var optionalPack) || optionalPack.Version != saved.Version)
+                    optionalChanged = true;
+                continue;
+            }
+            savedNonOptionalCount++;
             if (!current.TryGetValue(saved.Id, out var pack))
             {
                 removed.Add(saved.Id + "@" + saved.Version);
@@ -41,9 +57,25 @@ internal static class SaveCompatibility
         }
         if (removed.Count > 0 && !removeMissing) throw new MissingPacksException(removed.ToArray());
         var savedIds = savedPacks.Select(pack => pack.Id).ToHashSet(StringComparer.Ordinal);
-        var added = currentPacks.Where(pack => !savedIds.Contains(pack.Id)).Select(pack => pack.Id + "@" + pack.Version).ToArray();
+        var currentHasOptional = currentPacks.Any(pack => OptionalFeaturePackIds.Contains(pack.Id));
+        var currentNonOptionalCount = currentPacks.Count(pack => !OptionalFeaturePackIds.Contains(pack.Id));
+        if (currentPacks.Any(pack => OptionalFeaturePackIds.Contains(pack.Id) && !savedIds.Contains(pack.Id)))
+            optionalChanged = true;
+        var added = currentPacks
+            .Where(pack => !OptionalFeaturePackIds.Contains(pack.Id) && !savedIds.Contains(pack.Id))
+            .Select(pack => pack.Id + "@" + pack.Version)
+            .ToArray();
         if (upgraded.Count == 0 && added.Length == 0 && removed.Count == 0)
+        {
+            var effectiveSavedCore = savedCoreFingerprint ?? (savedHasOptional ? null : savedFingerprint);
+            var effectiveCurrentCore = currentCoreFingerprint ?? (currentHasOptional ? null : currentFingerprint);
+            var coreMatches = (savedNonOptionalCount == 0 && currentNonOptionalCount == 0) ||
+                effectiveSavedCore is null ||
+                effectiveCurrentCore is null ||
+                string.Equals(effectiveSavedCore, effectiveCurrentCore, StringComparison.Ordinal);
+            if (optionalChanged && coreMatches) return new Result(false, [], [], []);
             throw new InvalidDataException("Pack contents changed without a version change; this save cannot be loaded safely");
+        }
         return new Result(true, upgraded.ToArray(), added, removed.ToArray()) { Objects = objects };
     }
 

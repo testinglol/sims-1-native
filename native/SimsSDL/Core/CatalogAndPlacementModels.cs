@@ -572,11 +572,13 @@ public static class PlacementTooltip
     {
         double timestamp = now ?? (Stopwatch.GetTimestamp() / (double)Stopwatch.Frequency);
         startedAt ??= timestamp;
-        double duration = quickTips ? 0.250 : 0.333;
+        const double duration = 0.090;
         double elapsed = timestamp - startedAt.Value - Delay(quickTips);
         if (elapsed < 0.0)
             return null;
-        return Math.Min(1.0, elapsed / duration);
+        double t = Math.Min(1.0, elapsed / duration);
+        double inv = 1.0 - t;
+        return 1.0 - inv * inv * inv;
     }
 
     public static (int Width, int Height, byte[] Rgba) Rasterize(string text, SimsBitmapFont font)

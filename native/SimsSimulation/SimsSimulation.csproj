@@ -35,11 +35,13 @@
     <Compile Include="InMemorySessionAssets.cs" />
     <Compile Include="InstalledFiles.cs" />
     <Compile Include="LotCamera.cs" />
+    <Compile Include="LotSessionPool.cs" />
     <Compile Include="MenuTextSources.cs" />
     <Compile Include="NeighborhoodEdits.cs" />
     <Compile Include="NeighborhoodExport.cs" />
     <Compile Include="NeighborhoodFamilies.cs" />
     <Compile Include="Neighborhoods.cs" />
+    <Compile Include="NeighborhoodWorldAssetsService.cs" />
     <Compile Include="ObjectAuthor.cs" />
     <Compile Include="ObjectCatalog.cs" />
     <Compile Include="OutfitAuthor.cs" />
@@ -55,6 +57,7 @@
     <Compile Include="ServingEntry.cs" />
     <Compile Include="SimPortrait.cs" />
     <Compile Include="SimulationServer.cs" />
+    <Compile Include="SimulationServer.ConnectedNeighborhood.cs" />
     <Compile Include="SpecialBuildCatalogPage.cs" />
     <Compile Include="SpriteArt.cs" />
     <Compile Include="TerrainColors.cs" />

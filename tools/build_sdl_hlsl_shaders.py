@@ -20,6 +20,13 @@ PIPELINE_PAIRS = [
     ("avatar.vert", "avatar.frag"),
     ("avatar.vert", "surface.frag"),
     ("avatar.vert", "avatarMask.frag"),
+    ("groundDepth.vert", "depthOnly.frag"),
+    ("heightScatter.vert", "depthOnly.frag"),
+    ("fullscreen.vert", "ambient.frag"),
+    ("fullscreen.vert", "ambientBlur.frag"),
+    ("fullscreen.vert", "atmosphere.frag"),
+    ("fullscreen.vert", "season.frag"),
+    ("fullscreen.vert", "trail.frag"),
 ]
 
 STRUCT_RE = re.compile(r"struct\s+(SPIRV_Cross_(?:Input|Output))\s*\{(.*?)\};", re.DOTALL)
@@ -62,19 +69,28 @@ def find_dxc() -> str | None:
 
 
 def main() -> int:
-    shaders_dir = (
-        pathlib.Path(sys.argv[1])
-        if len(sys.argv) > 1
-        else pathlib.Path(__file__).resolve().parents[1] / "native" / "SimsSDL" / "Shaders"
-    )
-    hlsl_dir = shaders_dir / "hlsl"
+    args = sys.argv[1:]
+    hlsl_out_arg: str | None = None
+    positional: list[str] = []
+    i = 0
+    while i < len(args):
+        if args[i] == "--hlsl-out" and i + 1 < len(args):
+            hlsl_out_arg = args[i + 1]
+            i += 2
+        else:
+            positional.append(args[i])
+            i += 1
+
+    core_shaders_dir = pathlib.Path(__file__).resolve().parents[1] / "native" / "SimsSDL" / "Shaders"
+    shaders_dir = pathlib.Path(positional[0]) if positional else core_shaders_dir
+    hlsl_dir = pathlib.Path(hlsl_out_arg) if hlsl_out_arg else shaders_dir / "hlsl"
     hlsl_dir.mkdir(parents=True, exist_ok=True)
 
     generated: dict[str, str] = {}
     for spv in sorted(shaders_dir.glob("*.spv")):
         stem = spv.name[: -len(".spv")]
         hlsl = subprocess.check_output(
-            ["spirv-cross", str(spv), "--hlsl", "--shader-model", "60"],
+            ["spirv-cross", str(spv), "--hlsl", "--shader-model", "60", "--hlsl-enable-compat"],
             text=True,
         )
         hlsl = "\n".join(line.rstrip() for line in hlsl.splitlines()).rstrip() + "\n"
@@ -84,7 +100,15 @@ def main() -> int:
         print(out_path.name)
 
     for vert_name, frag_name in PIPELINE_PAIRS:
-        vert_out = parse_stage_struct(generated[vert_name], "SPIRV_Cross_Output")
+        if frag_name not in generated:
+            continue
+        vert_hlsl = generated.get(vert_name)
+        if vert_hlsl is None:
+            core_vert_hlsl = core_shaders_dir / "hlsl" / f"{vert_name}.hlsl"
+            if not core_vert_hlsl.is_file():
+                continue
+            vert_hlsl = core_vert_hlsl.read_text(encoding="utf-8")
+        vert_out = parse_stage_struct(vert_hlsl, "SPIRV_Cross_Output")
         frag_in = parse_stage_struct(generated[frag_name], "SPIRV_Cross_Input")
         if len(frag_in) > len(vert_out):
             raise RuntimeError(

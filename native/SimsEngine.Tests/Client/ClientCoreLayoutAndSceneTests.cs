@@ -23,7 +23,7 @@ public sealed class ClientCoreLayoutAndSceneTests
         Assert.False(OriginalGameplayLayout.MotiveArrowMaskPixel(rising: false, x: 1, y: 0));
 
         Assert.Equal(2.0f, OriginalUIScalingLayout.AutomaticUIScale(1600, 1200, 2.0f));
-        Assert.Equal(1.0f, OriginalUIScalingLayout.AutomaticUIScale(1280, 960, 1.0f));
+        Assert.Equal(1.15f, OriginalUIScalingLayout.AutomaticUIScale(1280, 960, 1.0f));
         Assert.Equal(0.5, OriginalUIScalingLayout.FullscreenOverlayScale(new CGSize(400, 300), 1.0f), 3);
 
         var popupOrigin = OriginalUIScalingLayout.LivePopupOriginX(anchorMidX: 300, canvasWidth: 1280);

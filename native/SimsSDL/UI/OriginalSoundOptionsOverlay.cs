@@ -59,13 +59,15 @@ public sealed class OriginalSoundOptionsOverlay
     private readonly double _embeddedSliderWidth;
     private readonly int _embeddedFontLineHeight;
 
-    private readonly Dictionary<string, float> _values = new(StringComparer.Ordinal)
+    private readonly Dictionary<string, float> _values = new(StringComparer.OrdinalIgnoreCase)
     {
         ["FX"] = 0.8f,
         ["MUSIC"] = 0.8f,
         ["VOX"] = 0.8f,
         ["AMBIENCE"] = 1f
     };
+
+    public IReadOnlyDictionary<string, float> Volumes => _values;
 
     private string? _draggingGroup;
     private double? _embeddedTransitionStarted;

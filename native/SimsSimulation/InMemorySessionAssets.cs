@@ -170,6 +170,9 @@ internal static class InMemorySessionAssets
         return Files.ContainsKey(Canonicalize(path)) || File.Exists(path);
     }
 
+    public static bool ContainsFile(string path) =>
+        !string.IsNullOrWhiteSpace(path) && Files.ContainsKey(Canonicalize(path));
+
     public static byte[] ReadAllBytes(string path)
     {
         if (TryReadBytes(path, out var bytes))
@@ -202,6 +205,28 @@ internal static class InMemorySessionAssets
         foreach (var (key, entry) in Files)
         {
             if (IsUnderRoot(key, dirPrefix))
+            {
+                total += entry.ByteCount;
+            }
+        }
+
+        return total;
+    }
+
+    public static long TotalDirectBytesIn(string directory)
+    {
+        if (string.IsNullOrWhiteSpace(directory))
+        {
+            return 0;
+        }
+
+        var dirPrefix = NormalizeDirectoryPrefix(directory);
+        long total = 0;
+        foreach (var (key, entry) in Files)
+        {
+            if (key.StartsWith(dirPrefix, PathComparison) &&
+                key.IndexOf(Path.DirectorySeparatorChar, dirPrefix.Length) < 0 &&
+                key.IndexOf(Path.AltDirectorySeparatorChar, dirPrefix.Length) < 0)
             {
                 total += entry.ByteCount;
             }

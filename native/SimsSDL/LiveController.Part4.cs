@@ -622,6 +622,17 @@ internal sealed partial class LiveController
             string? id = evt.JsonString("id");
             bool ok = evt.JsonBool("ok") == true;
 
+            if (type == "response" && id is not null && HandleCheatResponse(id, ok, evt))
+            {
+                return;
+            }
+
+            if (type == "neighborhoodCheat")
+            {
+                HandleNeighborhoodCheatEvent(evt);
+                return;
+            }
+
             if (type == "response" && id is not null && id == _pendingGenericSimsCallPoll)
             {
                 _pendingGenericSimsCallPoll = null;
@@ -921,6 +932,8 @@ internal sealed partial class LiveController
             if (type == "lotChanged")
             {
                 int? previousHouse = _currentHouse;
+                bool seamlessConnectedSwitch = false;
+                Vector2 seamlessPanDelta = Vector2.Zero;
                 if (evt.JsonInt("house") is int destination)
                 {
                     bool? awayFlag = evt.JsonBool("away");
@@ -930,8 +943,15 @@ internal sealed partial class LiveController
                         _simlessBuildMode = false;
                     }
 
+                    bool isNearbyOrVisible = Renderer.Scene?.House == destination
+                        || Renderer.IsAdjacentHouseNearCamera((short)destination, SimdCanvas);
+                    bool suppressTravelLoadScreen = _connectedNeighborhoodEnabled
+                        && (Renderer.Scene?.House == destination || Renderer.HasAdjacentHouse((short)destination));
+                    seamlessConnectedSwitch = _connectedNeighborhoodEnabled && isNearbyOrVisible;
+
                     _lotSims.TryGetValue(_selectedSim, out LotSimInfo? selectedLotSim);
-                    if (!_awaitingLotSwitchChange
+                    if (!suppressTravelLoadScreen
+                        && !_awaitingLotSwitchChange
                         && !_switchingLot
                         && OriginalTravelLoadScreenExtensions.Select(
                             previousHouse,
@@ -947,25 +967,42 @@ internal sealed partial class LiveController
                         Ui.Loading = true;
                     }
 
-                    _switchingLot = true;
+                    _switchingLot = !seamlessConnectedSwitch;
                     _currentHouse = destination;
                     UpdateAwayLotLocks(destination, awayFlag);
                 }
 
                 _awaitingLotSwitchChange = false;
-                _minimumSceneRevisionToFinishLoading = _highestReceivedSceneRevision + 1;
+                _minimumSceneRevisionToFinishLoading = seamlessConnectedSwitch ? 1 : _highestReceivedSceneRevision + 1;
                 _lastHouseStateClass = null;
                 _lastLotTransitInfo = 0;
                 DismissMenu();
                 Ui.PluginPanel = null;
                 Ui.SoundOptions.Dismiss();
+                Ui.CheatConsole.Close();
                 Ui.GameDialog = null;
+                _answeredDialogs.Clear();
                 Ui.BuyMode = false;
                 Ui.BuildMode = false;
                 Ui.PanelMinimized = false;
                 _tutorialLiveModeClicked = false;
-                Renderer.Pan = Vector2.Zero;
-                _centresOnSelectedSim = Ui.OptionsPanel.PlayOptions.AutoCenter;
+                if (seamlessConnectedSwitch)
+                {
+                    // Seamless connected switch: Install() atomically preserves the world camera position at 0px jump.
+                    _ = seamlessPanDelta;
+                    _centresOnSelectedSim = false;
+                }
+                else
+                {
+                    if (evt.JsonInt("house") is int resetDestination)
+                        Renderer.RequestCenterOnHouse((short)resetDestination);
+                    Renderer.Pan = Vector2.Zero;
+                    _centresOnSelectedSim = Ui.OptionsPanel.PlayOptions.AutoCenter;
+                }
+                _pendingAdjacentScenesId = null;
+                _lastAdjacentSyncSignature = null;
+                _lastStreamedCameraTile = null;
+                ResetConnectedAdjacentHoldState();
                 _pendingCatalog = null;
                 _pendingBuildCatalog = null;
                 ClearPendingViewState();
@@ -1090,6 +1127,10 @@ internal sealed partial class LiveController
                 }
             }
 
+            if (type == "response" && TryHandleAdjacentScenesResponse(id, ok, evt))
+            {
+            }
+
             if (type == "response" && id is not null && id == _pendingCatalog)
             {
                 _pendingCatalog = null;
@@ -1196,6 +1237,10 @@ internal sealed partial class LiveController
                     }
 
                     Ui.SoundOptions.UpdateVolumes(converted);
+                    if (Ui.SoundOptions.Volumes.TryGetValue("AMBIENCE", out float ambienceVolume))
+                    {
+                        _audio?.SetAmbientMasterVolume(ambienceVolume);
+                    }
                 }
             }
 
@@ -1208,6 +1253,10 @@ internal sealed partial class LiveController
                     if (!ok)
                     {
                         Ui.SoundOptions.Restore(change);
+                        if (string.Equals(change.Group, "AMBIENCE", StringComparison.OrdinalIgnoreCase))
+                        {
+                            _audio?.SetAmbientMasterVolume(change.PreviousVolume);
+                        }
                     }
                 }
             }
@@ -1377,44 +1426,37 @@ internal sealed partial class LiveController
                         self.ClearPendingViewState();
                     }
 
-                    if (!self._awaitingLotSwitchChange && revision >= self._minimumSceneRevisionToFinishLoading)
-                    {
-                        bool wasOpeningOrLoading = self._openingNeighborhoodLot || self._switchingLot || self.Ui.Loading;
-                        self._hasCompletedInitialLoad = true;
-                        if (self._openingNeighborhoodLot)
-                        {
-                            self._openingNeighborhoodLot = false;
-                            if (self._pendingHouseholdCreation is null)
-                            {
-                                self.Ui.Neighborhood = null;
-                            }
-                        }
-
-                        self._switchingLot = false;
-                        if (self.Ui.Loading && self.Bridge is not null)
-                        {
-                            self.Ui.Loading = false;
-                            self._audio?.StopLoadLoop();
-                        }
-
-                        if (wasOpeningOrLoading)
-                        {
-                            AppLog.SetStage(
-                                FormattableString.Invariant($"Ready: Lot {self._currentHouse ?? 0} (scene revision {revision})"),
-                                isSteadyState: true);
-                        }
-                    }
-
                     if (self._stateAwaitingScene is { } waitingState && self.Renderer.SceneRoot is { } sceneRoot)
                     {
                         self._stateAwaitingScene = null;
                         try
                         {
                             self.Ui.Update(waitingState, sceneRoot);
+                            self.SyncConnectedNeighborhoodState(waitingState);
                         }
                         catch (Exception stateError)
                         {
                             Log($"state: {stateError}");
+                        }
+                    }
+
+                    if (!self._awaitingLotSwitchChange && revision >= self._minimumSceneRevisionToFinishLoading)
+                    {
+                        bool wasOpeningOrLoading = self._openingNeighborhoodLot || self._switchingLot || self.Ui.Loading;
+                        self._hasCompletedInitialLoad = true;
+                        self._switchingLot = false;
+                        bool holdAdjacent = self.ShouldHoldLoadingForInitialAdjacent();
+                        if (!holdAdjacent)
+                        {
+                            self.FinishInitialAdjacentHold(allowTravelDismiss: true);
+                        }
+                        self.SyncConnectedAdjacentOnSceneReady();
+
+                        if (wasOpeningOrLoading && !holdAdjacent)
+                        {
+                            AppLog.SetStage(
+                                FormattableString.Invariant($"Ready: Lot {self._currentHouse ?? 0} (scene revision {revision})"),
+                                isSteadyState: true);
                         }
                     }
 
@@ -1727,11 +1769,8 @@ internal sealed partial class LiveController
                 .Concat(simEntries)
                 .OrderBy(static entry => entry.Id)
                 .ToList();
-            _editableObjects = JsonSerializer.Deserialize<List<EditableLotObject>>(
-                JsonSerializer.SerializeToUtf8Bytes(nonAvatars),
-                PackContentPaths.JsonReadOptions) ?? [];
-
-            var nextMeta = new Dictionary<int, PlacedObjectMeta>();
+            var editableObjects = new List<EditableLotObject>(nonAvatars.Count);
+            var nextMeta = new Dictionary<int, PlacedObjectMeta>(nonAvatars.Count);
             foreach (var obj in nonAvatars)
             {
                 if (obj.JsonInt("id") is not int objId)
@@ -1742,13 +1781,23 @@ internal sealed partial class LiveController
                 float x = (float)(obj.JsonDouble("x") ?? 0.0);
                 float y = (float)(obj.JsonDouble("y") ?? 0.0);
                 int level = obj.JsonInt("level") ?? 1;
+                int? catalogCategory = obj.JsonInt("catalogCategory");
                 int buildModeType = obj.JsonInt("buildModeType")
-                    ?? (obj.JsonInt("catalogCategory") is int category ? Math.Max(0, category - 7) : 0);
+                    ?? (catalogCategory is int category ? Math.Max(0, category - 7) : 0);
                 int resaleValue = obj.JsonInt("resaleValue") ?? 0;
                 string catalogName = obj.JsonString("catalogName") ?? string.Empty;
                 nextMeta[objId] = new PlacedObjectMeta(x, y, level, buildModeType, resaleValue, catalogName);
+
+                uint guid = (uint)(obj.JsonInt64("guid") ?? 0);
+                int direction = obj.JsonInt("direction") ?? 0;
+                bool movable = obj.JsonBool("movable") ?? false;
+                bool sellable = obj.JsonBool("sellable") ?? false;
+                int? multiTileMasterId = obj.JsonInt("multiTileMasterID");
+                editableObjects.Add(new EditableLotObject(
+                    objId, guid, level, direction, movable, sellable, catalogCategory, multiTileMasterId));
             }
 
+            _editableObjects = editableObjects;
             _placedObjectMeta = nextMeta;
             Ui.Buy.Selection.Reconcile(_editableObjects);
             SyncDisposePanel();
@@ -1775,11 +1824,21 @@ internal sealed partial class LiveController
             }
         }
 
-        // State updates arriving before the scene has loaded must wait for scene completion, as a paused
-        // lot does not send subsequent state ticks.
-        if (Renderer.SceneRoot is { } root)
+        // State updates arriving before the target lot's scene has loaded must wait for scene completion,
+        // both for paused initial loads and during non-adjacent lot switches while the prior SceneRoot is still mounted.
+        int effectiveStateHouse = state.JsonInt("house")
+            ?? (state.TryGetValue("connectedNeighborhood", out var cnHouseEl)
+                && cnHouseEl.ValueKind == JsonValueKind.Object
+                && cnHouseEl.TryGetProperty("focusedHouse", out var fhHouseEl)
+                && fhHouseEl.TryGetInt32(out int fhHouse) ? fhHouse : 0);
+        bool awaitingTargetScene = _switchingLot
+            || _awaitingLotSwitchChange
+            || Renderer.IsLoadingScene
+            || (effectiveStateHouse > 0 && Renderer.Scene is { House: > 0 } currentScene && currentScene.House != effectiveStateHouse);
+        if (!awaitingTargetScene && Renderer.SceneRoot is { } root)
         {
             Ui.Update(state, root);
+            SyncConnectedNeighborhoodState(state);
             _stateAwaitingScene = null;
         }
         else
@@ -1798,7 +1857,7 @@ internal sealed partial class LiveController
 
         _selectedSim = state.JsonInt("selectedSim") ?? 0;
         if (Ui.PieMenu is { } menu
-            && (menu.SelectedSim != _selectedSim || (menu.ObjectID != 0 && !Renderer.ContainsObject(menu.ObjectID))))
+            && (menu.SelectedSim != _selectedSim || (menu.ObjectID > 0 && !Renderer.ContainsObject(menu.ObjectID))))
         {
             DismissMenu();
         }
@@ -2148,6 +2207,7 @@ internal sealed partial class LiveController
                         exported.Manifest,
                         exported.Session,
                         self.Ui.Font);
+                    self.WireNeighborhoodOverlay(neighborhood);
                     self.Ui.Neighborhood = neighborhood;
                     self.Ui.Loading = false;
                     self._hasCompletedInitialLoad = true;
@@ -2308,6 +2368,7 @@ internal sealed partial class LiveController
             _openingNeighborhoodLot = false;
             _switchingLot = false;
             _awaitingLotSwitchChange = false;
+            ResetConnectedAdjacentHoldState();
             Ui.Loading = false;
             Renderer.Pan = Vector2.Zero;
             LoadBaseNeighborhood(mode: targetMode);

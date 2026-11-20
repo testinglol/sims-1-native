@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Builds a standalone Linux x64 distribution directory & archive: dist/The-Sims-Native-Linux-x64.zip
+# Builds a standalone Linux x64 distribution directory & archive: dist/Plumbob-Engine-Linux-x64.zip
 # Contains the self-contained .NET 9 + SDL3 client, in-process simulation engine, and compiled SPIR-V shaders.
 #   tools/package_linux.sh [VERSION]
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
-version="${1:-0.2.0}"
+version="${1:-0.5.0}"
 dist="$root/dist"
 stage_root="$root/.package-staging/linux-x64"
-stage="$stage_root/The Sims Native"
-zip_path="$dist/The-Sims-Native-Linux-x64.zip"
+stage="$stage_root/Plumbob Engine"
+zip_path="$dist/Plumbob-Engine-Linux-x64.zip"
 export DOTNET_CLI_HOME="${DOTNET_CLI_HOME:-$root/runtime/dotnet}"
 export NUGET_PACKAGES="${NUGET_PACKAGES:-$root/runtime/nuget}"
 mkdir -p "$DOTNET_CLI_HOME" "$NUGET_PACKAGES" "$dist" "$stage_root"
@@ -67,6 +67,17 @@ chmod 755 "$stage/SimsSDL" "$stage/libSDL3.so.0"
 if [[ -f "$root/dist/sims1-icon.png" ]]; then
   cp "$root/dist/sims1-icon.png" "$stage/sims1-icon.png"
 fi
+mkdir -p "$stage/Packs"
+for pack_name in lighting seasons; do
+  pack_src="$root/packs/$pack_name"
+  if [[ ! -f "$pack_src/pack.json" ]]; then
+    echo "error: missing bundled pack at $pack_src" >&2
+    exit 1
+  fi
+  cp -R "$pack_src" "$stage/Packs/$pack_name"
+  rm -rf "$stage/Packs/$pack_name/shaders-hlsl"
+  find "$stage/Packs/$pack_name" -name '.DS_Store' -delete
+done
 
 game_args=(--platform linux)
 if [[ -d "$root/runtime/game" ]]; then game_args+=(--game "$root/runtime/game"); fi

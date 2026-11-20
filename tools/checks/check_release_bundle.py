@@ -76,6 +76,16 @@ def require_non_empty_shaders(path: Path, label: str) -> None:
         raise SystemExit(f"Missing compiled shaders (.msl/.spv) in {label}: {path}")
 
 
+def require_bundled_packs(packs_dir: Path, require_dxil: bool = False) -> None:
+    for pack_name in ("lighting", "seasons"):
+        pack_dir = packs_dir / pack_name
+        require_file(pack_dir / "pack.json", f"bundled {pack_name} pack.json")
+        shaders = pack_dir / "files" / "Downloads" / f"local.{pack_name}" / "shaders"
+        require_non_empty_shaders(shaders, f"bundled {pack_name} shaders")
+        if require_dxil and not any(item.is_file() and item.suffix == ".dxil" for item in shaders.iterdir()):
+            raise SystemExit(f"Missing D3D12 .dxil shaders in bundled {pack_name} pack: {shaders}")
+
+
 def check_common(bundle: Path, game_dirs: list[Path]) -> None:
     if not bundle.is_dir():
         raise SystemExit(f"Release bundle directory not found: {bundle}")
@@ -122,6 +132,7 @@ def check_macos(bundle: Path) -> None:
     require_file(exe, "macOS executable (SimsSDL)")
     require_file(contents / "Resources" / "AppIcon.icns", "AppIcon.icns")
     require_non_empty_shaders(shaders_dir, "bundled Shaders directory")
+    require_bundled_packs(contents / "Resources" / "Packs", require_dxil=False)
     require_file(sdl_dylib, "bundled libSDL3.0.dylib")
 
     for entry in macos_dir.iterdir():
@@ -153,6 +164,7 @@ def check_windows(bundle: Path) -> None:
     require_non_empty_shaders(shaders, "Windows Shaders directory")
     if not any(item.is_file() and item.suffix == ".dxil" for item in shaders.iterdir()):
         raise SystemExit(f"Missing D3D12 .dxil shaders in Windows Shaders directory: {shaders}")
+    require_bundled_packs(bundle / "Packs", require_dxil=True)
 
     for name in (
         "SimsSDL.dll",
@@ -170,6 +182,7 @@ def check_linux(bundle: Path) -> None:
     require_file(bundle / "SimsSDL", "Linux executable")
     require_file(bundle / "libSDL3.so.0", "bundled libSDL3.so.0")
     require_non_empty_shaders(bundle / "Shaders", "Linux Shaders directory")
+    require_bundled_packs(bundle / "Packs", require_dxil=False)
 
     for name in (
         "SimsSDL.dll",

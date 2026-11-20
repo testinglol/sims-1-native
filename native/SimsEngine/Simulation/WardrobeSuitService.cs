@@ -11,6 +11,7 @@ public static class WardrobeSuitService
 
     private static readonly char[] CategoryCodes = ['b', 'f', 's', 'l', 'w', 'h'];
     private static readonly ConditionalWeakTable<ObjectRegistry, CatalogCache> Catalogs = new();
+    private static readonly ConditionalWeakTable<ObjectRegistry, HashSet<uint>> PendingPortraitRefreshes = new();
 
     private sealed class CatalogCache
     {
@@ -162,10 +163,36 @@ public static class WardrobeSuitService
             SyncDependentBodyStrings(catalog, context);
 
         if (registry is not null && entry is not null)
+        {
             PersistContextToEntry(registry, entry, language, context);
+            if (entry.Scan == ObjectScan.People)
+                RecordPendingPortraitRefresh(registry, entry.Guid);
+        }
 
         if (person is not null)
             RefreshPersonCharacterFromContext(person, context);
+    }
+
+    private static void RecordPendingPortraitRefresh(ObjectRegistry registry, uint guid)
+    {
+        var set = PendingPortraitRefreshes.GetOrCreateValue(registry);
+        lock (set)
+        {
+            set.Add(guid);
+        }
+    }
+
+    public static uint[] DrainPendingPortraitGuids(ObjectRegistry? registry)
+    {
+        if (registry is null || !PendingPortraitRefreshes.TryGetValue(registry, out var set))
+            return [];
+        lock (set)
+        {
+            if (set.Count == 0) return [];
+            var guids = set.ToArray();
+            set.Clear();
+            return guids;
+        }
     }
 
     /// <summary>Builds the ordered action list for wardrobe categories (0-5 corresponding to b, f, s, l, w,

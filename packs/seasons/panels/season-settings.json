@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "season-settings",
+  "title": "Season Length",
+  "frame": { "x": 190, "y": 130, "width": 420, "height": 290 },
+  "elements": [
+    { "id": "length", "kind": "label", "frame": { "x": 24, "y": 48, "width": 372, "height": 24 }, "binding": "length" },
+    { "id": "season", "kind": "label", "frame": { "x": 24, "y": 84, "width": 372, "height": 24 }, "binding": "length-season" },
+    { "id": "short", "kind": "button", "frame": { "x": 24, "y": 126, "width": 110, "height": 30 }, "text": "3 days", "action": "short" },
+    { "id": "normal", "kind": "button", "frame": { "x": 155, "y": 126, "width": 110, "height": 30 }, "text": "7 days", "action": "normal" },
+    { "id": "long", "kind": "button", "frame": { "x": 286, "y": 126, "width": 110, "height": 30 }, "text": "14 days", "action": "long" },
+    { "id": "scope", "kind": "label", "frame": { "x": 24, "y": 174, "width": 372, "height": 24 }, "text": "Applies across this home neighborhood." },
+    { "id": "preserve", "kind": "label", "frame": { "x": 24, "y": 206, "width": 372, "height": 24 }, "text": "Keeps the current season and its progress." }
+  ]
+}

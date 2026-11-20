@@ -12,6 +12,7 @@ internal sealed class FamilyBudget : IFamilyBudget
     private Family? family;
     private IReadOnlyList<int>? activePersonKeysOverride;
     public ushort? FamilyChunkId { get; }
+    internal IReadOnlyList<int>? RestrictedActivePersonKeys => activePersonKeysOverride;
     /// <summary>The active family record containing household funds and member identifier keys.</summary>
     public Family? ActiveFamily
     {
@@ -25,7 +26,7 @@ internal sealed class FamilyBudget : IFamilyBudget
 
     internal void RestrictActivePersonKeys(IReadOnlyList<int>? keys)
     {
-        activePersonKeysOverride = keys;
+        activePersonKeysOverride = keys is { Count: > 0 } ? keys.ToArray() : null;
         SyncActivePersonKeys();
     }
 

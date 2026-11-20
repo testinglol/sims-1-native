@@ -54,6 +54,7 @@ public sealed class SimulationBridge : IDisposable
     public Action<Dictionary<string, JsonElement>>? OnAudio { get; set; }
 
     public Action<SceneAnimation>? Animation { get; set; }
+    public Action<short, SceneAnimation>? AdjacentAnimation { get; set; }
 
     public Action<string>? Failed { get; set; }
 
@@ -331,6 +332,15 @@ public sealed class SimulationBridge : IDisposable
 
                     handler(ConvertDirectAnimation(directFrame));
                 };
+                server.AdjacentDirectAnimationSink = (adjHouse, directFrame) =>
+                {
+                    if (_stopped || generation != Volatile.Read(ref _generation) || AdjacentAnimation is not { } handler)
+                    {
+                        return;
+                    }
+
+                    handler(adjHouse, ConvertDirectAnimation(directFrame));
+                };
             }
 
             _inputChannel = channel;
@@ -375,6 +385,8 @@ public sealed class SimulationBridge : IDisposable
             Sprites = LotScene.ToSprites(frame.Sprites),
             Meshes = meshes,
             CensorRects = LotScene.ToCensorRects(frame.CensorRects),
+            OverheadFeedback = LotScene.ToOverheadFeedback(frame.OverheadFeedback),
+            SkillMeters = LotScene.ToSkillMeters(frame.SkillMeters),
             IsTrustedInProcess = true,
         };
     }

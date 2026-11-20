@@ -30,6 +30,8 @@ public sealed class OriginalBuyOverlay
     private readonly SimsBitmapFont _clockFont;
     private readonly SimsBitmapFont _tooltipFont;
     private readonly OriginalGameplayOverlay.Image _universal;
+    private readonly OriginalGameplayOverlay.Image _vectorUniversal;
+    private OriginalGameplayOverlay.Image ActiveUniversal => SimsBitmapFont.SharpTextEnabled ? _vectorUniversal : _universal;
     private readonly OriginalGameplayOverlay.Image _patch;
     private readonly OriginalGameplayOverlay.Image[] _buttons;
     private readonly OriginalGameplayOverlay.Image[] _roomButtons;
@@ -39,6 +41,8 @@ public sealed class OriginalBuyOverlay
     private readonly OriginalGameplayOverlay.Image[] _functionBackButtons;
     private readonly OriginalUIStrings _strings;
     private readonly OriginalGameplayOverlay.Image _frame;
+    private readonly OriginalGameplayOverlay.Image _vectorFrame;
+    private OriginalGameplayOverlay.Image ActiveFrame => SimsBitmapFont.SharpTextEnabled ? _vectorFrame : _frame;
     private readonly OriginalGameplayOverlay.Image _unknown;
     private readonly OriginalGameplayOverlay.Image _previous;
     private readonly OriginalGameplayOverlay.Image _next;
@@ -97,15 +101,29 @@ public sealed class OriginalBuyOverlay
 
         var targa = new SimsTarga(content.Read("UIGraphics/cpanel/Backgrounds/UniversalBack.tga"));
         _universal = OriginalGameplayOverlay.CreateImage(device, targa.Width, targa.Height, targa.Rgba);
+        try { _vectorUniversal = SimsVectorUiKit.ToOverlayImage(SimsVectorUiKit.RenderFittedPanel("universalback", scale: 8)); } catch { _vectorUniversal = _universal; }
         _patch = LoadBitmap("Backgrounds/BuyPatch.bmp");
+
+        OriginalGameplayOverlay.Image LoadCategoryButton(string path, string vectorKey)
+        {
+            var pixels = new SimsBitmap(content.Read("UIGraphics/cpanel/" + path));
+            if (SimsBitmapFont.SharpTextEnabled)
+            {
+                int w1x = Math.Max(1, pixels.Width / 4);
+                int h1x = Math.Max(1, pixels.Height);
+                if (SimsVectorUiKit.TryRenderBuyCategoryStrip(vectorKey, w1x, h1x, scale: 4) is { } vec)
+                    return SimsVectorUiKit.ToOverlayImage(vec);
+            }
+            return OriginalGameplayOverlay.CreateImage(device, pixels.Width, pixels.Height, pixels.Rgba, magenta: true);
+        }
 
         _buttons = new OriginalGameplayOverlay.Image[OriginalBuyLayout.Categories.Count];
         for (int i = 0; i < OriginalBuyLayout.Categories.Count; i++)
-            _buttons[i] = LoadBitmap("Catalog/BuyF" + OriginalBuyLayout.Categories[i] + ".bmp");
+            _buttons[i] = LoadCategoryButton("Catalog/BuyF" + OriginalBuyLayout.Categories[i] + ".bmp", "BuyF" + OriginalBuyLayout.Categories[i]);
 
         _roomButtons = new OriginalGameplayOverlay.Image[OriginalBuyLayout.RoomNames.Count];
         for (int i = 0; i < OriginalBuyLayout.RoomNames.Count; i++)
-            _roomButtons[i] = LoadBitmap("Catalog/BuyR" + OriginalBuyLayout.RoomNames[i] + ".bmp");
+            _roomButtons[i] = LoadCategoryButton("Catalog/BuyR" + OriginalBuyLayout.RoomNames[i] + ".bmp", "BuyR" + OriginalBuyLayout.RoomNames[i]);
 
         _subSortButtons = new OriginalGameplayOverlay.Image[OriginalBuyLayout.RoomSubSortNames.Count];
         for (int i = 0; i < OriginalBuyLayout.RoomSubSortNames.Count; i++)
@@ -134,7 +152,7 @@ public sealed class OriginalBuyOverlay
 
             if (index == 7)
             {
-                images[4] = LoadBitmap("Catalog/SubSortIcons/Miscellaneous/BuySubSortPets.bmp");
+                images[4] = LoadCategoryButton("Catalog/SubSortIcons/Miscellaneous/BuySubSortPets.bmp", "BuySubSortPets");
                 images[5] = LoadBitmap("Catalog/SubSortIcons/Miscellaneous/BuySubSortMagic.bmp");
             }
             else
@@ -150,6 +168,7 @@ public sealed class OriginalBuyOverlay
         _functionSubSortButtons = functionSubSortGroups;
 
         _frame = LoadBitmap("Catalog/ThumbTemplate.bmp");
+        _vectorFrame = SimsVectorUiKit.ToOverlayImage(SimsVectorUiKit.RenderThumbTemplateStrip(45, scale: 4));
         _unknown = LoadBitmap("CatalogUnknown.bmp");
         _previous = LoadBitmap("Buttons/ScrollLeftBuy.bmp");
         _next = LoadBitmap("Buttons/ScrollRight.bmp");
@@ -324,7 +343,13 @@ public sealed class OriginalBuyOverlay
             throw new ContentError("Invalid catalog thumbnail dimensions");
         }
 
-        return OriginalGameplayOverlay.CreateImage(Device, bitmap.Width, bitmap.Height, bitmap.Rgba, magenta: true);
+        return OriginalGameplayOverlay.CreateImage(
+            Device,
+            bitmap.Width,
+            bitmap.Height,
+            bitmap.Rgba,
+            magenta: !bitmap.HasAlpha,
+            decontaminateEdges: bitmap.HasAlpha);
     }
 
     private static string? ResolveRootFile(string resolvedRoot, string file)
@@ -659,7 +684,7 @@ public sealed class OriginalBuyOverlay
         double top = canvas.Height - 150;
         var parts = new List<OriginalGameplayOverlay.Part>
         {
-            new(_universal, new CGRect(0, top - 33, _universal.Size.Width, _universal.Size.Height)),
+            new(ActiveUniversal, new CGRect(0, top - 33, _universal.Size.Width, _universal.Size.Height)),
             new(_patch, new CGRect(64, top - 33 + 35, _patch.Size.Width, _patch.Size.Height))
         };
 
@@ -710,8 +735,14 @@ public sealed class OriginalBuyOverlay
                 bool chosen = Selected is { } selGuid && item.Guid == selGuid;
                 bool hovered = HoveredPoint is { } hp && Contains(rect, hp);
                 float state = chosen ? 1f : hovered ? 2f : 0f;
-                parts.Add(new OriginalGameplayOverlay.Part(_frame, rect, new Vector4(state / 4f, 0f, 0.25f, 1f)));
-                parts.Add(OriginalBuildOverlay.Fit(IconAt(index, item.Icon, highlighted: chosen || hovered), rect));
+                parts.Add(new OriginalGameplayOverlay.Part(ActiveFrame, rect, new Vector4(state / 4f, 0f, 0.25f, 1f)));
+                OriginalGameplayOverlay.Part thumbPart = SimsBitmapFont.SharpTextEnabled
+                    && index < _previews.Count
+                    && _previews[index] is { } hdPreview
+                    && item.Preview is not null
+                    ? OriginalBuildOverlay.Icon(hdPreview, item.Preview, _unknown)
+                    : IconAt(index, item.Icon, highlighted: chosen || hovered);
+                parts.Add(OriginalBuildOverlay.Fit(thumbPart, rect));
 
                 if (hovered && PriceTooltip(item.Price, budget is { } b && item.Price > b) is { } tip)
                 {

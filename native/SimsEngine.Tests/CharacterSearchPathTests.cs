@@ -101,4 +101,62 @@ public sealed class CharacterSearchPathTests
         }
         finally { Directory.Delete(game, true); }
     }
+
+    [Fact]
+    public void DownloadsFolderDiscoversLooseNestedAndFarSkinsWithoutIffAndRespectsDisabledDownloads()
+    {
+        var game = Directory.CreateTempSubdirectory("downloads-skins").FullName;
+        try
+        {
+            Write(game, @"GameData\Skins\BaseShadow.cmx", "base");
+            Write(game, @"Downloads\RootSkin.cmx", "root-skin");
+            Write(game, @"Downloads\SkinOnlyPack\Nested\CustomBody.cmx", "nested-body");
+            Write(game, @"Downloads\SkinOnlyPack\Nested\CustomBody.skn", "nested-skn");
+            Write(game, @"Downloads\SkinOnlyPack\Nested\CustomTex.bmp", "nested-tex");
+            Write(game, @"Downloads\SkinOnlyPack\Nested\BaseShadow.cmx", "dl-shadowed");
+            Write(game, @"Downloads\DisabledPack\Hidden.cmx", "hidden");
+            File.WriteAllText(Path.Combine(game, ".disabled-downloads.txt"), "DisabledPack\n");
+
+            Directory.CreateDirectory(Path.Combine(game, "Downloads", "FarOnlyPack"));
+            File.WriteAllBytes(
+                Path.Combine(game, "Downloads", "FarOnlyPack", "SkinsPack.far"),
+                Far(("Skins/FarSkin.cmx", "far-skin"), ("Textures/FarTex.bmp", "far-tex")));
+
+            // Works when registry is null AND when registry is present (even with zero .iff OBJD entries in Downloads).
+            foreach (var reg in new ObjectRegistry?[] { null, ObjectRegistry.Scan(game, people: Path.Combine(game, "UserData", "Characters")) })
+            {
+                var skins = CharacterSearchPath.Skins(game, reg);
+                Assert.Equal("base", Text(skins.Find("BaseShadow.cmx")!));
+                Assert.Equal("root-skin", Text(skins.Find("RootSkin.cmx")!));
+                Assert.Equal("nested-body", Text(skins.Find("CustomBody.cmx")!));
+                Assert.Equal("nested-skn", Text(skins.Find("CustomBody.skn")!));
+                Assert.Equal("far-skin", Text(skins.Find("FarSkin.cmx")!));
+                Assert.Null(skins.Find("Hidden.cmx"));
+
+                var textures = CharacterSearchPath.Textures(game, reg);
+                Assert.Equal("nested-tex", Text(textures.Find("CustomTex.bmp")!));
+                Assert.Equal("far-tex", Text(textures.Find("FarTex.bmp")!));
+                Assert.Null(textures.Find("Hidden.cmx"));
+            }
+        }
+        finally { Directory.Delete(game, true); }
+    }
+
+    [Fact]
+    public void DownloadsFarFallbackAtGameRootIsDiscoveredWhenDownloadsFolderIsAbsent()
+    {
+        var game = Directory.CreateTempSubdirectory("downloads-far-fallback").FullName;
+        try
+        {
+            File.WriteAllBytes(
+                Path.Combine(game, "Downloads.far"),
+                Far(("Custom/ArchiveSkin.cmx", "dl-far-skin"), ("Custom/ArchiveTex.bmp", "dl-far-tex")));
+
+            var skins = CharacterSearchPath.Skins(game);
+            Assert.Equal("dl-far-skin", Text(skins.Find("ArchiveSkin.cmx")!));
+            var textures = CharacterSearchPath.Textures(game);
+            Assert.Equal("dl-far-tex", Text(textures.Find("ArchiveTex.bmp")!));
+        }
+        finally { Directory.Delete(game, true); }
+    }
 }

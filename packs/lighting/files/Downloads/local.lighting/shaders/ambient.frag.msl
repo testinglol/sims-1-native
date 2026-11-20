@@ -1,0 +1,1633 @@
+#pragma clang diagnostic ignored "-Wmissing-prototypes"
+#pragma clang diagnostic ignored "-Wmissing-braces"
+
+#include <metal_stdlib>
+#include <simd/simd.h>
+
+using namespace metal;
+
+template<typename T, size_t Num>
+struct spvUnsafeArray
+{
+    T elements[Num ? Num : 1];
+
+    thread T& operator [] (size_t pos) thread
+    {
+        return elements[pos];
+    }
+    constexpr const thread T& operator [] (size_t pos) const thread
+    {
+        return elements[pos];
+    }
+
+    device T& operator [] (size_t pos) device
+    {
+        return elements[pos];
+    }
+    constexpr const device T& operator [] (size_t pos) const device
+    {
+        return elements[pos];
+    }
+
+    constexpr const constant T& operator [] (size_t pos) const constant
+    {
+        return elements[pos];
+    }
+
+    threadgroup T& operator [] (size_t pos) threadgroup
+    {
+        return elements[pos];
+    }
+    constexpr const threadgroup T& operator [] (size_t pos) const threadgroup
+    {
+        return elements[pos];
+    }
+};
+
+struct Ambient
+{
+    float4 view;
+    float4 params;
+    float4 light;
+    float4 extent;
+    float4 lamp;
+    float4 contact;
+    float4 frame;
+    float4 sunLot;
+    float4 clouds;
+    float4 drift;
+    float4 weather;
+    float4 tone;
+    float4 season;
+    float4 lamps[16];
+    float4 prints[16];
+    float4 seasonExtra;
+    float4 seasonExtra2;
+    float4 shadowView;
+};
+
+constant spvUnsafeArray<float2, 8> _3118 = spvUnsafeArray<float2, 8>({ float2(1.0, 0.0), float2(-1.0, 0.0), float2(0.0, 1.0), float2(0.0, -1.0), float2(0.707099974155426025390625), float2(-0.707099974155426025390625, 0.707099974155426025390625), float2(0.707099974155426025390625, -0.707099974155426025390625), float2(-0.707099974155426025390625) });
+
+struct main0_out
+{
+    float4 color [[color(0)]];
+};
+
+static inline __attribute__((always_inline))
+float4 positionAt(thread const float2& pixel, constant Ambient& ambient, texture2d<float> depthMap, sampler depthMapSmplr, texture2d<float> groundMap, sampler groundMapSmplr)
+{
+    float2 scene = (pixel - ambient.view.xy) / float2(ambient.view.z);
+    float depth = depthMap.read(uint2(int2(pixel)), 0).x;
+    if (depth < 1.0)
+    {
+        return float4(scene, ((0.89999997615814208984375 - depth) / 0.0030000000260770320892333984375) * 27.7128124237060546875, 0.0);
+    }
+    float ground = groundMap.read(uint2(int2(pixel)), 0).x;
+    if (ground < 1.0)
+    {
+        return float4(scene, (((0.89999997615814208984375 - ground) / 0.0030000000260770320892333984375) + ambient.view.w) * 27.7128124237060546875, 0.5);
+    }
+    return float4(scene, -100000.0, 1.0);
+}
+
+static inline __attribute__((always_inline))
+float _noise(thread const float2& pixel)
+{
+    return fract(52.98291778564453125 * fract(dot(pixel, float2(0.067110560834407806396484375, 0.005837149918079376220703125))));
+}
+
+static inline __attribute__((always_inline))
+float3 lotPoint(thread const float2& scene, thread const float& key, thread const bool& terrain, thread const float2& frame)
+{
+    float2 local = scene - frame;
+    float _107;
+    if (terrain)
+    {
+        _107 = ((16.0 * key) - local.y) / 40.0;
+    }
+    else
+    {
+        _107 = ((16.0 * key) - local.y) / 52.799999237060546875;
+    }
+    float h = _107;
+    float _131;
+    if (terrain)
+    {
+        _131 = key;
+    }
+    else
+    {
+        _131 = key - (0.800000011920928955078125 * h);
+    }
+    float s = _131;
+    float u = local.x / 32.0;
+    return float3(0.5 * (s + u), 0.5 * (s - u), h);
+}
+
+static inline __attribute__((always_inline))
+float groundAt(thread const float2& pixel, constant Ambient& ambient, texture2d<float> groundMap, sampler groundMapSmplr)
+{
+    float ground = groundMap.read(uint2(int2(pixel)), 0).x;
+    float _302;
+    if (ground < 1.0)
+    {
+        _302 = (((0.89999997615814208984375 - ground) / 0.0030000000260770320892333984375) + ambient.view.w) * 27.7128124237060546875;
+    }
+    else
+    {
+        _302 = -100000.0;
+    }
+    return _302;
+}
+
+static inline __attribute__((always_inline))
+float riseAt(thread const float2& pixel, thread const float& z, constant Ambient& ambient, texture2d<float> groundMap, sampler groundMapSmplr)
+{
+    float2 param = pixel;
+    float ground = groundAt(param, ambient, groundMap, groundMapSmplr);
+    float2 param_1 = pixel + float2(0.0, 4.0);
+    float below = groundAt(param_1, ambient, groundMap, groundMapSmplr);
+    if ((ground < (-10000.0)) || (below < (-10000.0)))
+    {
+        return 0.0;
+    }
+    float slope = ((below - ground) * ambient.view.z) / 4.0;
+    float _862;
+    if (slope > 0.100000001490116119384765625)
+    {
+        _862 = fast::max(0.0, (z - ground) / ((slope * 4.0) / 3.0));
+    }
+    else
+    {
+        _862 = 0.0;
+    }
+    return _862;
+}
+
+static inline __attribute__((always_inline))
+int maskAt(thread const int2& at, thread const int& band, texture2d<float> indoorMap, sampler indoorMapSmplr)
+{
+    int2 size = int2(indoorMap.get_width(), indoorMap.get_height());
+    bool _323 = at.x < 0;
+    bool _330;
+    if (!_323)
+    {
+        _330 = at.y < 0;
+    }
+    else
+    {
+        _330 = _323;
+    }
+    bool _339;
+    if (!_330)
+    {
+        _339 = at.x >= size.x;
+    }
+    else
+    {
+        _339 = _330;
+    }
+    bool _349;
+    if (!_339)
+    {
+        _349 = at.y >= (size.y / 6);
+    }
+    else
+    {
+        _349 = _339;
+    }
+    if (_349)
+    {
+        return 0;
+    }
+    return int((indoorMap.read(uint2(int2(at.x, at.y + (band * (size.y / 6)))), 0).x * 255.0) + 0.5);
+}
+
+static inline __attribute__((always_inline))
+float floorAt(thread const int2& at, thread const int& row, thread const float& fallback, constant Ambient& ambient, texture2d<float> indoorMap, sampler indoorMapSmplr)
+{
+    int2 param = at;
+    int param_1 = row + 2;
+    int code = maskAt(param, param_1, indoorMap, indoorMapSmplr);
+    float _384;
+    if (code == 0)
+    {
+        _384 = fallback;
+    }
+    else
+    {
+        _384 = ambient.contact.w + (float(code - 1) / 8.0);
+    }
+    return _384;
+}
+
+static inline __attribute__((always_inline))
+float indoors(thread const float3& lot, constant Ambient& ambient, texture2d<float> indoorMap, sampler indoorMapSmplr)
+{
+    int2 param = int2(floor(lot.xy + float2(ambient.frame.w)));
+    int param_1 = 0;
+    float param_2 = lot.z;
+    float ground = floorAt(param, param_1, param_2, ambient, indoorMap, indoorMapSmplr);
+    if (lot.z > ((ground + 5.900000095367431640625) - 0.100000001490116119384765625))
+    {
+        return 0.0;
+    }
+    int row = int(lot.z > ((ground + 2.9500000476837158203125) - 0.100000001490116119384765625));
+    float2 cell = (lot.xy + float2(ambient.frame.w)) - float2(0.5);
+    int2 base = int2(floor(cell));
+    float2 f = fast::clamp(((fract(cell) - float2(0.5)) / float2(0.20000000298023223876953125)) + float2(0.5), float2(0.0), float2(1.0));
+    float sum = 0.0;
+    float _477;
+    float _490;
+    float2 _538;
+    float2 _546;
+    for (int i = 0; i < 4; i++)
+    {
+        if ((i & 1) == 1)
+        {
+            _477 = f.x;
+        }
+        else
+        {
+            _477 = 1.0 - f.x;
+        }
+        if ((i >> 1) == 1)
+        {
+            _490 = f.y;
+        }
+        else
+        {
+            _490 = 1.0 - f.y;
+        }
+        float weight = _477 * _490;
+        int2 at = base + int2(i & 1, i >> 1);
+        int2 param_3 = at;
+        int param_4 = row;
+        if (maskAt(param_3, param_4, indoorMap, indoorMapSmplr) < 2)
+        {
+            continue;
+        }
+        int2 param_5 = at;
+        int param_6 = row + 4;
+        int part = maskAt(param_5, param_6, indoorMap, indoorMapSmplr) & 7;
+        if (part == 0)
+        {
+            sum += weight;
+            continue;
+        }
+        if (part == 1)
+        {
+            _538 = float2(1.0, -1.0);
+        }
+        else
+        {
+            if (part == 2)
+            {
+                _546 = float2(-1.0, 1.0);
+            }
+            else
+            {
+                _546 = select(float2(1.0), float2(-1.0), bool2(part == 3));
+            }
+            _538 = _546;
+        }
+        float2 toward = _538;
+        sum += (weight * smoothstep(-0.0599999986588954925537109375, 0.0599999986588954925537109375, dot(((lot.xy + float2(ambient.frame.w)) - float2(at)) - float2(0.5), toward)));
+    }
+    return sum;
+}
+
+static inline __attribute__((always_inline))
+float2 hiddenAt(thread const float3& q, constant Ambient& ambient, texture2d<float> depthMap, sampler depthMapSmplr, texture2d<float> groundMap, sampler groundMapSmplr, texture2d<float> worldDepthMap, sampler worldDepthMapSmplr)
+{
+    float2 scene = float2(32.0 * (q.x - q.y), (16.0 * (q.x + q.y)) - (40.0 * q.z)) + ambient.frame.xy;
+    float key = (q.x + q.y) + (0.800000011920928955078125 * q.z);
+    if (ambient.shadowView.w > 0.5)
+    {
+        int2 wSize = int2(worldDepthMap.get_width(), worldDepthMap.get_height());
+        float2 wp = floor(ambient.shadowView.xy + (scene * ambient.shadowView.z)) + float2(0.5);
+        bool _994 = any(wp < float2(0.0));
+        bool _1004;
+        if (!_994)
+        {
+            _1004 = wp.x >= float(wSize.x);
+        }
+        else
+        {
+            _1004 = _994;
+        }
+        bool _1014;
+        if (!_1004)
+        {
+            _1014 = wp.y >= float(wSize.y);
+        }
+        else
+        {
+            _1014 = _1004;
+        }
+        if (_1014)
+        {
+            return float2(0.0);
+        }
+        float wDepth = worldDepthMap.read(uint2(int2(wp)), 0).x;
+        if (wDepth < 1.0)
+        {
+            float behind = ((0.89999997615814208984375 - wDepth) / 0.0030000000260770320892333984375) - key;
+            return float2(fast::clamp((behind + 0.4000000059604644775390625) / 0.300000011920928955078125, 0.0, 1.0), fast::clamp((behind + 0.100000001490116119384765625) / 0.20000000298023223876953125, 0.0, 1.0) * fast::clamp((1.5 - behind) / 0.5, 0.0, 1.0));
+        }
+        return float2(0.0);
+    }
+    float2 pixel = floor(ambient.view.xy + (scene * ambient.view.z)) + float2(0.5);
+    bool _1068 = any(pixel < float2(0.0));
+    bool _1077;
+    if (!_1068)
+    {
+        _1077 = pixel.x >= ambient.extent.x;
+    }
+    else
+    {
+        _1077 = _1068;
+    }
+    bool _1086;
+    if (!_1077)
+    {
+        _1086 = pixel.y >= ambient.extent.y;
+    }
+    else
+    {
+        _1086 = _1077;
+    }
+    if (_1086)
+    {
+        return float2(1.0, 0.0);
+    }
+    float depth = depthMap.read(uint2(int2(pixel)), 0).x;
+    if (depth < 1.0)
+    {
+        float behind_1 = ((0.89999997615814208984375 - depth) / 0.0030000000260770320892333984375) - key;
+        return float2(fast::clamp((behind_1 + 0.4000000059604644775390625) / 0.300000011920928955078125, 0.0, 1.0), fast::clamp((behind_1 + 0.100000001490116119384765625) / 0.20000000298023223876953125, 0.0, 1.0) * fast::clamp((1.5 - behind_1) / 0.5, 0.0, 1.0));
+    }
+    float ground = groundMap.read(uint2(int2(pixel)), 0).x;
+    if (ground >= 1.0)
+    {
+        return float2(0.0);
+    }
+    float2 param = scene;
+    float param_1 = ((0.89999997615814208984375 - ground) / 0.0030000000260770320892333984375) + ambient.view.w;
+    bool param_2 = true;
+    float2 param_3 = ambient.frame.xy;
+    float3 lot = lotPoint(param, param_1, param_2, param_3);
+    return float2(fast::clamp(((((lot.x + lot.y) + (0.800000011920928955078125 * lot.z)) - key) + 0.4000000059604644775390625) / 0.300000011920928955078125, 0.0, 1.0), 0.0);
+}
+
+static inline __attribute__((always_inline))
+float3 sunMarch(thread const float3& here, thread const float& jitter, thread const float& start, constant Ambient& ambient, texture2d<float> depthMap, sampler depthMapSmplr, texture2d<float> groundMap, sampler groundMapSmplr, texture2d<float> worldDepthMap, sampler worldDepthMapSmplr, texture2d<float> heightMap, sampler heightMapSmplr)
+{
+    float lit = 1.0;
+    float litColumn = 1.0;
+    float litShell = 1.0;
+    float2 gridSize = float2(int2(heightMap.get_width(), heightMap.get_height()));
+    float span = fast::max((ambient.sunLot.w + 0.20000000298023223876953125) - start, 0.5);
+    for (int i = 1; i <= 32; i++)
+    {
+        float u = (float(i) - jitter) / 32.0;
+        float t = start + (span * ((0.550000011920928955078125 * u) + ((0.449999988079071044921875 * u) * u)));
+        float3 q = here + (ambient.sunLot.xyz * t);
+        float2 texel = (q.xy + float2(ambient.frame.w)) * ambient.frame.z;
+        bool _2014 = any(texel < float2(1.0));
+        bool _2024;
+        if (!_2014)
+        {
+            _2024 = any(texel > (gridSize - float2(1.0)));
+        }
+        else
+        {
+            _2024 = _2014;
+        }
+        if (_2024)
+        {
+            break;
+        }
+        float4 tops = (float4(0.5) - heightMap.gather(heightMapSmplr, (texel / gridSize), int2(0), component::x)) * 64.0;
+        float4 blocked = fast::clamp(((tops - float4(q.z)) - float4(0.07999999821186065673828125)) / float4((0.0900000035762786865234375 * t) + 0.0500000007450580596923828125), float4(0.0), float4(1.0));
+        float2 f = fract(texel - float2(0.5));
+        float3 param = q;
+        float2 seen = hiddenAt(param, ambient, depthMap, depthMapSmplr, groundMap, groundMapSmplr, worldDepthMap, worldDepthMapSmplr);
+        float column = mix(mix(blocked.w, blocked.z, f.x), mix(blocked.x, blocked.y, f.x), f.y);
+        float shell = seen.y * (1.0 / (1.0 + (0.0599999986588954925537109375 * t)));
+        float occ = fast::max(column * seen.x, shell);
+        lit = fast::min(lit, 1.0 - occ);
+        litColumn = fast::min(litColumn, 1.0 - column);
+        litShell = fast::min(litShell, 1.0 - shell);
+        if ((lit <= 0.00999999977648258209228515625) && (litColumn <= 0.00999999977648258209228515625))
+        {
+            break;
+        }
+    }
+    return float3(lit, litColumn, litShell);
+}
+
+static inline __attribute__((always_inline))
+float4 throughWindow(thread const float3& lot, constant Ambient& ambient, texture2d<float> indoorMap, sampler indoorMapSmplr)
+{
+    float3 sun = ambient.sunLot.xyz;
+    float across = length(sun.xy);
+    if (across < 0.001000000047497451305389404296875)
+    {
+        return float4(0.0);
+    }
+    float2 start = lot.xy + float2(ambient.frame.w);
+    int2 cell = int2(floor(start));
+    int2 param = cell;
+    int param_1 = 0;
+    float param_2 = lot.z;
+    float ground = floorAt(param, param_1, param_2, ambient, indoorMap, indoorMapSmplr);
+    int row = int(lot.z > ((ground + 2.9500000476837158203125) - 0.100000001490116119384765625));
+    float _1317;
+    if (row == 0)
+    {
+        _1317 = ground;
+    }
+    else
+    {
+        int2 param_3 = cell;
+        int param_4 = 1;
+        float param_5 = ground + 2.9500000476837158203125;
+        _1317 = floorAt(param_3, param_4, param_5, ambient, indoorMap, indoorMapSmplr);
+    }
+    float floorHeight = _1317;
+    if (lot.z > ((floorHeight + 2.9500000476837158203125) - 0.100000001490116119384765625))
+    {
+        return float4(0.0);
+    }
+    float2 direction = sun.xy / float2(across);
+    float rise = sun.z / across;
+    int2 param_6 = cell;
+    int param_7 = row;
+    int room = maskAt(param_6, param_7, indoorMap, indoorMapSmplr);
+    if (room < 2)
+    {
+        return float4(0.0);
+    }
+    int2 stepDir = int2(sign(direction));
+    float2 delta = abs(float2(1.0) / (direction + (float2(direction == float2(0.0)) * 9.9999997473787516355514526367188e-06)));
+    float2 next = ((float2(cell) + fast::max(float2(stepDir), float2(0.0))) - start) / (direction + (float2(direction == float2(0.0)) * 9.9999997473787516355514526367188e-06));
+    float _1410;
+    int2 _1437;
+    float _1487;
+    for (int i = 0; i < 12; i++)
+    {
+        bool alongX = next.x < next.y;
+        if (alongX)
+        {
+            _1410 = next.x;
+        }
+        else
+        {
+            _1410 = next.y;
+        }
+        float t = _1410;
+        float height = (lot.z - floorHeight) + (t * rise);
+        if (height > 2.4500000476837158203125)
+        {
+            return float4(0.0);
+        }
+        if (alongX)
+        {
+            _1437 = int2(stepDir.x, 0);
+        }
+        else
+        {
+            _1437 = int2(0, stepDir.y);
+        }
+        int2 to = cell + _1437;
+        int2 param_8 = to;
+        int param_9 = row;
+        int beyond = maskAt(param_8, param_9, indoorMap, indoorMapSmplr);
+        if ((beyond >> 1) != (room >> 1))
+        {
+            int2 param_10 = cell;
+            int param_11 = row;
+            bool _1468 = (maskAt(param_10, param_11, indoorMap, indoorMapSmplr) & 1) == 0;
+            bool _1475;
+            if (!_1468)
+            {
+                _1475 = (beyond & 1) == 0;
+            }
+            else
+            {
+                _1475 = _1468;
+            }
+            if (_1475)
+            {
+                return float4(0.0);
+            }
+            float2 crossing = start + (direction * t);
+            if (alongX)
+            {
+                _1487 = crossing.y;
+            }
+            else
+            {
+                _1487 = crossing.x;
+            }
+            float along = fract(_1487);
+            float open = ((smoothstep(0.670000016689300537109375, 0.829999983310699462890625, height) * (1.0 - smoothstep(2.269999980926513671875, 2.4300000667572021484375, height))) * smoothstep(0.07999999821186065673828125, 0.20000000298023223876953125, along)) * smoothstep(0.07999999821186065673828125, 0.20000000298023223876953125, 1.0 - along);
+            return float4(open, (crossing - float2(ambient.frame.w)) + (direction * 1.5), lot.z + ((t + 1.5) * rise));
+        }
+        cell = to;
+        if (alongX)
+        {
+            next.x += delta.x;
+        }
+        else
+        {
+            next.y += delta.y;
+        }
+    }
+    return float4(0.0);
+}
+
+static inline __attribute__((always_inline))
+float2 lotSource(thread const float2& camera, constant Ambient& ambient)
+{
+    float2 size = ambient.drift.zw;
+    int orientation = int(ambient.clouds.z + 0.5);
+    float2 _643;
+    if (orientation == 1)
+    {
+        _643 = float2(camera.y, size.y - camera.x);
+    }
+    else
+    {
+        float2 _657;
+        if (orientation == 2)
+        {
+            _657 = size - camera;
+        }
+        else
+        {
+            float2 _666;
+            if (orientation == 3)
+            {
+                _666 = float2(size.x - camera.y, camera.x);
+            }
+            else
+            {
+                _666 = camera;
+            }
+            _657 = _666;
+        }
+        _643 = _657;
+    }
+    return _643;
+}
+
+static inline __attribute__((always_inline))
+float hash12(thread const float2& q)
+{
+    float3 r = fract(q.xyx * 0.103100001811981201171875);
+    r += float3(dot(r, r.yzx + float3(33.3300018310546875)));
+    return fract((r.x + r.y) * r.z);
+}
+
+static inline __attribute__((always_inline))
+float valueNoise(thread const float2& q)
+{
+    float2 i = floor(q);
+    float2 f = fract(q);
+    f = (f * f) * (float2(3.0) - (f * 2.0));
+    float2 param = i;
+    float2 param_1 = i + float2(1.0, 0.0);
+    float2 param_2 = i + float2(0.0, 1.0);
+    float2 param_3 = i + float2(1.0);
+    return mix(mix(hash12(param), hash12(param_1), f.x), mix(hash12(param_2), hash12(param_3), f.x), f.y);
+}
+
+static inline __attribute__((always_inline))
+float cloudLight(thread const float3& lot, constant Ambient& ambient)
+{
+    float cover = ambient.clouds.x;
+    bool _1172 = cover <= 0.0;
+    bool _1179;
+    if (!_1172)
+    {
+        _1179 = ambient.clouds.y <= 0.0;
+    }
+    else
+    {
+        _1179 = _1172;
+    }
+    if (_1179)
+    {
+        return 1.0;
+    }
+    float3 sun = ambient.sunLot.xyz;
+    float2 param = lot.xy + ((sun.xy * (ambient.clouds.w - lot.z)) / float2(fast::max(sun.z, 0.25)));
+    float2 source = lotSource(param, ambient);
+    float2 q = (source - ambient.drift.xy) / float2(9.0);
+    float2 param_1 = q;
+    float2 param_2 = (q * 2.0299999713897705078125) + float2(17.0);
+    float2 param_3 = (q * 4.0100002288818359375) + float2(41.0);
+    float2 param_4 = (q * 8.05000019073486328125) + float2(7.0);
+    float field = (((0.5 * valueNoise(param_1)) + (0.25 * valueNoise(param_2))) + (0.1500000059604644775390625 * valueNoise(param_3))) + (0.100000001490116119384765625 * valueNoise(param_4));
+    float threshold = mix(0.7200000286102294921875, 0.180000007152557373046875, cover);
+    float density = smoothstep(threshold - 0.07999999821186065673828125, threshold + 0.100000001490116119384765625, field);
+    return 1.0 - (ambient.clouds.y * density);
+}
+
+static inline __attribute__((always_inline))
+float2 sceneOf(thread const float3& q, constant Ambient& ambient)
+{
+    return float2(32.0 * (q.x - q.y), (16.0 * (q.x + q.y)) - (40.0 * q.z)) + ambient.frame.xy;
+}
+
+static inline __attribute__((always_inline))
+float lampNear(thread const float3& q, constant Ambient& ambient)
+{
+    float3 param = q;
+    float2 at = sceneOf(param, ambient);
+    float best = 0.0;
+    int lampCount = int(ambient.lamp.x);
+    for (int index = 0; index < 16; index++)
+    {
+        if (index >= lampCount)
+        {
+            break;
+        }
+        float4 lamp = ambient.lamps[index];
+        best = fast::max(best, lamp.w * fast::clamp(1.0 - (length(lamp.xy - at) / (0.800000011920928955078125 * ambient.lamp.y)), 0.0, 1.0));
+    }
+    return fast::clamp(best * 2.0, 0.0, 1.0);
+}
+
+static inline __attribute__((always_inline))
+float windowSpill(thread const float3& here, thread const float& onGround, constant Ambient& ambient, texture2d<float> indoorMap, sampler indoorMapSmplr, texture2d<float> heightMap, sampler heightMapSmplr)
+{
+    float2 at = here.xy + float2(ambient.frame.w);
+    int2 cell = int2(floor(at));
+    int2 param = cell;
+    int param_1 = 0;
+    float param_2 = here.z;
+    float ground = floorAt(param, param_1, param_2, ambient, indoorMap, indoorMapSmplr);
+    bool _1629 = onGround <= 0.5;
+    bool _1639;
+    if (!_1629)
+    {
+        _1639 = here.z > ((ground + 2.9500000476837158203125) - 0.100000001490116119384765625);
+    }
+    else
+    {
+        _1639 = _1629;
+    }
+    bool _1648;
+    if (!_1639)
+    {
+        int2 param_3 = cell;
+        int param_4 = 0;
+        _1648 = maskAt(param_3, param_4, indoorMap, indoorMapSmplr) >= 2;
+    }
+    else
+    {
+        _1648 = _1639;
+    }
+    if (_1648)
+    {
+        return 0.0;
+    }
+    float best = 0.0;
+    float3 source = float3(0.0);
+    float3 glass = float3(0.0);
+    int2 _1707;
+    int2 _1714;
+    for (int y = -3; y <= 3; y++)
+    {
+        for (int x = -3; x <= 3; x++)
+        {
+            int2 room = cell + int2(x, y);
+            int2 param_5 = room;
+            int param_6 = 0;
+            int code = maskAt(param_5, param_6, indoorMap, indoorMapSmplr);
+            bool _1685 = code < 2;
+            bool _1692;
+            if (!_1685)
+            {
+                _1692 = (code & 1) == 0;
+            }
+            else
+            {
+                _1692 = _1685;
+            }
+            if (_1692)
+            {
+                continue;
+            }
+            for (int d = 0; d < 4; d++)
+            {
+                if (d == 0)
+                {
+                    _1707 = int2(1, 0);
+                }
+                else
+                {
+                    if (d == 1)
+                    {
+                        _1714 = int2(-1, 0);
+                    }
+                    else
+                    {
+                        _1714 = select(int2(0, -1), int2(0, 1), bool2(d == 2));
+                    }
+                    _1707 = _1714;
+                }
+                int2 _step = _1707;
+                int2 param_7 = room + _step;
+                int param_8 = 0;
+                int outside = maskAt(param_7, param_8, indoorMap, indoorMapSmplr);
+                bool _1736 = outside >= 2;
+                bool _1743;
+                if (!_1736)
+                {
+                    _1743 = (outside & 1) == 0;
+                }
+                else
+                {
+                    _1743 = _1736;
+                }
+                if (_1743)
+                {
+                    continue;
+                }
+                float2 offset = at - ((float2(room) + float2(0.5)) + (float2(_step) * 0.5));
+                float out_ = dot(offset, float2(_step));
+                if (out_ < 0.0)
+                {
+                    continue;
+                }
+                float side = fast::max(0.0, abs(dot(offset, float2(float(_step.y), float(_step.x)))) - 0.300000011920928955078125);
+                float fall = fast::max(0.0, 1.0 - (length(float2(out_, side)) / 2.599999904632568359375));
+                float clear = smoothstep(0.64999997615814208984375, 0.89999997615814208984375, (1.5 * out_) / (out_ + 1.0));
+                if (((fall * fall) * clear) > best)
+                {
+                    best = (fall * fall) * clear;
+                    source = float3((float2(room) + float2(0.5)) - float2(ambient.frame.w), ground + 1.5);
+                    glass = float3(((float2(room) + float2(0.5)) + (float2(_step) * 0.5)) - float2(ambient.frame.w), ground + 1.39999997615814208984375);
+                }
+            }
+        }
+    }
+    if (best <= 0.0)
+    {
+        return 0.0;
+    }
+    float2 gridSize = float2(int2(heightMap.get_width(), heightMap.get_height()));
+    float2 toGlass = glass.xy - here.xy;
+    float span = length(toGlass);
+    if (span < 0.4000000059604644775390625)
+    {
+        float3 param_9 = source;
+        return best * lampNear(param_9, ambient);
+    }
+    float3 end = float3(glass.xy - ((toGlass / float2(span)) * 0.3499999940395355224609375), glass.z);
+    float open = 1.0;
+    for (int i = 1; i <= 6; i++)
+    {
+        float3 q = mix(here, end, float3(float(i) / 6.0));
+        float top = (0.5 - heightMap.sample(heightMapSmplr, (((q.xy + float2(ambient.frame.w)) * ambient.frame.z) / gridSize)).x) * 64.0;
+        open = fast::min(open, 1.0 - fast::clamp(((top - q.z) - 0.100000001490116119384765625) / 0.300000011920928955078125, 0.0, 1.0));
+    }
+    float3 param_10 = source;
+    return (best * open) * lampNear(param_10, ambient);
+}
+
+static inline __attribute__((always_inline))
+float architecturalExposure(thread const float3& point, constant Ambient& ambient, texture2d<float> overheadMap, sampler overheadMapSmplr)
+{
+    float2 size = ambient.drift.zw;
+    int orientation = int(ambient.clouds.z + 0.5);
+    float2 _696;
+    if (orientation == 1)
+    {
+        _696 = float2(point.y, size.y - point.x);
+    }
+    else
+    {
+        float2 _710;
+        if (orientation == 2)
+        {
+            _710 = size - point.xy;
+        }
+        else
+        {
+            float2 _720;
+            if (orientation == 3)
+            {
+                _720 = float2(size.x - point.y, point.x);
+            }
+            else
+            {
+                _720 = point.xy;
+            }
+            _710 = _720;
+        }
+        _696 = _710;
+    }
+    float2 source = _696;
+    bool _740 = any(source < float2(0.0));
+    bool _748;
+    if (!_740)
+    {
+        _748 = any(source >= size);
+    }
+    else
+    {
+        _748 = _740;
+    }
+    if (_748)
+    {
+        return 1.0;
+    }
+    float2 texelsPerTile = float2(int2(overheadMap.get_width(), overheadMap.get_height())) / fast::max(size, float2(1.0));
+    int2 at = int2(floor(source * texelsPerTile));
+    if (any(at >= int2(overheadMap.get_width(), overheadMap.get_height())))
+    {
+        return 1.0;
+    }
+    int4 data = int4((overheadMap.read(uint2(at), 0) * 255.0) + float4(0.5));
+    if (data.w == 0)
+    {
+        return 1.0;
+    }
+    float base = float(((data.y * 256) + data.z) - 32768) / 256.0;
+    int story = int(floor(((point.z - base) + 0.100000001490116119384765625) / 2.9500000476837158203125));
+    if ((story < 0) || (story > 4))
+    {
+        return 1.0;
+    }
+    return ((data.x & (1 << story)) != 0) ? 0.0 : 1.0;
+}
+
+static inline __attribute__((always_inline))
+float smoothNoise(thread const float2& q)
+{
+    float2 i = floor(q);
+    float2 f = fract(q);
+    f = ((f * f) * f) * ((f * ((f * 6.0) - float2(15.0))) + float2(10.0));
+    float2 param = i;
+    float2 param_1 = i + float2(1.0, 0.0);
+    float2 param_2 = i + float2(0.0, 1.0);
+    float2 param_3 = i + float2(1.0);
+    return mix(mix(hash12(param), hash12(param_1), f.x), mix(hash12(param_2), hash12(param_3), f.x), f.y);
+}
+
+fragment main0_out main0(constant Ambient& ambient [[buffer(0)]], texture2d<float> depthMap [[texture(0)]], texture2d<float> groundMap [[texture(1)]], texture2d<float> heightMap [[texture(2)]], texture2d<float> indoorMap [[texture(3)]], texture2d<float> footMap [[texture(4)]], texture2d<float> liftMap [[texture(5)]], texture2d<float> overheadMap [[texture(6)]], texture2d<float> worldDepthMap [[texture(7)]], sampler depthMapSmplr [[sampler(0)]], sampler groundMapSmplr [[sampler(1)]], sampler heightMapSmplr [[sampler(2)]], sampler indoorMapSmplr [[sampler(3)]], sampler footMapSmplr [[sampler(4)]], sampler liftMapSmplr [[sampler(5)]], sampler overheadMapSmplr [[sampler(6)]], sampler worldDepthMapSmplr [[sampler(7)]], float4 gl_FragCoord [[position]])
+{
+    main0_out out = {};
+    float2 pixel = floor(gl_FragCoord.xy) + float2(0.5);
+    bool _2138 = pixel.x >= ambient.extent.x;
+    bool _2147;
+    if (!_2138)
+    {
+        _2147 = pixel.y >= ambient.extent.y;
+    }
+    else
+    {
+        _2147 = _2138;
+    }
+    if (_2147)
+    {
+        out.color = float4(0.5, 0.5, 0.5, 1.0);
+        return out;
+    }
+    float2 param = pixel;
+    float4 centre = positionAt(param, ambient, depthMap, depthMapSmplr, groundMap, groundMapSmplr);
+    if (centre.w > 0.75)
+    {
+        out.color = float4(0.5, 0.5, 0.5, 1.0);
+        return out;
+    }
+    float3 p = centre.xyz;
+    float scale = ambient.view.z;
+    float _step = fast::max(1.0, 1.5 * scale);
+    float2 param_1 = pixel - float2(_step, 0.0);
+    float3 left = positionAt(param_1, ambient, depthMap, depthMapSmplr, groundMap, groundMapSmplr).xyz;
+    float2 param_2 = pixel + float2(_step, 0.0);
+    float3 right = positionAt(param_2, ambient, depthMap, depthMapSmplr, groundMap, groundMapSmplr).xyz;
+    float2 param_3 = pixel - float2(0.0, _step);
+    float3 up = positionAt(param_3, ambient, depthMap, depthMapSmplr, groundMap, groundMapSmplr).xyz;
+    float2 param_4 = pixel + float2(0.0, _step);
+    float3 down = positionAt(param_4, ambient, depthMap, depthMapSmplr, groundMap, groundMapSmplr).xyz;
+    float3 _2221;
+    if (abs(right.z - p.z) < abs(p.z - left.z))
+    {
+        _2221 = right - p;
+    }
+    else
+    {
+        _2221 = p - left;
+    }
+    float3 dx = _2221;
+    float3 _2246;
+    if (abs(down.z - p.z) < abs(p.z - up.z))
+    {
+        _2246 = down - p;
+    }
+    else
+    {
+        _2246 = p - up;
+    }
+    float3 dy = _2246;
+    float3 n = fast::normalize(cross(dy, dx));
+    if (n.z < 0.0)
+    {
+        n = -n;
+    }
+    float3 normal = fast::normalize(mix(n, float3(0.0, 0.0, 1.0), float3(0.25)));
+    float radius = ambient.params.x;
+    float thickness = ambient.params.w;
+    float2 param_5 = pixel;
+    float jitter = _noise(param_5);
+    float visibility = 1.0;
+    if (ambient.params.y > 0.001000000047497451305389404296875)
+    {
+        visibility = 0.0;
+        float2 _2359;
+        spvUnsafeArray<float, 2> horizons;
+        float _2475;
+        for (int slice = 0; slice < 4; slice++)
+        {
+            float phi = ((float(slice) + jitter) * 3.1415927410125732421875) / 4.0;
+            float2 direction = float2(cos(phi), sin(phi));
+            float3 axis = float3(direction.y, -direction.x, 0.0);
+            float3 projected = normal - (axis * dot(normal, axis));
+            float projectedLength = fast::max(length(projected), 9.9999997473787516355514526367188e-05);
+            float cosN = fast::clamp(projected.z / projectedLength, -1.0, 1.0);
+            float n_1 = sign(dot(projected.xy, direction)) * acos(cosN);
+            for (int side = 0; side < 2; side++)
+            {
+                if (side == 0)
+                {
+                    _2359 = direction;
+                }
+                else
+                {
+                    _2359 = -direction;
+                }
+                float2 sideDirection = _2359;
+                float best = -1.0;
+                for (int i = 0; i < 6; i++)
+                {
+                    float t = (float(i) + fract(jitter + (float(i) * 0.61803400516510009765625))) / 6.0;
+                    float2 offset = ((((sideDirection * radius) * t) * t) * scale) + (sideDirection * 1.5);
+                    float2 samplePixel = pixel + offset;
+                    bool _2407 = any(samplePixel < float2(0.0));
+                    bool _2416;
+                    if (!_2407)
+                    {
+                        _2416 = samplePixel.x >= ambient.extent.x;
+                    }
+                    else
+                    {
+                        _2416 = _2407;
+                    }
+                    bool _2425;
+                    if (!_2416)
+                    {
+                        _2425 = samplePixel.y >= ambient.extent.y;
+                    }
+                    else
+                    {
+                        _2425 = _2416;
+                    }
+                    if (_2425)
+                    {
+                        break;
+                    }
+                    float2 param_6 = samplePixel;
+                    float3 delta = positionAt(param_6, ambient, depthMap, depthMapSmplr, groundMap, groundMapSmplr).xyz - p;
+                    float _distance = length(delta);
+                    float falloff = fast::clamp((radius - _distance) / (0.4000000059604644775390625 * radius), 0.0, 1.0) * fast::clamp((thickness - delta.z) / (0.5 * thickness), 0.0, 1.0);
+                    float cosine = mix(-1.0, delta.z / fast::max(_distance, 9.9999997473787516355514526367188e-05), falloff);
+                    best = fast::max(best, cosine);
+                }
+                if (side == 0)
+                {
+                    _2475 = acos(fast::clamp(best, -1.0, 1.0));
+                }
+                else
+                {
+                    _2475 = -acos(fast::clamp(best, -1.0, 1.0));
+                }
+                horizons[side] = _2475;
+            }
+            float h1 = n_1 + fast::min(horizons[0] - n_1, 1.57079637050628662109375);
+            float h0 = n_1 + fast::max(horizons[1] - n_1, -1.57079637050628662109375);
+            float sinN = sin(n_1);
+            visibility += ((projectedLength * 0.25) * ((((-cos((2.0 * h0) - n_1)) + cosN) + ((2.0 * h0) * sinN)) + (((-cos((2.0 * h1) - n_1)) + cosN) + ((2.0 * h1) * sinN))));
+        }
+        visibility = fast::clamp(visibility / 4.0, 0.0, 1.0);
+    }
+    float multiBounceVis = visibility * (1.0 + (0.14000000059604644775390625 * (1.0 - visibility)));
+    float occlusion = fast::clamp(mix(1.0, fast::clamp(multiBounceVis, 0.0, 1.0), ambient.params.y), 0.180000007152557373046875, 1.0);
+    float _2567;
+    if (centre.w < 0.25)
+    {
+        _2567 = (0.89999997615814208984375 - depthMap.read(uint2(int2(pixel)), 0).x) / 0.0030000000260770320892333984375;
+    }
+    else
+    {
+        _2567 = ((0.89999997615814208984375 - groundMap.read(uint2(int2(pixel)), 0).x) / 0.0030000000260770320892333984375) + ambient.view.w;
+    }
+    float key = _2567;
+    float2 param_7 = p.xy;
+    float param_8 = key;
+    bool param_9 = centre.w > 0.25;
+    float2 param_10 = ambient.frame.xy;
+    float3 here = lotPoint(param_7, param_8, param_9, param_10);
+    float2 param_11 = pixel;
+    float param_12 = p.z;
+    float riseHere = riseAt(param_11, param_12, ambient, groundMap, groundMapSmplr);
+    float onGround = 1.0 - smoothstep(2.0, 6.0, riseHere);
+    float4 _2624;
+    if (int2(liftMap.get_width(), liftMap.get_height()).x > 1)
+    {
+        _2624 = liftMap.read(uint2(int2(pixel)), 0);
+    }
+    else
+    {
+        _2624 = float4(0.0);
+    }
+    float4 lift = _2624;
+    bool onSnow = lift.z > 0.5;
+    if (onSnow)
+    {
+        here += float3(0.5 * lift.x, 0.5 * lift.x, lift.y);
+        onGround = 1.0;
+        occlusion = 1.0;
+    }
+    float contact = 1.0;
+    if (ambient.sunLot.w > 0.0)
+    {
+        bool _2662 = (centre.w > 0.25) || onSnow;
+        bool _2668;
+        if (_2662)
+        {
+            _2668 = ambient.contact.y > 0.0;
+        }
+        else
+        {
+            _2668 = _2662;
+        }
+        if (_2668)
+        {
+            float detail = ambient.frame.z;
+            int2 footSize = int2(footMap.get_width(), footMap.get_height());
+            float2 at = (here.xy + float2(ambient.frame.w)) * detail;
+            int2 centreTexel = int2(floor(at));
+            float best_1 = 0.0;
+            float sum = 0.0;
+            for (int y = -4; y <= 4; y++)
+            {
+                for (int x = -4; x <= 4; x++)
+                {
+                    int2 texel = centreTexel + int2(x, y);
+                    bool _2720 = any(texel < int2(0));
+                    bool _2728;
+                    if (!_2720)
+                    {
+                        _2728 = any(texel >= footSize);
+                    }
+                    else
+                    {
+                        _2728 = _2720;
+                    }
+                    if (_2728)
+                    {
+                        continue;
+                    }
+                    float stored = footMap.read(uint2(texel), 0).x;
+                    if (stored >= 1.0)
+                    {
+                        continue;
+                    }
+                    float footZ = (0.5 - stored) * 64.0;
+                    if (abs(footZ - here.z) > 0.25)
+                    {
+                        continue;
+                    }
+                    float near = fast::max(0.0, 1.0 - (length(((float2(texel) + float2(0.5)) - at) / float2(detail)) / 0.125));
+                    best_1 = fast::max(best_1, near * near);
+                    sum += (near * near);
+                }
+            }
+            float feet = fast::clamp((0.699999988079071044921875 * best_1) + (0.039999999105930328369140625 * sum), 0.0, 1.0);
+            float2 gridSize = float2(int2(heightMap.get_width(), heightMap.get_height()));
+            float over = ((0.5 - heightMap.sample(heightMapSmplr, (((here.xy + float2(ambient.frame.w)) * ambient.frame.z) / gridSize)).x) * 64.0) - here.z;
+            float under = smoothstep(0.20000000298023223876953125, 0.4000000059604644775390625, over) * (1.0 - smoothstep(2.0, 2.599999904632568359375, over));
+            contact = 1.0 - (ambient.contact.y * fast::clamp(feet + (0.300000011920928955078125 * under), 0.0, 1.0));
+        }
+    }
+    else
+    {
+        bool _2837 = onGround > 0.0;
+        bool _2843;
+        if (_2837)
+        {
+            _2843 = ambient.contact.y > 0.0;
+        }
+        else
+        {
+            _2843 = _2837;
+        }
+        if (_2843)
+        {
+            float contactRadius = ambient.contact.x;
+            float2 footHere = p.xy + float2(0.0, riseHere);
+            float covered = 0.0;
+            for (int d = 0; d < 8; d++)
+            {
+                float phi_1 = (((float(d) + jitter) * 2.0) * 3.1415927410125732421875) / 8.0;
+                float2 direction_1 = float2(cos(phi_1), sin(phi_1));
+                float best_2 = 0.0;
+                for (int i_1 = 1; i_1 <= 3; i_1++)
+                {
+                    float t_1 = (float(i_1) - (0.5 * fract((jitter * 7.0) + (float(i_1) * 0.61803400516510009765625)))) / 3.0;
+                    float2 samplePixel_1 = pixel + (((direction_1 * contactRadius) * t_1) * scale);
+                    bool _2912 = any(samplePixel_1 < float2(0.0));
+                    bool _2921;
+                    if (!_2912)
+                    {
+                        _2921 = samplePixel_1.x >= ambient.extent.x;
+                    }
+                    else
+                    {
+                        _2921 = _2912;
+                    }
+                    bool _2930;
+                    if (!_2921)
+                    {
+                        _2930 = samplePixel_1.y >= ambient.extent.y;
+                    }
+                    else
+                    {
+                        _2930 = _2921;
+                    }
+                    if (_2930)
+                    {
+                        break;
+                    }
+                    float2 param_13 = samplePixel_1;
+                    float4 q = positionAt(param_13, ambient, depthMap, depthMapSmplr, groundMap, groundMapSmplr);
+                    if (q.w > 0.75)
+                    {
+                        continue;
+                    }
+                    float2 param_14 = samplePixel_1;
+                    float param_15 = q.z;
+                    float rise = riseAt(param_14, param_15, ambient, groundMap, groundMapSmplr);
+                    float height = (rise - riseHere) / 0.866025388240814208984375;
+                    float along = length(((q.xy + float2(0.0, rise)) - footHere) * float2(1.0, 2.0));
+                    if ((height < 1.0) || (along > contactRadius))
+                    {
+                        continue;
+                    }
+                    float near_1 = 1.0 - (along / contactRadius);
+                    best_2 = fast::max(best_2, (height / ((height + (0.5 * along)) + 2.0)) * near_1);
+                }
+                covered += best_2;
+            }
+            contact = 1.0 - ((ambient.contact.y * onGround) * fast::clamp((covered / 8.0) * 4.0, 0.0, 1.0));
+        }
+    }
+    float lit = 1.0;
+    float litColumn = 1.0;
+    float litShell = 1.0;
+    float inside = 0.0;
+    if (ambient.sunLot.w > 0.0)
+    {
+        float3 param_16 = here + float3(fast::normalize(ambient.sunLot.xy + float2(9.9999997473787516355514526367188e-06)) * 0.300000011920928955078125, 0.0);
+        inside = indoors(param_16, ambient, indoorMap, indoorMapSmplr);
+    }
+    bool _3035 = ambient.sunLot.w > 0.0;
+    bool _3041;
+    if (_3035)
+    {
+        _3041 = ambient.params.z > 0.001000000047497451305389404296875;
+    }
+    else
+    {
+        _3041 = _3035;
+    }
+    if (_3041 && (inside < 0.9900000095367431640625))
+    {
+        float3 param_17 = here;
+        float param_18 = jitter;
+        float param_19 = mix(1.0, 0.20000000298023223876953125, onGround);
+        float3 march = sunMarch(param_17, param_18, param_19, ambient, depthMap, depthMapSmplr, groundMap, groundMapSmplr, worldDepthMap, worldDepthMapSmplr, heightMap, heightMapSmplr);
+        lit = march.x;
+        litColumn = march.y;
+        litShell = march.z;
+        float2 gridSize_1 = float2(int2(heightMap.get_width(), heightMap.get_height()));
+        float shade = 0.0;
+        float centerOver = ((0.5 - heightMap.sample(heightMapSmplr, (((here.xy + float2(ambient.frame.w)) * ambient.frame.z) / gridSize_1)).x) * 64.0) - here.z;
+        shade += (smoothstep(1.7999999523162841796875, 3.2000000476837158203125, centerOver) * 0.2800000011920928955078125);
+        for (int i_2 = 0; i_2 < 8; i_2++)
+        {
+            float2 at_1 = here.xy + (_3118[i_2] * 0.550000011920928955078125);
+            float over_1 = ((0.5 - heightMap.sample(heightMapSmplr, (((at_1 + float2(ambient.frame.w)) * ambient.frame.z) / gridSize_1)).x) * 64.0) - here.z;
+            shade += (smoothstep(1.7999999523162841796875, 3.2000000476837158203125, over_1) * 0.0900000035762786865234375);
+        }
+        lit = fast::min(lit, 1.0 - ((0.3499999940395355224609375 * onGround) * shade));
+    }
+    float window = 0.0;
+    bool _3162 = ambient.sunLot.w > 0.0;
+    bool _3168;
+    if (_3162)
+    {
+        _3168 = ambient.contact.z > 0.0;
+    }
+    else
+    {
+        _3168 = _3162;
+    }
+    if (_3168 && (inside > 0.00999999977648258209228515625))
+    {
+        float3 param_20 = here;
+        float4 opening = throughWindow(param_20, ambient, indoorMap, indoorMapSmplr);
+        if (opening.x > 0.0)
+        {
+            float3 param_21 = opening.yzw;
+            float param_22 = jitter;
+            float param_23 = 0.20000000298023223876953125;
+            window = ((inside * onGround) * opening.x) * sunMarch(param_21, param_22, param_23, ambient, depthMap, depthMapSmplr, groundMap, groundMapSmplr, worldDepthMap, worldDepthMapSmplr, heightMap, heightMapSmplr).y;
+        }
+    }
+    float _3202;
+    if (ambient.sunLot.w > 0.0)
+    {
+        float3 param_24 = here;
+        _3202 = cloudLight(param_24, ambient);
+    }
+    else
+    {
+        _3202 = 1.0;
+    }
+    float sky = _3202;
+    window *= sky;
+    lit = mix(lit * sky, 1.0, inside);
+    float shadow = mix(1.0, lit, ambient.params.z);
+    float3 lampLight = float3(0.0);
+    int lampCount = int(ambient.lamp.x);
+    float reach = ambient.lamp.y;
+    bool sides = ambient.sunLot.w > 0.0;
+    float _3237;
+    if (sides)
+    {
+        float3 param_25 = here;
+        _3237 = indoors(param_25, ambient, indoorMap, indoorMapSmplr);
+    }
+    else
+    {
+        _3237 = 0.0;
+    }
+    float hereInside = _3237;
+    for (int index = 0; index < 16; index++)
+    {
+        if (index >= lampCount)
+        {
+            break;
+        }
+        float4 lamp = ambient.lamps[index];
+        float3 toLamp = float3(lamp.xy, lamp.z * 27.7128124237060546875) - p;
+        float _distance_1 = length(toLamp);
+        if (_distance_1 >= reach)
+        {
+            continue;
+        }
+        float sameSide = 1.0;
+        if (sides)
+        {
+            float2 param_26 = lamp.xy;
+            float param_27 = lamp.z;
+            bool param_28 = false;
+            float2 param_29 = ambient.frame.xy;
+            float3 lampLot = lotPoint(param_26, param_27, param_28, param_29);
+            float3 param_30 = lampLot - float3(0.0, 0.0, 0.5);
+            sameSide = 1.0 - abs(indoors(param_30, ambient, indoorMap, indoorMapSmplr) - hereInside);
+            if (sameSide <= 0.0)
+            {
+                continue;
+            }
+        }
+        float3 direction_2 = toLamp / float3(fast::max(_distance_1, 9.9999997473787516355514526367188e-05));
+        float falloff_1 = 1.0 - (_distance_1 / reach);
+        falloff_1 *= falloff_1;
+        float facing = fast::clamp((dot(normal, direction_2) * 0.60000002384185791015625) + 0.4000000059604644775390625, 0.0, 1.0);
+        float open = 1.0;
+        for (int i_3 = 1; i_3 < 8; i_3++)
+        {
+            float t_2 = ((float(i_3) - jitter) / 8.0) * _distance_1;
+            float3 q_1 = p + (direction_2 * t_2);
+            float2 samplePixel_2 = ambient.view.xy + (q_1.xy * scale);
+            bool _3371 = any(samplePixel_2 < float2(0.0));
+            bool _3380;
+            if (!_3371)
+            {
+                _3380 = samplePixel_2.x >= ambient.extent.x;
+            }
+            else
+            {
+                _3380 = _3371;
+            }
+            bool _3389;
+            if (!_3380)
+            {
+                _3389 = samplePixel_2.y >= ambient.extent.y;
+            }
+            else
+            {
+                _3389 = _3380;
+            }
+            if (_3389)
+            {
+                break;
+            }
+            float2 param_31 = samplePixel_2;
+            float h = positionAt(param_31, ambient, depthMap, depthMapSmplr, groundMap, groundMapSmplr).z - q_1.z;
+            if ((h > 2.0) && (h < thickness))
+            {
+                open = fast::min(open, 1.0 - fast::clamp((h - 2.0) / ((0.100000001490116119384765625 * t_2) + 3.0), 0.0, 1.0));
+            }
+        }
+        lampLight += (float3(1.0, 0.819999992847442626953125, 0.579999983310699462890625) * ((((lamp.w * falloff_1) * facing) * open) * sameSide));
+    }
+    float nightFactor = fast::clamp(ambient.weather.w, 0.0, 1.0);
+    float lowSun = 1.0 - smoothstep(0.119999997317790985107421875, 0.519999980926513671875, ambient.sunLot.z);
+    float3 dayWindowColor = mix(float3(1.0, 0.939999997615814208984375, 0.819999992847442626953125), float3(1.13999998569488525390625, 0.680000007152557373046875, 0.36000001430511474609375), float3(lowSun));
+    float3 moonWindowColor = float3(0.680000007152557373046875, 0.819999992847442626953125, 1.14999997615814208984375);
+    float3 windowColor = mix(dayWindowColor, moonWindowColor, float3(smoothstep(0.550000011920928955078125, 0.89999997615814208984375, nightFactor)));
+    float3 lamps = lampLight * ambient.lamp.z;
+    float outdoor = 1.0 - inside;
+    float keyWrap = dot(normal, fast::normalize(ambient.light.xyz + float3(0.0, 0.0, 9.9999997473787516355514526367188e-05)));
+    float shadowActive = fast::clamp(ambient.params.z * 1.7999999523162841796875, 0.0, 1.0);
+    float dirShade = 1.0 + ((((((keyWrap * 0.180000007152557373046875) - 0.039999999105930328369140625) * outdoor) * lit) * shadowActive) * (1.0 - (0.449999988079071044921875 * onGround)));
+    float sunBloom = 1.0 + ((((0.10999999940395355224609375 * (1.0 - nightFactor)) * lit) * outdoor) * shadowActive);
+    float3 light = ((float3(((shadow * dirShade) * sunBloom) * ambient.lamp.w) + lamps) + (windowColor * (ambient.contact.z * window))) * (occlusion * contact);
+    float daylight = fast::clamp((1.0 - nightFactor) * fast::clamp(ambient.params.z * 2.0, 0.0, 1.0), 0.0, 1.0);
+    float3 warmSun = mix(float3(1.09000003337860107421875, 1.0099999904632568359375, 0.910000026226043701171875), float3(1.2599999904632568359375, 0.86000001430511474609375, 0.579999983310699462890625), float3(lowSun));
+    float3 coolShade = mix(float3(0.839999973773956298828125, 0.939999997615814208984375, 1.17999994754791259765625), float3(0.7200000286102294921875, 0.839999973773956298828125, 1.2400000095367431640625), float3(lowSun));
+    float3 sunTint = mix(coolShade, warmSun, float3(lit));
+    sunTint /= float3(dot(sunTint, float3(0.2125999927520751953125, 0.715200006961822509765625, 0.072200000286102294921875)));
+    float3 tint = mix(float3(1.0), sunTint, float3((fast::clamp(ambient.tone.x, 0.0, 1.35000002384185791015625) * daylight) * outdoor));
+    float twilight = smoothstep(0.1500000059604644775390625, 0.519999980926513671875, nightFactor) * (1.0 - smoothstep(0.62000000476837158203125, 0.949999988079071044921875, nightFactor));
+    float3 blueHour = float3(0.8899211883544921875, 1.0011613368988037109375, 1.3126337528228759765625);
+    float lampShare = dot(lamps, float3(0.2125999927520751953125, 0.715200006961822509765625, 0.072200000286102294921875)) / ((ambient.lamp.w + dot(lamps, float3(0.2125999927520751953125, 0.715200006961822509765625, 0.072200000286102294921875))) + 9.9999997473787516355514526367188e-05);
+    tint = mix(tint, blueHour, float3((((twilight * outdoor) * ambient.tone.x) * 0.64999997615814208984375) * (1.0 - lampShare)));
+    float3 moonLit = float3(0.887847900390625, 1.004113674163818359375, 1.2894933223724365234375);
+    float3 moonShade = float3(0.857108414173126220703125, 0.996098995208740234375, 1.4594008922576904296875);
+    float3 moon = mix(moonShade, moonLit, float3(lit));
+    tint = mix(tint, moon, float3(((nightFactor * outdoor) * 0.680000007152557373046875) * (1.0 - lampShare)));
+    light *= tint;
+    bool _3670 = nightFactor > 0.0500000007450580596923828125;
+    bool _3676;
+    if (_3670)
+    {
+        _3676 = ambient.sunLot.w > 0.0;
+    }
+    else
+    {
+        _3676 = _3670;
+    }
+    bool _3682;
+    if (_3676)
+    {
+        _3682 = centre.w > 0.25;
+    }
+    else
+    {
+        _3682 = _3676;
+    }
+    if (_3682)
+    {
+        float3 param_32 = here;
+        float param_33 = onGround;
+        light += (float3(1.0, 0.819999992847442626953125, 0.579999983310699462890625) * (((occlusion * 1.0499999523162841796875) * nightFactor) * windowSpill(param_32, param_33, ambient, indoorMap, indoorMapSmplr, heightMap, heightMapSmplr)));
+    }
+    bool _3701 = ambient.weather.x > 0.60000002384185791015625;
+    bool _3708;
+    if (!_3701)
+    {
+        _3708 = ambient.seasonExtra2.z > 0.5;
+    }
+    else
+    {
+        _3708 = _3701;
+    }
+    bool _3715;
+    if (_3708)
+    {
+        _3715 = ambient.seasonExtra.z < 0.5;
+    }
+    else
+    {
+        _3715 = _3708;
+    }
+    if (_3715)
+    {
+        float lSlot = floor(ambient.weather.z / 7.0);
+        float _3727;
+        if (ambient.seasonExtra2.z > 0.5)
+        {
+            _3727 = 0.550000011920928955078125;
+        }
+        else
+        {
+            _3727 = (ambient.weather.x - 0.60000002384185791015625) * 1.60000002384185791015625;
+        }
+        float lChance = _3727;
+        float2 param_34 = float2(lSlot, 3.0);
+        float lStrikes = step(hash12(param_34), lChance);
+        float2 param_35 = float2(lSlot, 7.0);
+        float lDt = ((ambient.weather.z - (lSlot * 7.0)) - 1.0) - (4.0 * hash12(param_35));
+        float _3760;
+        if (lDt < 0.0)
+        {
+            _3760 = 0.0;
+        }
+        else
+        {
+            float _3770;
+            if (lDt < 0.180000007152557373046875)
+            {
+                _3770 = 0.0;
+            }
+            else
+            {
+                _3770 = 0.699999988079071044921875 * exp((-(lDt - 0.180000007152557373046875)) * 9.0);
+            }
+            _3760 = exp((-lDt) * 10.0) + _3770;
+        }
+        float lFlash = _3760;
+        lFlash = fast::clamp(lFlash * lStrikes, 0.0, 1.0);
+        light += ((float3(0.85000002384185791015625, 0.949999988079071044921875, 1.25) * occlusion) * ((lFlash * 0.75) * outdoor));
+    }
+    float _3803;
+    if (ambient.season.x > 1.5)
+    {
+        _3803 = 0.0;
+    }
+    else
+    {
+        float3 param_36 = here;
+        _3803 = (ambient.weather.y * outdoor) * architecturalExposure(param_36, ambient, overheadMap, overheadMapSmplr);
+    }
+    float wet = _3803;
+    float standing = 0.0;
+    if (wet > 0.0)
+    {
+        light *= mix(float3(1.0), float3(0.800000011920928955078125, 0.829999983310699462890625, 0.87999999523162841796875), float3(wet * mix(0.5, 1.0, onGround)));
+        if ((centre.w > 0.25) && (onGround > 0.5))
+        {
+            float2 param_37 = here.xy;
+            float2 source = lotSource(param_37, ambient);
+            float2 a = float2x2(float2(0.800000011920928955078125, 0.60000002384185791015625), float2(-0.60000002384185791015625, 0.800000011920928955078125)) * source;
+            float2 b = float2x2(float2(0.2800000011920928955078125, -0.959999978542327880859375), float2(0.959999978542327880859375, 0.2800000011920928955078125)) * source;
+            float2 param_38 = a / float2(1.2000000476837158203125);
+            float2 param_39 = (b / float2(0.60000002384185791015625)) + float2(13.0);
+            float field = (0.699999988079071044921875 * smoothNoise(param_38)) + (0.300000011920928955078125 * smoothNoise(param_39));
+            float level0 = 0.7799999713897705078125 - (0.100000001490116119384765625 * wet);
+            float puddle = smoothstep(level0, level0 + 0.039999999105930328369140625, field) * smoothstep(0.25, 0.5, wet);
+            light *= mix(float3(1.0), float3(0.959999978542327880859375, 1.019999980926513671875, 1.14999997615814208984375), float3(puddle));
+            standing = puddle;
+            if ((ambient.weather.x > 0.0) && (puddle > 0.00999999977648258209228515625))
+            {
+                float2 g = source * 3.0;
+                float2 id = floor(g);
+                float2 param_40 = id;
+                float2 param_41 = id + float2(7.099999904632568359375);
+                float2 drop = (id + float2(0.25)) + (float2(hash12(param_40), hash12(param_41)) * 0.5);
+                float2 param_42 = id + float2(3.7000000476837158203125);
+                float age = fract((ambient.weather.z * (0.800000011920928955078125 + (0.60000002384185791015625 * ambient.weather.x))) + hash12(param_42));
+                float r1 = (1.0 - smoothstep(0.0, 0.070000000298023223876953125, abs(length(g - drop) - (age * 0.449999988079071044921875)))) * (1.0 - age);
+                float age2 = fract(age + 0.5);
+                float r2 = ((1.0 - smoothstep(0.0, 0.0599999986588954925537109375, abs(length(g - drop) - (age2 * 0.4199999868869781494140625)))) * (1.0 - age2)) * 0.550000011920928955078125;
+                light *= (1.0 + (((0.75 * (r1 + r2)) * puddle) * ambient.weather.x));
+            }
+            else
+            {
+                light *= (1.0 + ((0.0599999986588954925537109375 * wet) * (1.0 - smoothstep(0.20000000298023223876953125, 0.60000002384185791015625, ambient.weather.w))));
+            }
+        }
+    }
+    float mode = ambient.extent.z;
+    if (mode > 12.5)
+    {
+        float3 param_43 = here;
+        float param_44 = onGround;
+        float3 param_45 = here;
+        out.color = float4(0.0, windowSpill(param_43, param_44, ambient, indoorMap, indoorMapSmplr, heightMap, heightMapSmplr), lampNear(param_45, ambient), 1.0);
+        return out;
+    }
+    if (mode > 11.5)
+    {
+        out.color = float4(float3(sky), 1.0);
+        return out;
+    }
+    if (mode > 10.5)
+    {
+        int2 param_46 = int2(floor(here.xy + float2(ambient.frame.w)));
+        int param_47 = 0;
+        int cellMask = maskAt(param_46, param_47, indoorMap, indoorMapSmplr);
+        out.color = float4(window, float(cellMask & 1) * 0.60000002384185791015625, inside * 0.5, 1.0);
+        return out;
+    }
+    if (mode > 9.5)
+    {
+        out.color = float4(litColumn, lit, litShell, 1.0);
+        return out;
+    }
+    if (mode > 8.5)
+    {
+        float2 gridSize_2 = float2(int2(heightMap.get_width(), heightMap.get_height()));
+        float top = (0.5 - heightMap.sample(heightMapSmplr, (((here.xy + float2(ambient.frame.w)) * ambient.frame.z) / gridSize_2)).x) * 64.0;
+        out.color = float4(fast::clamp(top / 6.0, 0.0, 1.0), fract(top), float(top < (-16.0)), 1.0);
+        return out;
+    }
+    if (mode > 7.5)
+    {
+        float depth = depthMap.read(uint2(int2(pixel)), 0).x;
+        float ground = groundMap.read(uint2(int2(pixel)), 0).x;
+        float _4130;
+        if (depth < 1.0)
+        {
+            _4130 = (0.89999997615814208984375 - depth) / 0.0030000000260770320892333984375;
+        }
+        else
+        {
+            _4130 = ((0.89999997615814208984375 - ground) / 0.0030000000260770320892333984375) + ambient.view.w;
+        }
+        float key_1 = _4130;
+        float2 param_48 = p.xy;
+        float param_49 = key_1;
+        bool param_50 = depth >= 1.0;
+        float2 param_51 = ambient.frame.xy;
+        float3 lot = lotPoint(param_48, param_49, param_50, param_51);
+        float2 grid = step(float2(0.89999997615814208984375), fract(lot.xy));
+        out.color = float4(grid, step(0.5, fract(lot.z)), 1.0);
+        float4 _4172 = out.color;
+        float3 param_52 = lot;
+        float3 _4180 = mix(_4172.xyz, float3(1.0, 0.800000011920928955078125, 0.20000000298023223876953125), float3(0.60000002384185791015625 * indoors(param_52, ambient, indoorMap, indoorMapSmplr)));
+        out.color.x = _4180.x;
+        out.color.y = _4180.y;
+        out.color.z = _4180.z;
+        return out;
+    }
+    if (mode > 6.5)
+    {
+        out.color = float4(float3(contact), 1.0);
+        return out;
+    }
+    if (mode > 5.5)
+    {
+        out.color = float4(fast::clamp(lampLight, float3(0.0), float3(1.0)), 1.0);
+        return out;
+    }
+    if (mode > 4.5)
+    {
+        float ground_1 = groundMap.read(uint2(int2(pixel)), 0).x;
+        float _4234;
+        if ((centre.w < 0.25) && (ground_1 < 1.0))
+        {
+            _4234 = ((0.89999997615814208984375 - depthMap.read(uint2(int2(pixel)), 0).x) - (0.89999997615814208984375 - ground_1)) / 0.0030000000260770320892333984375;
+        }
+        else
+        {
+            _4234 = 0.0;
+        }
+        float difference = _4234;
+        out.color = float4(fast::clamp(0.5 + (difference / 64.0), 0.0, 1.0), centre.w, float(ground_1 < 1.0), 1.0);
+        return out;
+    }
+    if (mode > 3.5)
+    {
+        out.color = float4(fract(p.z / 32.0), fract(p.z / 256.0), centre.w, 1.0);
+        return out;
+    }
+    if (mode > 2.5)
+    {
+        out.color = float4((normal * 0.5) + float3(0.5), 1.0);
+        return out;
+    }
+    if (mode > 1.5)
+    {
+        out.color = float4(float3(shadow), 1.0);
+        return out;
+    }
+    if (mode > 0.5)
+    {
+        out.color = float4(float3(occlusion * contact), 1.0);
+        return out;
+    }
+    out.color = float4(fast::clamp(light * 0.5, float3(0.0), float3(1.0)), 1.0 - standing);
+    return out;
+}

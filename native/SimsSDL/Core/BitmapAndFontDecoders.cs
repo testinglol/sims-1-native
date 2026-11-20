@@ -5,6 +5,7 @@ public sealed class SimsBitmap
     public int Width { get; }
     public int Height { get; }
     public byte[] Rgba { get; }
+    public bool HasAlpha { get; }
 
     public SimsBitmap(byte[] data)
     {
@@ -157,6 +158,23 @@ public sealed class SimsBitmap
 
             int stride = (int)strideLong;
             int bytesPerPixel = bits / 8;
+            bool useAlpha = false;
+            bool anyNonOpaque = false;
+            if (bits == 32)
+            {
+                for (int y = 0; y < height && (!useAlpha || !anyNonOpaque); y++)
+                {
+                    for (int x = 0; x < width; x++)
+                    {
+                        byte a = data[pixelOffset + y * stride + x * 4 + 3];
+                        if (a != 0) useAlpha = true;
+                        if (a != 255) anyNonOpaque = true;
+                        if (useAlpha && anyNonOpaque) break;
+                    }
+                }
+            }
+            HasAlpha = useAlpha && anyNonOpaque;
+
             for (int y = 0; y < height; y++)
             {
                 for (int x = 0; x < width; x++)
@@ -168,7 +186,8 @@ public sealed class SimsBitmap
                     }
                     else
                     {
-                        SetPixel(x, y, data[off + 2], data[off + 1], data[off], 255);
+                        byte alpha = useAlpha ? data[off + 3] : (byte)255;
+                        SetPixel(x, y, data[off + 2], data[off + 1], data[off], alpha);
                     }
                 }
             }
@@ -586,41 +605,76 @@ public static class SpritePixels
         return output;
     }
 
-    internal static byte[] DownsamplePremultipliedSrgbBox(ReadOnlySpan<byte> src, int srcWidth, int srcHeight)
+    internal static byte[] DownsamplePremultipliedSrgbBox(byte[] src, int srcWidth, int srcHeight)
     {
         int dstWidth = Math.Max(1, srcWidth >> 1);
         int dstHeight = Math.Max(1, srcHeight >> 1);
         byte[] dst = new byte[dstWidth * dstHeight * 4];
         float[] linear = SrgbToLinear;
+        byte[] toSrgb = LinearToSrgb;
+        bool hasOddRight = (dstWidth * 2 - 1) >= srcWidth;
+        int fastWidth = hasOddRight ? dstWidth - 1 : dstWidth;
 
-        for (int y = 0; y < dstHeight; y++)
+        void ProcessRow(int y)
         {
-            int sy0 = Math.Min(y * 2, srcHeight - 1);
-            int sy1 = Math.Min(sy0 + 1, srcHeight - 1);
-            int row0 = sy0 * srcWidth;
-            int row1 = sy1 * srcWidth;
-            int dstRow = y * dstWidth;
+            int sy0 = y * 2;
+            if (sy0 >= srcHeight) sy0 = srcHeight - 1;
+            int sy1 = sy0 + 1;
+            if (sy1 >= srcHeight) sy1 = srcHeight - 1;
+            int row0 = sy0 * srcWidth * 4;
+            int row1 = sy1 * srcWidth * 4;
+            int dstIdx = y * dstWidth * 4;
 
-            for (int x = 0; x < dstWidth; x++)
+            for (int x = 0; x < fastWidth; x++)
             {
-                int sx0 = Math.Min(x * 2, srcWidth - 1);
-                int sx1 = Math.Min(sx0 + 1, srcWidth - 1);
-
-                int p00 = (row0 + sx0) * 4;
-                int p10 = (row0 + sx1) * 4;
-                int p01 = (row1 + sx0) * 4;
-                int p11 = (row1 + sx1) * 4;
+                int xOff = x * 8;
+                int p00 = row0 + xOff;
+                int p10 = p00 + 4;
+                int p01 = row1 + xOff;
+                int p11 = p01 + 4;
 
                 float r = (linear[src[p00]] + linear[src[p10]] + linear[src[p01]] + linear[src[p11]]) * 0.25f;
                 float g = (linear[src[p00 + 1]] + linear[src[p10 + 1]] + linear[src[p01 + 1]] + linear[src[p11 + 1]]) * 0.25f;
                 float b = (linear[src[p00 + 2]] + linear[src[p10 + 2]] + linear[src[p01 + 2]] + linear[src[p11 + 2]]) * 0.25f;
                 int a = (src[p00 + 3] + src[p10 + 3] + src[p01 + 3] + src[p11 + 3] + 2) >> 2;
 
-                int outIdx = (dstRow + x) * 4;
-                dst[outIdx] = EncodeSrgb(r);
-                dst[outIdx + 1] = EncodeSrgb(g);
-                dst[outIdx + 2] = EncodeSrgb(b);
-                dst[outIdx + 3] = (byte)a;
+                dst[dstIdx] = toSrgb[(int)(r * 4095.0f + 0.5f)];
+                dst[dstIdx + 1] = toSrgb[(int)(g * 4095.0f + 0.5f)];
+                dst[dstIdx + 2] = toSrgb[(int)(b * 4095.0f + 0.5f)];
+                dst[dstIdx + 3] = (byte)a;
+                dstIdx += 4;
+            }
+
+            if (hasOddRight)
+            {
+                int sx0 = Math.Min(fastWidth * 2, srcWidth - 1);
+                int sx1 = Math.Min(sx0 + 1, srcWidth - 1);
+                int p00 = row0 + sx0 * 4;
+                int p10 = row0 + sx1 * 4;
+                int p01 = row1 + sx0 * 4;
+                int p11 = row1 + sx1 * 4;
+
+                float r = (linear[src[p00]] + linear[src[p10]] + linear[src[p01]] + linear[src[p11]]) * 0.25f;
+                float g = (linear[src[p00 + 1]] + linear[src[p10 + 1]] + linear[src[p01 + 1]] + linear[src[p11 + 1]]) * 0.25f;
+                float b = (linear[src[p00 + 2]] + linear[src[p10 + 2]] + linear[src[p01 + 2]] + linear[src[p11 + 2]]) * 0.25f;
+                int a = (src[p00 + 3] + src[p10 + 3] + src[p01 + 3] + src[p11 + 3] + 2) >> 2;
+
+                dst[dstIdx] = toSrgb[(int)(r * 4095.0f + 0.5f)];
+                dst[dstIdx + 1] = toSrgb[(int)(g * 4095.0f + 0.5f)];
+                dst[dstIdx + 2] = toSrgb[(int)(b * 4095.0f + 0.5f)];
+                dst[dstIdx + 3] = (byte)a;
+            }
+        }
+
+        if (dstHeight >= 64 && (long)dstWidth * dstHeight >= 16384)
+        {
+            Parallel.For(0, dstHeight, ProcessRow);
+        }
+        else
+        {
+            for (int y = 0; y < dstHeight; y++)
+            {
+                ProcessRow(y);
             }
         }
 
@@ -838,9 +892,11 @@ public sealed class SimsBitmapFont
             }
 
             float prevCov = first > 0 ? rowMax[first - 1] : 0f;
-            float yTop = g.OffsetY + first + (rowMax[first] > prevCov + 1e-4f ? (halfPeak - rowMax[first]) / (rowMax[first] - prevCov) : 0f);
+            float topFrac = rowMax[first] > prevCov + 1e-4f ? (rowMax[first] - halfPeak) / (rowMax[first] - prevCov) : 0.5f;
+            float yTop = g.OffsetY + first + 0.5f - topFrac;
             float nextCov = last + 1 < g.Height ? rowMax[last + 1] : 0f;
-            float yBot = g.OffsetY + last + 1f - (rowMax[last] > nextCov + 1e-4f ? (halfPeak - rowMax[last]) / (rowMax[last] - nextCov) : 0f);
+            float botFrac = rowMax[last] > nextCov + 1e-4f ? (rowMax[last] - halfPeak) / (rowMax[last] - nextCov) : 0.5f;
+            float yBot = g.OffsetY + last + 0.5f + botFrac;
             span = MathF.Max(2f, yBot - yTop);
             bottom = yBot;
             return true;
@@ -991,8 +1047,26 @@ public sealed class SimsBitmapFont
         return ResolveGlyph(character)?.Advance ?? SpaceAdvance;
     }
 
-    private TrueTypeFont? ActiveTrueTypeFont =>
-        _bold ? TrueTypeFont.DefaultBold : TrueTypeFont.DefaultRegular;
+    private TrueTypeFont? ActiveTrueTypeFont
+    {
+        get
+        {
+            bool useBold = _bold
+                || (_capInkSpanPx > 0f && _stemWidthPx / _capInkSpanPx >= 0.155f);
+            return useBold ? TrueTypeFont.DefaultBold : TrueTypeFont.DefaultRegular;
+        }
+    }
+
+    private float TrueTypeErodePx(TrueTypeFont ttf)
+    {
+        // Match the slightly fuller optical stroke weight of 1x Windows GDI bitmap fonts at small sizes
+        // smoothly across all font sizes without switching abruptly to heavy Bold.
+        float targetExtraStemPx = Math.Clamp((15.0f - _capInkSpanPx) * 0.042f, 0f, 0.34f);
+        return -Math.Clamp(targetExtraStemPx * HiDpiScale * 0.5f, 0f, 0.65f);
+    }
+
+    private static uint MapTrueTypeCode(char ch, TrueTypeFont ttf) =>
+        ch == '$' && ttf.HasGlyph(0xA7) ? 0xA7u : ch;
 
     private int BitmapTextWidth(string text)
     {
@@ -1009,7 +1083,8 @@ public sealed class SimsBitmapFont
 
         float pxPerUnit = (_capInkSpanPx * HiDpiScale) / Math.Max(1f, ttf.CapInkSpanUnits);
         float leadPadPx = 0f;
-        if (text[0] != ' ' && ttf.HorizontalInkBounds(text[0]) is var (firstLeftU, _) && firstLeftU < 0f)
+        uint firstCode = MapTrueTypeCode(text[0], ttf);
+        if (text[0] != ' ' && ttf.HorizontalInkBounds(firstCode) is var (firstLeftU, _) && firstLeftU < 0f)
             leadPadPx = -firstLeftU * pxPerUnit;
 
         float cursorPx = leadPadPx;
@@ -1017,7 +1092,7 @@ public sealed class SimsBitmapFont
         uint prevCode = 0;
         foreach (char ch in text)
         {
-            uint code = ch;
+            uint code = MapTrueTypeCode(ch, ttf);
             if (prevCode != 0 && ttf.HasGlyph(prevCode) && ttf.HasGlyph(code))
                 cursorPx += ttf.GetKerningUnits(prevCode, code) * pxPerUnit;
 
@@ -1191,6 +1266,7 @@ public sealed class SimsBitmapFont
         if (ttf is not null)
         {
             float pxPerUnit = (_capInkSpanPx * HiDpiScale) / Math.Max(1f, ttf.CapInkSpanUnits);
+            float erodePx = TrueTypeErodePx(ttf);
             float baselineY = (logicalMargin + _capBottomPx) * HiDpiScale + ttf.CapBottomUnits * pxPerUnit;
             var (_, leadPadPx) = MeasureTrueTypePixels(text, ttf);
             float cursorPx = logicalMargin * HiDpiScale + leadPadPx;
@@ -1198,7 +1274,7 @@ public sealed class SimsBitmapFont
 
             foreach (char ch in text)
             {
-                uint code = ch;
+                uint code = MapTrueTypeCode(ch, ttf);
                 if (prevCode != 0 && ttf.HasGlyph(prevCode) && ttf.HasGlyph(code))
                     cursorPx += ttf.GetKerningUnits(prevCode, code) * pxPerUnit;
 
@@ -1208,7 +1284,7 @@ public sealed class SimsBitmapFont
                 }
                 else if (ttf.HasGlyph(code))
                 {
-                    cursorPx += ttf.RenderGlyph(ch, cursorPx, baselineY, pxPerUnit, color, output, pixelW, pixelH, erodePx: 0f);
+                    cursorPx += ttf.RenderGlyph(code, cursorPx, baselineY, pxPerUnit, color, output, pixelW, pixelH, erodePx: erodePx);
                 }
                 else if (ResolveGlyph((ushort)ch) is Glyph fallbackGlyph)
                 {

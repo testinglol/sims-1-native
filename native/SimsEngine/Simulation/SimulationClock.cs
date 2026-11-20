@@ -24,6 +24,12 @@ public sealed class SimulationClock
         Second = Math.Clamp(second, 0, 59);
     }
 
+    public void RestoreProgress(int ticks, int day)
+    {
+        Ticks = Math.Max(0, ticks);
+        Day = Math.Max(0, day);
+    }
+
     public ClockTickResult Tick(bool advanceGameTime) => Tick(advanceGameTime, simulationTickCompleted: advanceGameTime);
 
     /// <summary>Advances the simulator's completed-pass counter after every object update pass even when

@@ -398,7 +398,7 @@ public sealed class OriginalHouseholdCreationOverlay
     private bool CanFinishSim => HasSimName && _draft.HeadChoice is not null && _draft.BodyChoice is not null;
     private bool CanAddMember => _members.Count < 8 && HasFamilyName;
     private bool CanModifyMember => _selectedMember >= 0 && _selectedMember < _members.Count;
-    private bool CanFinishFamily => _members.Count > 0 && HasFamilyName;
+    private bool CanFinishFamily => _members.Any(static m => !m.Child) && HasFamilyName;
 
     public IReadOnlyList<DrawItem> DrawItems(CGSize canvas, float uiScale = 1f)
     {
@@ -866,17 +866,10 @@ public sealed class OriginalHouseholdCreationOverlay
         CGSize panelSize = new(800.0 * factor, 600.0 * factor);
         CGPoint panelAnchor = new(_rolloverTipAnchor.X * factor, _rolloverTipAnchor.Y * factor);
         CGRect rect = PlacementTooltip.Rect(scaledSize, panelAnchor, panelSize).OffsetBy(left, top);
-        if (progress >= 1.0)
-        {
-            return new DrawItem(image, rect);
-        }
-
-        double height = Math.Max(1.0, Math.Round(rect.Height * progress, MidpointRounding.AwayFromZero));
-        float fraction = (float)Math.Clamp(height / rect.Height, 0.0, 1.0);
+        double lift = (1.0 - progress) * 2.0 * factor;
         return new DrawItem(
             image,
-            new CGRect(rect.MinX, rect.MaxY - height, rect.Width, height),
-            new Vector4(0f, 1f - fraction, 1f, fraction));
+            new CGRect(rect.MinX, rect.MinY + lift, rect.Width, rect.Height));
     }
 
     public IReadOnlyList<(string Label, CGRect Rect)> Controls(CGSize canvas, float uiScale = 1f)
@@ -1132,6 +1125,7 @@ public sealed class OriginalHouseholdCreationOverlay
                 _editingMember = _selectedMember;
                 _field = Field.Sim;
                 _caretOffset = TextElementCount(_draft.Name);
+                _appearanceCatalog = null;
                 RequestCurrentAppearance(appearanceCatalog);
                 return;
             }

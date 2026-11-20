@@ -310,27 +310,38 @@ fragment main0_out main0(main0_in in [[stage_in]], texture2d<float> art [[textur
         }
         sampled = (((c00 * w00) + (c10 * w10)) + (c01 * w01)) + (c11 * w11);
     }
+    float maxTapA = fast::max(fast::max(c00.w, c10.w), fast::max(c01.w, c11.w));
+    float _886;
+    if (maxTapA >= in.inDepthInterval.z)
+    {
+        _886 = fast::min(in.inDepthInterval.z, 0.4900000095367431640625);
+    }
+    else
+    {
+        _886 = in.inDepthInterval.z;
+    }
+    float coreCutoff = _886;
     bool isEdgePass = in.inDepthInterval.w > 1.5;
     if (isEdgePass)
     {
-        bool _882 = sampled.w >= in.inDepthInterval.z;
-        bool _889;
-        if (!_882)
+        bool _909 = sampled.w >= coreCutoff;
+        bool _916;
+        if (!_909)
         {
-            _889 = sampled.w < 0.0039215688593685626983642578125;
+            _916 = sampled.w < 0.0039215688593685626983642578125;
         }
         else
         {
-            _889 = _882;
+            _916 = _909;
         }
-        if (_889)
+        if (_916)
         {
             discard_fragment();
         }
     }
     else
     {
-        if (sampled.w < in.inDepthInterval.z)
+        if (sampled.w < coreCutoff)
         {
             discard_fragment();
         }
@@ -351,17 +362,17 @@ fragment main0_out main0(main0_in in [[stage_in]], texture2d<float> art [[textur
     float minValidD = 2.0;
     float maxValidD = -1.0;
     float minCoreD = 2.0;
-    bool _945 = d00 < 1.0;
-    bool _951;
-    if (_945)
+    bool _971 = d00 < 1.0;
+    bool _977;
+    if (_971)
     {
-        _951 = c00.w > 0.0;
+        _977 = c00.w > 0.0;
     }
     else
     {
-        _951 = _945;
+        _977 = _971;
     }
-    if (_951)
+    if (_977)
     {
         minValidD = fast::min(minValidD, d00);
         maxValidD = fast::max(maxValidD, d00);
@@ -370,17 +381,17 @@ fragment main0_out main0(main0_in in [[stage_in]], texture2d<float> art [[textur
             minCoreD = fast::min(minCoreD, d00);
         }
     }
-    bool _969 = d10 < 1.0;
-    bool _975;
-    if (_969)
+    bool _995 = d10 < 1.0;
+    bool _1001;
+    if (_995)
     {
-        _975 = c10.w > 0.0;
+        _1001 = c10.w > 0.0;
     }
     else
     {
-        _975 = _969;
+        _1001 = _995;
     }
-    if (_975)
+    if (_1001)
     {
         minValidD = fast::min(minValidD, d10);
         maxValidD = fast::max(maxValidD, d10);
@@ -389,17 +400,17 @@ fragment main0_out main0(main0_in in [[stage_in]], texture2d<float> art [[textur
             minCoreD = fast::min(minCoreD, d10);
         }
     }
-    bool _993 = d01 < 1.0;
-    bool _999;
-    if (_993)
+    bool _1019 = d01 < 1.0;
+    bool _1025;
+    if (_1019)
     {
-        _999 = c01.w > 0.0;
+        _1025 = c01.w > 0.0;
     }
     else
     {
-        _999 = _993;
+        _1025 = _1019;
     }
-    if (_999)
+    if (_1025)
     {
         minValidD = fast::min(minValidD, d01);
         maxValidD = fast::max(maxValidD, d01);
@@ -408,17 +419,17 @@ fragment main0_out main0(main0_in in [[stage_in]], texture2d<float> art [[textur
             minCoreD = fast::min(minCoreD, d01);
         }
     }
-    bool _1017 = d11 < 1.0;
-    bool _1023;
-    if (_1017)
+    bool _1043 = d11 < 1.0;
+    bool _1049;
+    if (_1043)
     {
-        _1023 = c11.w > 0.0;
+        _1049 = c11.w > 0.0;
     }
     else
     {
-        _1023 = _1017;
+        _1049 = _1043;
     }
-    if (_1023)
+    if (_1049)
     {
         minValidD = fast::min(minValidD, d11);
         maxValidD = fast::max(maxValidD, d11);
@@ -442,110 +453,110 @@ fragment main0_out main0(main0_in in [[stage_in]], texture2d<float> art [[textur
         float nearD = depthMap.read(uint2(nearCoord), 0).x;
         if ((maxValidD - minValidD) <= 0.01568627543747425079345703125)
         {
-            bool _1083 = d00 < 1.0;
-            bool _1089;
-            if (_1083)
+            bool _1109 = d00 < 1.0;
+            bool _1115;
+            if (_1109)
             {
-                _1089 = c00.w > 0.0;
+                _1115 = c00.w > 0.0;
             }
             else
             {
-                _1089 = _1083;
+                _1115 = _1109;
             }
-            float _1090;
-            if (_1089)
+            float _1116;
+            if (_1115)
             {
-                _1090 = ((1.0 - f.x) * (1.0 - f.y)) * c00.w;
+                _1116 = ((1.0 - f.x) * (1.0 - f.y)) * c00.w;
             }
             else
             {
-                _1090 = 0.0;
+                _1116 = 0.0;
             }
-            float dw00 = _1090;
-            bool _1107 = d10 < 1.0;
-            bool _1113;
-            if (_1107)
+            float dw00 = _1116;
+            bool _1133 = d10 < 1.0;
+            bool _1139;
+            if (_1133)
             {
-                _1113 = c10.w > 0.0;
+                _1139 = c10.w > 0.0;
             }
             else
             {
-                _1113 = _1107;
+                _1139 = _1133;
             }
-            float _1114;
-            if (_1113)
+            float _1140;
+            if (_1139)
             {
-                _1114 = (f.x * (1.0 - f.y)) * c10.w;
+                _1140 = (f.x * (1.0 - f.y)) * c10.w;
             }
             else
             {
-                _1114 = 0.0;
+                _1140 = 0.0;
             }
-            float dw10 = _1114;
-            bool _1130 = d01 < 1.0;
-            bool _1136;
-            if (_1130)
+            float dw10 = _1140;
+            bool _1156 = d01 < 1.0;
+            bool _1162;
+            if (_1156)
             {
-                _1136 = c01.w > 0.0;
+                _1162 = c01.w > 0.0;
             }
             else
             {
-                _1136 = _1130;
+                _1162 = _1156;
             }
-            float _1137;
-            if (_1136)
+            float _1163;
+            if (_1162)
             {
-                _1137 = ((1.0 - f.x) * f.y) * c01.w;
+                _1163 = ((1.0 - f.x) * f.y) * c01.w;
             }
             else
             {
-                _1137 = 0.0;
+                _1163 = 0.0;
             }
-            float dw01 = _1137;
-            bool _1153 = d11 < 1.0;
-            bool _1159;
-            if (_1153)
+            float dw01 = _1163;
+            bool _1179 = d11 < 1.0;
+            bool _1185;
+            if (_1179)
             {
-                _1159 = c11.w > 0.0;
+                _1185 = c11.w > 0.0;
             }
             else
             {
-                _1159 = _1153;
+                _1185 = _1179;
             }
-            float _1160;
-            if (_1159)
+            float _1186;
+            if (_1185)
             {
-                _1160 = (f.x * f.y) * c11.w;
+                _1186 = (f.x * f.y) * c11.w;
             }
             else
             {
-                _1160 = 0.0;
+                _1186 = 0.0;
             }
-            float dw11 = _1160;
+            float dw11 = _1186;
             float dwSum = ((dw00 + dw10) + dw01) + dw11;
-            float _1184;
+            float _1210;
             if (dwSum > 9.9999997473787516355514526367188e-06)
             {
-                _1184 = ((((d00 * dw00) + (d10 * dw10)) + (d01 * dw01)) + (d11 * dw11)) / dwSum;
+                _1210 = ((((d00 * dw00) + (d10 * dw10)) + (d01 * dw01)) + (d11 * dw11)) / dwSum;
             }
             else
             {
-                _1184 = minValidD;
+                _1210 = minValidD;
             }
-            resolvedDepth = _1184;
+            resolvedDepth = _1210;
         }
         else
         {
-            float _1210;
+            float _1236;
             if (nearD < 1.0)
             {
-                _1210 = nearD;
+                _1236 = nearD;
             }
             else
             {
-                _1210 = (minCoreD < 1.0) ? minCoreD : minValidD;
+                _1236 = (minCoreD < 1.0) ? minCoreD : minValidD;
             }
-            resolvedDepth = _1210;
+            resolvedDepth = _1236;
         }
     }
     float fragZ = mix(in.inDepthInterval.x, in.inDepthInterval.y, (resolvedDepth * 255.0) / 254.0);

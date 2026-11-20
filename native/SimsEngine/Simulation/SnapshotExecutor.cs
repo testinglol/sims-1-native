@@ -9,7 +9,8 @@ internal static class SnapshotExecutor
         ArgumentNullException.ThrowIfNull(me);
         var x = position.X >> 4;
         var y = position.Y >> 4;
-        if (!bypassPlacementChecks && (x <= 0 || y <= 0 || x >= LotGeometry.LotDimension - 1 || y >= LotGeometry.LotDimension - 1))
+        var size = world.ActiveLotDimension;
+        if (!bypassPlacementChecks && (x <= 0 || y <= 0 || x >= size - 1 || y >= size - 1))
         {
             world.LastPlacementFailureCode = 1;
             return PrimitiveResult.False;
@@ -18,7 +19,7 @@ internal static class SnapshotExecutor
             return PrimitiveResult.False;
         if (!bypassPlacementChecks && !SameRoomAndUnblocked(world, map, me, position)) return PrimitiveResult.False;
 
-        if (!world.CanPlaceRouteCandidate(me, position, null))
+        if (!world.CanPlaceRouteCandidate(me, position, null, checkStack: checkStack))
             return PrimitiveResult.False;
         world.PlaceObject(me, position, checkStack);
         me[ObjectData.Direction] = (short)(directionMask & 7);
@@ -34,7 +35,8 @@ internal static class SnapshotExecutor
         ArgumentNullException.ThrowIfNull(target);
         var x = position.X >> 4;
         var y = position.Y >> 4;
-        if (x <= 0 || y <= 0 || x >= LotGeometry.LotDimension - 1 || y >= LotGeometry.LotDimension - 1)
+        var size = world.ActiveLotDimension;
+        if (x <= 0 || y <= 0 || x >= size - 1 || y >= size - 1)
             return PrimitiveResult.False;
         if (!world.LotRoomMaps.TryGetValue(position.Height, out var map))
             return PrimitiveResult.False;
@@ -63,7 +65,8 @@ internal static class SnapshotExecutor
         {
             var targetX = target.Position.X >> 4;
             var targetY = target.Position.Y >> 4;
-            if (targetX <= 0 || targetY <= 0 || targetX >= LotGeometry.LotDimension - 1 || targetY >= LotGeometry.LotDimension - 1)
+            var size = world.ActiveLotDimension;
+            if (targetX <= 0 || targetY <= 0 || targetX >= size - 1 || targetY >= size - 1)
             {
                 world.LastPlacementFailureCode = 1;
                 return PrimitiveResult.False;
@@ -124,7 +127,8 @@ internal static class SnapshotExecutor
             return false;
         var fromX = me.Position.X >> 4;
         var fromY = me.Position.Y >> 4;
-        if (fromX <= 0 || fromY <= 0 || fromX >= LotGeometry.LotDimension - 1 || fromY >= LotGeometry.LotDimension - 1)
+        var size = world.ActiveLotDimension;
+        if (fromX <= 0 || fromY <= 0 || fromX >= size - 1 || fromY >= size - 1)
             return true;
         if (me.Position.X == destination.X && me.Position.Y == destination.Y) return true;
 

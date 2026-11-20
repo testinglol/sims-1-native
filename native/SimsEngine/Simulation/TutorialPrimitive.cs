@@ -43,6 +43,7 @@ public static class TutorialPrimitive
                     record.State = 5;
                     record.Visible = false;
                 }
+                world.SyncGenericSimsCall03DialogHandle();
             }
         }
         world.TutorialOwner = owner;

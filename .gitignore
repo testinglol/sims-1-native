@@ -35,7 +35,9 @@ __pycache__/
 /expansions/
 /patches/
 /examples/
-/packs/
+/packs/*
+!/packs/lighting/
+!/packs/seasons/
 /.agents/
 /.claude/
 /AGENTS.md

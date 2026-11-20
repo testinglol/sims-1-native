@@ -13,6 +13,7 @@ namespace SimsSimulation;
 /// </summary>
 internal sealed class PanelImages(string directory, ObjectRegistry registry)
 {
+    public void SetRegistry(ObjectRegistry updated) => registry = updated;
     private static readonly ResourceType Bmp = ResourceType.Parse("BMP_");
     private static readonly ResourceType Spr2 = ResourceType.Spr2;
     private static readonly ResourceType Spr = ResourceType.Spr1;

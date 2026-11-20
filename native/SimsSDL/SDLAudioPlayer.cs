@@ -8,7 +8,8 @@ internal sealed class AudioMixer
     public struct Voice
     {
         public float[] Samples;
-        public int Frame;
+        public double FramePosition;
+        public float PitchScale;
         public float Left;
         public float Right;
         public bool Loop;
@@ -17,10 +18,13 @@ internal sealed class AudioMixer
         public float LowLeft;
         public float LowRight;
 
+        public readonly int Frame => (int)FramePosition;
+
         public Voice(float[] samples)
         {
             Samples = samples;
-            Frame = 0;
+            FramePosition = 0.0;
+            PitchScale = 1f;
             Left = 1f;
             Right = 1f;
             Loop = false;
@@ -63,10 +67,15 @@ internal sealed class AudioMixer
     {
         lock (_lock)
         {
+            _ended.RemoveAll(e => e == id);
             if (voice is Voice value)
+            {
                 _voices[id] = value;
+            }
             else
+            {
                 _voices.Remove(id);
+            }
         }
     }
 
@@ -89,11 +98,11 @@ internal sealed class AudioMixer
         }
     }
 
-    public long? EvictIfFull(int limit, long protectedVoice)
+    public long? EvictIfFull(int limit, long protectedVoice, long? incomingVoice = null)
     {
         lock (_lock)
         {
-            if (_voices.Count < limit)
+            if (_voices.Count < limit || (incomingVoice is long incoming && _voices.ContainsKey(incoming)))
                 return null;
 
             long? nonLoopMin = null;
@@ -153,57 +162,138 @@ internal sealed class AudioMixer
                 float[] source = voice.Samples;
                 int total = source.Length / 2;
                 if (total <= 0)
-                    continue;
-
-                int written = 0;
-                while (written < frames)
                 {
-                    if (voice.Frame >= total)
+                    if (!voice.Loop)
                     {
-                        if (!voice.Loop)
-                            break;
-                        voice.Frame = 0;
+                        _voices.Remove(id);
+                        _ended.Add(id);
                     }
+                    continue;
+                }
 
-                    int run = Math.Min(frames - written, total - voice.Frame);
-                    if (voice.Outdoors && _muffleCoefficient < 1f)
+                double step = float.IsFinite(voice.PitchScale) && voice.PitchScale > 0f
+                    ? Math.Clamp(voice.PitchScale, 0.0625, 4.0)
+                    : 1.0;
+
+                if (Math.Abs(step - 1.0) < 1e-6 &&
+                    Math.Abs(voice.FramePosition - Math.Floor(voice.FramePosition)) < 1e-6)
+                {
+                    int frame = (int)voice.FramePosition;
+                    int written = 0;
+                    while (written < frames)
                     {
-                        float a = _muffleCoefficient;
-                        float leftGain = voice.Left * _muffleGain;
-                        float rightGain = voice.Right * _muffleGain;
-                        float low0 = voice.LowLeft;
-                        float low1 = voice.LowRight;
+                        if (frame >= total)
+                        {
+                            if (!voice.Loop)
+                                break;
+                            frame = 0;
+                        }
+
+                        int run = Math.Min(frames - written, total - frame);
+                        if (voice.Outdoors && _muffleCoefficient < 1f)
+                        {
+                            float a = _muffleCoefficient;
+                            float leftGain = voice.Left * _muffleGain;
+                            float rightGain = voice.Right * _muffleGain;
+                            float low0 = voice.LowLeft;
+                            float low1 = voice.LowRight;
+                            for (int offset = 0; offset < run; offset++)
+                            {
+                                int input = (frame + offset) * 2;
+                                int output = (written + offset) * 2;
+                                low0 += a * (source[input] - low0);
+                                low1 += a * (source[input + 1] - low1);
+                                _scratch[output] += low0 * leftGain;
+                                _scratch[output + 1] += low1 * rightGain;
+                            }
+                            voice.LowLeft = low0;
+                            voice.LowRight = low1;
+                            frame += run;
+                            written += run;
+                            continue;
+                        }
+
                         for (int offset = 0; offset < run; offset++)
                         {
-                            int input = (voice.Frame + offset) * 2;
+                            int input = (frame + offset) * 2;
                             int output = (written + offset) * 2;
-                            low0 += a * (source[input] - low0);
-                            low1 += a * (source[input + 1] - low1);
+                            _scratch[output] += source[input] * voice.Left;
+                            _scratch[output + 1] += source[input + 1] * voice.Right;
+                        }
+                        frame += run;
+                        written += run;
+                    }
+
+                    if (frame >= total && voice.Loop)
+                    {
+                        frame = 0;
+                    }
+                    voice.FramePosition = frame;
+                    if (frame >= total && !voice.Loop)
+                    {
+                        _voices.Remove(id);
+                        _ended.Add(id);
+                    }
+                }
+                else
+                {
+                    double pos = voice.FramePosition;
+                    bool muffle = voice.Outdoors && _muffleCoefficient < 1f;
+                    float a = _muffleCoefficient;
+                    float leftGain = muffle ? voice.Left * _muffleGain : voice.Left;
+                    float rightGain = muffle ? voice.Right * _muffleGain : voice.Right;
+                    float low0 = voice.LowLeft;
+                    float low1 = voice.LowRight;
+
+                    for (int written = 0; written < frames; written++)
+                    {
+                        if (pos >= total)
+                        {
+                            if (!voice.Loop)
+                                break;
+                            pos -= Math.Floor(pos / total) * total;
+                        }
+
+                        int f0 = (int)pos;
+                        float frac = (float)(pos - f0);
+                        int f1 = (f0 + 1 < total) ? f0 + 1 : (voice.Loop ? 0 : f0);
+                        int i0 = f0 * 2;
+                        int i1 = f1 * 2;
+                        float sL = source[i0] + (source[i1] - source[i0]) * frac;
+                        float sR = source[i0 + 1] + (source[i1 + 1] - source[i0 + 1]) * frac;
+                        int output = written * 2;
+
+                        if (muffle)
+                        {
+                            low0 += a * (sL - low0);
+                            low1 += a * (sR - low1);
                             _scratch[output] += low0 * leftGain;
                             _scratch[output + 1] += low1 * rightGain;
                         }
-                        voice.LowLeft = low0;
-                        voice.LowRight = low1;
-                        voice.Frame += run;
-                        written += run;
-                        continue;
+                        else
+                        {
+                            _scratch[output] += sL * leftGain;
+                            _scratch[output + 1] += sR * rightGain;
+                        }
+
+                        pos += step;
                     }
 
-                    for (int offset = 0; offset < run; offset++)
+                    voice.LowLeft = low0;
+                    voice.LowRight = low1;
+                    voice.FramePosition = pos;
+                    if (voice.FramePosition >= total)
                     {
-                        int input = (voice.Frame + offset) * 2;
-                        int output = (written + offset) * 2;
-                        _scratch[output] += source[input] * voice.Left;
-                        _scratch[output + 1] += source[input + 1] * voice.Right;
+                        if (voice.Loop)
+                        {
+                            voice.FramePosition -= Math.Floor(voice.FramePosition / total) * total;
+                        }
+                        else
+                        {
+                            _voices.Remove(id);
+                            _ended.Add(id);
+                        }
                     }
-                    voice.Frame += run;
-                    written += run;
-                }
-
-                if (voice.Frame >= total && !voice.Loop)
-                {
-                    _voices.Remove(id);
-                    _ended.Add(id);
                 }
             }
 
@@ -232,6 +322,7 @@ public sealed class SDLAudioPlayer : IDisposable
     private long _nextAmbientOffset;
     private readonly Dictionary<string, float[]> _cache = new(StringComparer.Ordinal);
     private readonly Queue<string> _cacheOrder = new();
+    private float _ambientMasterVolume = 1f;
     private GCHandle _mixerHandle;
     private nint _stream;
     private bool _audioSubSystemInitialized;
@@ -385,7 +476,7 @@ public sealed class SDLAudioPlayer : IDisposable
                     }
                 }
 
-                if (_mixer.EvictIfFull(256, LoadLoopVoice) is long evicted)
+                if (_mixer.EvictIfFull(256, LoadLoopVoice, id) is long evicted)
                 {
                     _events.Remove(evicted);
                     Ended?.Invoke(evicted);
@@ -430,7 +521,22 @@ public sealed class SDLAudioPlayer : IDisposable
         voice.Left = volume * (pan > 0f ? 1f - pan : 1f);
         voice.Right = volume * (pan < 0f ? 1f + pan : 1f);
         voice.Loop = evt.Loop == true;
-        voice.Outdoors = evt.Group == "AMBIENCE" || evt.Spatial == true;
+        voice.Outdoors = evt.Group == "AMBIENCE";
+        voice.PitchScale = evt.PitchScale is float pitch && float.IsFinite(pitch) && pitch > 0f
+            ? Math.Clamp(pitch, 0.0625f, 4f)
+            : 1f;
+    }
+
+    public void SetAmbientMasterVolume(float volume)
+    {
+        if (!float.IsFinite(volume)) return;
+        float clamped = Math.Clamp(volume, 0f, 1f);
+        _ambientMasterVolume = clamped;
+        foreach (var entry in _ambient.Values)
+        {
+            float scaled = entry.Gain * clamped;
+            _mixer.Update(entry.Id, (ref AudioMixer.Voice v) => { v.Left = scaled; v.Right = scaled; });
+        }
     }
 
     public void SetEnvironmentAudio(float gain, float cutoff)
@@ -455,8 +561,10 @@ public sealed class SDLAudioPlayer : IDisposable
     {
         foreach (long id in _mixer.TakeEnded())
         {
-            _events.Remove(id);
-            Ended?.Invoke(id);
+            if (_events.Remove(id))
+            {
+                Ended?.Invoke(id);
+            }
         }
     }
 
@@ -515,7 +623,8 @@ public sealed class SDLAudioPlayer : IDisposable
                 if (MathF.Abs(blended - existing.Gain) > 0.001f)
                 {
                     _ambient[cue] = (existing.Id, path, blended);
-                    _mixer.Update(existing.Id, (ref AudioMixer.Voice v) => { v.Left = blended; v.Right = blended; v.Paused = false; });
+                    float scaled = blended * _ambientMasterVolume;
+                    _mixer.Update(existing.Id, (ref AudioMixer.Voice v) => { v.Left = scaled; v.Right = scaled; v.Paused = false; });
                 }
                 continue;
             }
@@ -532,10 +641,11 @@ public sealed class SDLAudioPlayer : IDisposable
                     _mixer.Set(existing.Id, null);
                 long id = AmbientVoiceBase + (_nextAmbientOffset++ & 0xFFFF);
                 float initial = Math.Min(targetGain, 0.2f * targetGain);
+                float scaledInitial = initial * _ambientMasterVolume;
                 var voice = new AudioMixer.Voice(samples)
                 {
-                    Left = initial,
-                    Right = initial,
+                    Left = scaledInitial,
+                    Right = scaledInitial,
                     Loop = true,
                     Outdoors = true,
                     Paused = false,

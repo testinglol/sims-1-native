@@ -390,6 +390,46 @@ public sealed class ClientInstallPacksAndInProcessBridgeTests
     }
 
     [Fact]
+    public void ExtendedLotZoomLevels_StepTo3xAnd4xWhileKeepingNearAssetsAndSoundGain()
+    {
+        Assert.Equal(SimsSDL.Core.LotZoom.Medium, SimsSDL.Core.LotZoom.Far.Stepped(1));
+        Assert.Equal(SimsSDL.Core.LotZoom.Near, SimsSDL.Core.LotZoom.Medium.Stepped(1));
+        Assert.Equal(SimsSDL.Core.LotZoom.Closer, SimsSDL.Core.LotZoom.Near.Stepped(1));
+        Assert.Equal(SimsSDL.Core.LotZoom.Closest, SimsSDL.Core.LotZoom.Closer.Stepped(1));
+        Assert.Equal(SimsSDL.Core.LotZoom.Closest, SimsSDL.Core.LotZoom.Closest.Stepped(1));
+        Assert.Equal(SimsSDL.Core.LotZoom.Far, SimsSDL.Core.LotZoom.Closest.Stepped(-10));
+
+        Assert.Equal(3f, SimsSDL.Core.LotZoom.Closer.Factor());
+        Assert.Equal(4f, SimsSDL.Core.LotZoom.Closest.Factor());
+
+        Assert.Equal(SimsSDL.Core.LotZoom.Near, SimsSDL.Core.LotZoom.Closer.AssetZoom());
+        Assert.Equal(SimsSDL.Core.LotZoom.Near, SimsSDL.Core.LotZoom.Closest.AssetZoom());
+        Assert.Equal(1f, SimsSDL.Core.LotZoom.Near.SoundGain());
+        Assert.Equal(1f, SimsSDL.Core.LotZoom.Closer.SoundGain());
+        Assert.Equal(1f, SimsSDL.Core.LotZoom.Closest.SoundGain());
+
+        var nearImg = new LotScene.ZoomImage(2, 0, 0, 64, 64);
+        var farImg = new LotScene.ZoomImage(1, 0, 0, 16, 16);
+        var nearShadow = new LotScene.ZoomImage(4, 0, 0, 32, 32);
+        var sprite = new LotScene.Sprite
+        {
+            Texture = 0,
+            X = 0,
+            Y = 0,
+            Width = 32,
+            Height = 32,
+            Flip = false,
+            Near = nearImg,
+            Far = farImg,
+            FloorShadowNear = nearShadow,
+        };
+        Assert.Same(nearImg, sprite.Image(SimsSDL.Core.LotZoom.Closer));
+        Assert.Same(nearImg, sprite.Image(SimsSDL.Core.LotZoom.Closest));
+        Assert.Same(nearShadow, sprite.FloorShadowImage(SimsSDL.Core.LotZoom.Closer));
+        Assert.Same(nearShadow, sprite.FloorShadowImage(SimsSDL.Core.LotZoom.Closest));
+    }
+
+    [Fact]
     public void AppearancePreview_WritesAndLoadsInMemoryWithoutDiskFiles_AndAvatarDirectionWraps()
     {
         Assert.Equal(1.0f, SimsEngine.Character.AvatarDirection.ShortestDelta(7.5f, 0.5f), 4);
@@ -443,6 +483,71 @@ public sealed class ClientInstallPacksAndInProcessBridgeTests
             SimsSimulation.InMemorySessionAssets.DisableAndClearRoot(session);
             if (Directory.Exists(session))
                 Directory.Delete(session, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void BundledPacks_AreEnabledByDefault_SupportDxil_AndAutoTrustPlugins()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "sims-bundled-packs-" + Guid.NewGuid().ToString("N"));
+        var gameDir = Path.Combine(tempRoot, "game");
+        var dataDir = Path.Combine(tempRoot, "data");
+        var bundledDir = Path.Combine(tempRoot, "bundled-packs");
+        var packDir = Path.Combine(bundledDir, "lighting");
+        Directory.CreateDirectory(Path.Combine(gameDir, "GameData"));
+        Directory.CreateDirectory(Path.Combine(gameDir, "UIGraphics"));
+        // Minimal valid empty FAR1a archive ("FAR!byAZ", version=1, manifestOffset=16, entryCount=0).
+        File.WriteAllBytes(Path.Combine(gameDir, "UIGraphics", "UIGraphics.far"),
+            [0x46, 0x41, 0x52, 0x21, 0x62, 0x79, 0x41, 0x5A, 0x01, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+        Directory.CreateDirectory(Path.Combine(packDir, "plugin"));
+        Directory.CreateDirectory(Path.Combine(packDir, "files", "Downloads", "local.lighting", "shaders"));
+        Directory.CreateDirectory(dataDir);
+
+        File.WriteAllText(Path.Combine(packDir, "pack.json"), """
+            {
+              "schemaVersion": 1,
+              "id": "local.lighting",
+              "name": "Enhanced Graphics",
+              "version": "1.0.0",
+              "baseGameVersion": "1.90",
+              "dependencies": [],
+              "overrides": [],
+              "plugin": {
+                "assembly": "plugin/LocalLighting.dll",
+                "entryType": "Local.Lighting.LightingPlugin",
+                "apiVersion": 4,
+                "stateVersion": 1
+              }
+            }
+            """);
+        File.WriteAllBytes(Path.Combine(packDir, "plugin", "LocalLighting.dll"), [0x4D, 0x5A, 0x90, 0x00]);
+        File.WriteAllBytes(Path.Combine(packDir, "files", "Downloads", "local.lighting", "shaders", "ambient.frag.dxil"), [0x44, 0x58, 0x42, 0x43]);
+
+        string? previousOverride = SimsSDL.ModManager.BundledPacksDirectoryOverride;
+        SimsSDL.ModManager.BundledPacksDirectoryOverride = bundledDir;
+        try
+        {
+            var discovered = SimsSDL.ModManager.DiscoverAll(gameDir, tempRoot, dataDir, cliPacks: null);
+            var lighting = Assert.Single(discovered, static m => m.LoadedPack?.Manifest.Id == "local.lighting");
+            Assert.True(lighting.DefaultEnabled);
+
+            var content = SimsSDL.ModManager.LoadConfiguredContent(gameDir, tempRoot, dataDir, cliPacks: null);
+            Assert.Contains(content.Packs.Ordered, static p => p.Manifest.Id == "local.lighting");
+            Assert.NotEmpty(SimsSDL.Client.PackTool.UntrustedPlugins(content, dataDir));
+
+            SimsSDL.ModManager.TrustBundledPlugins(content, dataDir);
+            Assert.Empty(SimsSDL.Client.PackTool.UntrustedPlugins(content, dataDir));
+
+            var settings = new SimsSDL.ModManager.ModSettingsFile { DisabledPacks = ["local.lighting"] };
+            SimsSDL.ModManager.SaveSettings(dataDir, settings);
+            var afterDisable = SimsSDL.ModManager.LoadConfiguredContent(gameDir, tempRoot, dataDir, cliPacks: null);
+            Assert.DoesNotContain(afterDisable.Packs.Ordered, static p => p.Manifest.Id == "local.lighting");
+        }
+        finally
+        {
+            SimsSDL.ModManager.BundledPacksDirectoryOverride = previousOverride;
+            if (Directory.Exists(tempRoot))
+                Directory.Delete(tempRoot, recursive: true);
         }
     }
 }

@@ -519,6 +519,13 @@ public class AudioParityTests
             Assert.Null(bank.Resolve("bkground_live"));
             Assert.Null(bank.Resolve("bkground_option"));
             Assert.Null(bank.Resolve("bkground_options"));
+            Assert.Null(bank.Resolve("bkground_family"));
+            Assert.Null(bank.Resolve("bkground_fade"));
+            Assert.Equal(0, bank.GetMusicMode("bkground_live"));
+            Assert.Equal(7, bank.GetMusicMode("bkground_option"));
+            Assert.Equal(7, bank.GetMusicMode("bkground_options"));
+            Assert.Equal(8, bank.GetMusicMode("bkground_family"));
+            Assert.Equal(9, bank.GetMusicMode("bkground_fade"));
 
             var radioClass = bank.Resolve("radio_class");
             Assert.NotNull(radioClass);
@@ -557,7 +564,7 @@ public class AudioParityTests
         Directory.CreateDirectory(tempDir);
         try
         {
-            using var audio = new HitAudioRuntime(tempDir, gameDir, _ => { });
+            using var audio = new HitAudioRuntime(tempDir, "test", _ => { });
             var world = new SimsEngine.Simulation.SimulationWorld
             {
                 PlaySoundEvent = (name, owner, pan, zoom) => audio.PlayForSimulationObject(name, owner, pan, zoom),
@@ -633,14 +640,29 @@ public class AudioParityTests
                 "hottub_running",
                 "stove_bubble",
                 "sink_filling",
-                "tv_action_norm",
-                "radio_class"
+                "bkground_load"
             ];
             foreach (var cue in expectedLoops)
             {
                 var res = bank.Resolve(cue);
                 Assert.True(res is not null, $"Expected '{cue}' to resolve");
                 Assert.True(res.IsLoop, $"Expected '{cue}' to be looped (resolved file: {res.RelativePath})");
+            }
+
+            string[] expectedPlaylists =
+            [
+                "bkground_buy1",
+                "bkground_build",
+                "bkground_nhood1",
+                "tv_action_norm",
+                "radio_class"
+            ];
+            foreach (var cue in expectedPlaylists)
+            {
+                var res = bank.Resolve(cue);
+                Assert.True(res is not null, $"Expected '{cue}' to resolve");
+                Assert.False(res.IsLoop, $"Expected '{cue}' playlist track to be non-looped (resolved file: {res.RelativePath})");
+                Assert.True(res.IsPlaylist, $"Expected '{cue}' to be marked IsPlaylist");
             }
 
             var fireplace = bank.Resolve("fireplace_loop")!;
@@ -741,6 +763,175 @@ public class AudioParityTests
                 Assert.DoesNotContain("stripper", res.RelativePath, StringComparison.OrdinalIgnoreCase);
                 Assert.Contains(expectedSubstring, res.RelativePath, StringComparison.OrdinalIgnoreCase);
             }
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void SimulationPause_PausesInWorldPianoMusic_WhileKeepingModeMusicPlaying()
+    {
+        var gameDir = LocateGameDirectory();
+        if (gameDir is null) return;
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"sims-piano-pause-{Guid.NewGuid():N}");
+        try
+        {
+            var events = new List<object>();
+            using var audio = new HitAudioRuntime(tempDir, "test", msg =>
+            {
+                if (msg is not null) events.Add(msg);
+            }, game: gameDir);
+
+            Assert.True(audio.Play("bkground_buy1"));
+            Assert.True(audio.PlayForSimulationObject("piano_play", ownerID: 77, pan: true, zoom: true, pianoSkillLevel: 0));
+            Assert.True(audio.PlayForSimulationObject("car_standardsedan_honk", ownerID: 55, pan: true, zoom: true));
+
+            var modeVoiceId = Convert.ToInt64(events[0].GetType().GetProperty("voice")!.GetValue(events[0]));
+            var pianoVoiceId = Convert.ToInt64(events[1].GetType().GetProperty("voice")!.GetValue(events[1]));
+            var honkVoiceId = Convert.ToInt64(events[2].GetType().GetProperty("voice")!.GetValue(events[2]));
+            Assert.Equal("MUSIC", events[1].GetType().GetProperty("group")!.GetValue(events[1])?.ToString());
+            Assert.Equal(true, events[1].GetType().GetProperty("loop")!.GetValue(events[1]));
+            Assert.Equal(77, Convert.ToInt32(events[1].GetType().GetProperty("ownerID")!.GetValue(events[1])));
+            Assert.Contains("pianol1", events[1].GetType().GetProperty("file")!.GetValue(events[1])?.ToString(), StringComparison.OrdinalIgnoreCase);
+
+            events.Clear();
+            audio.SetSimulationPaused(true);
+
+            Assert.Contains(events, e =>
+                e.GetType().GetProperty("command")?.GetValue(e)?.ToString() == "pause" &&
+                Convert.ToInt64(e.GetType().GetProperty("voice")?.GetValue(e)) == pianoVoiceId);
+            Assert.Contains(events, e =>
+                e.GetType().GetProperty("command")?.GetValue(e)?.ToString() == "pause" &&
+                Convert.ToInt64(e.GetType().GetProperty("voice")?.GetValue(e)) == honkVoiceId);
+            Assert.DoesNotContain(events, e =>
+                e.GetType().GetProperty("command")?.GetValue(e)?.ToString() == "pause" &&
+                Convert.ToInt64(e.GetType().GetProperty("voice")?.GetValue(e)) == modeVoiceId);
+
+            // Switching modes stops mode music without killing the paused in-world piano voice.
+            events.Clear();
+            audio.StopModeMusic();
+            Assert.Contains(events, e =>
+                e.GetType().GetProperty("command")?.GetValue(e)?.ToString() == "stop" &&
+                Convert.ToInt64(e.GetType().GetProperty("voice")?.GetValue(e)) == modeVoiceId);
+            Assert.DoesNotContain(events, e =>
+                e.GetType().GetProperty("command")?.GetValue(e)?.ToString() == "stop" &&
+                Convert.ToInt64(e.GetType().GetProperty("voice")?.GetValue(e)) == pianoVoiceId);
+
+            events.Clear();
+            audio.SetSimulationPaused(false);
+
+            Assert.Contains(events, e =>
+                e.GetType().GetProperty("command")?.GetValue(e)?.ToString() == "resume" &&
+                Convert.ToInt64(e.GetType().GetProperty("voice")?.GetValue(e)) == pianoVoiceId);
+            Assert.Contains(events, e =>
+                e.GetType().GetProperty("command")?.GetValue(e)?.ToString() == "resume" &&
+                Convert.ToInt64(e.GetType().GetProperty("voice")?.GetValue(e)) == honkVoiceId);
+
+            // High creativity picks from Level 10 piano tracks.
+            events.Clear();
+            audio.RemoveOwner(77);
+            Assert.True(audio.PlayForSimulationObject("piano_play", ownerID: 77, pan: true, zoom: true, pianoSkillLevel: 10));
+            Assert.Contains("pianol10", events[^1].GetType().GetProperty("file")!.GetValue(events[^1])?.ToString(), StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void FastMode_SuppressesRepeatedCarHonks_IncludingNonPositionalHonkTracks()
+    {
+        var gameDir = LocateGameDirectory();
+        if (gameDir is null) return;
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"sims-car-honk-fast-{Guid.NewGuid():N}");
+        try
+        {
+            var events = new List<object>();
+            using var audio = new HitAudioRuntime(tempDir, "test", msg =>
+            {
+                if (msg is not null) events.Add(msg);
+            }, game: gameDir)
+            {
+                SuppressActiveDuplicates = true
+            };
+
+            audio.SetSimulationSpeed(10);
+
+            Assert.True(audio.PlayForSimulationObject("car_standardsedan_honk", ownerID: 55, pan: true, zoom: true));
+            Assert.Single(events);
+            var firstVoiceId = Convert.ToInt64(events[0].GetType().GetProperty("voice")!.GetValue(events[0]));
+
+            // Active duplicate from the same car or another car is suppressed even though car_*_honk uses kArgsNone.
+            Assert.True(audio.PlayForSimulationObject("car_standardsedan_honk", ownerID: 55, pan: true, zoom: true));
+            Assert.True(audio.PlayForSimulationObject("car_standardsedan_honk", ownerID: 56, pan: true, zoom: true));
+            Assert.Single(events);
+
+            // Even after the first honk voice ends, rapid re-triggers from the same car stay throttled in fast mode.
+            audio.End(firstVoiceId);
+            Assert.True(audio.PlayForSimulationObject("car_standardsedan_honk", ownerID: 55, pan: true, zoom: true));
+            Assert.Single(events);
+
+            // A different car arriving after the first honk finished can still honk once.
+            Assert.True(audio.PlayForSimulationObject("car_schoolbus_honk", ownerID: 56, pan: true, zoom: true));
+            Assert.Equal(2, events.Count);
+
+            // Returning to normal speed (1x) allows the car to honk again without fast-mode throttling.
+            audio.SetSimulationSpeed(1);
+            Assert.True(audio.PlayForSimulationObject("car_standardsedan_honk", ownerID: 55, pan: true, zoom: true));
+            Assert.Equal(3, events.Count);
+
+            // Expansion local honk cues (HotDate.hot) also resolve and are throttled in fast mode.
+            audio.SetSimulationSpeed(10);
+            Assert.True(audio.PlayForSimulationObject("car_standardsedan_honk_local", ownerID: 58, pan: true, zoom: true));
+            var localHonkCount = events.Count;
+            Assert.True(audio.PlayForSimulationObject("car_standardsedan_honk_local", ownerID: 58, pan: true, zoom: true));
+            Assert.Equal(localHonkCount, events.Count);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void StereoStationSwitch_StopsPreviousStation_AndPrunesDeletedOwnerWhilePaused()
+    {
+        var gameDir = LocateGameDirectory();
+        if (gameDir is null) return;
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"sims-stereo-switch-{Guid.NewGuid():N}");
+        try
+        {
+            var events = new List<object>();
+            using var audio = new HitAudioRuntime(tempDir, "test", msg =>
+            {
+                if (msg is not null) events.Add(msg);
+            }, game: gameDir)
+            {
+                SuppressActiveDuplicates = true
+            };
+
+            Assert.True(audio.PlayForSimulationObject("stereo_rock_mod", ownerID: 88, pan: true, zoom: true));
+            var rockVoiceId = Convert.ToInt64(events[0].GetType().GetProperty("voice")!.GetValue(events[0]));
+
+            // Switching to Classical on the same stereo stops the Rock voice first so stations never overlap.
+            events.Clear();
+            Assert.True(audio.PlayForSimulationObject("stereo_classical_mod", ownerID: 88, pan: true, zoom: true));
+            Assert.Contains(events, e =>
+                e.GetType().GetProperty("command")?.GetValue(e)?.ToString() == "stop" &&
+                Convert.ToInt64(e.GetType().GetProperty("voice")?.GetValue(e)) == rockVoiceId);
+            Assert.Equal(1, audio.ActiveVoiceCount);
+
+            // Deleting the stereo while simulation is paused still prunes its voice on Tick(world).
+            audio.SetSimulationPaused(true);
+            var emptyWorld = new SimsEngine.Simulation.SimulationWorld();
+            audio.Tick(emptyWorld);
+            Assert.Equal(0, audio.ActiveVoiceCount);
         }
         finally
         {

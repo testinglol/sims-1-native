@@ -211,15 +211,15 @@ public static class TreeRunner
 
     private static PrimitiveResult Dispatch(in TreeContext context, BhavInstruction instruction)
     {
-        var objectType = context.Me.Definition[(int)ObjdField.Type];
-        int? objectGuid = context.Me.TypeRecord is { Key: not 0 } typeRecord ? typeRecord.Key : null;
-        var tileX = context.Me.Position.X >> 4;
-        var tileY = context.Me.Position.Y >> 4;
-        var tileValue = context.World.TileValueAt(tileX, tileY, context.Me.Position.Height);
-        var stackObject = context.StackObject;
-        var stackType = stackObject?.TypeRecord is { } stackRecord ? $", GUID 0x{stackRecord.Key:X8}" : string.Empty;
-        context.World.CurrentExecutionLocation = $"object {context.Me.Id} (OBJD type {objectType}, GUID {(objectGuid is { } guid ? $"0x{guid:X8}" : "unknown")}), BHAV {context.Frame.TreeId}, instruction {context.Frame.Instruction}, opcode 0x{instruction.Opcode:X}, operand {Convert.ToHexString(instruction.Operand)}, stack key {context.Frame.StackObject}, stack object {(stackObject is null ? "none" : $"{stackObject.Id} (OBJD type {stackObject.Definition[(int)ObjdField.Type]}{stackType})")}, position {context.Me.Position}, tile key {tileValue}";
         var operand = instruction.Operand;
+        context.World.SetExecutionLocation(
+            context.Me,
+            context.Frame.TreeId,
+            context.Frame.Instruction,
+            instruction.Opcode,
+            operand,
+            context.Frame.StackObject,
+            context.StackObject);
         switch (instruction.Opcode)
         {
             case InteractionLifecycle.AcquireLaneOpcode:

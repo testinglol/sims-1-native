@@ -576,6 +576,21 @@ public sealed record GameplayPanelState
         [JsonPropertyName("inventory")]
         public IReadOnlyList<InventoryItem>? Inventory { get; init; }
 
+        [JsonPropertyName("neighborID")]
+        public int? NeighborID { get; init; }
+
+        [JsonPropertyName("lotId")]
+        public int? LotId { get; init; }
+
+        [JsonPropertyName("lotName")]
+        public string? LotName { get; init; }
+
+        [JsonPropertyName("isOnFocusedLot")]
+        public bool? IsOnFocusedLot { get; init; }
+
+        [JsonPropertyName("activity")]
+        public string? Activity { get; init; }
+
         [JsonConstructor]
         public Sim() { }
 

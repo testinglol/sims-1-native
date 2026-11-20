@@ -231,7 +231,7 @@ public class XObject(short id, short[] definition, int attributes = 0)
     }
     public short StateValue { get; set; }
     public virtual short SelectionWord5CC { get; set; }
-    public short SelectionWord606 { get; set; }
+    public virtual short SelectionWord606 { get; set; }
     public int TableWord10C { get; set; }
     public bool LotUpkeepGateByte14C { get; set; }
     public bool LotUpkeepPointer128Present { get; set; }
@@ -339,12 +339,26 @@ public class XObject(short id, short[] definition, int attributes = 0)
 
     public void SetObjectTableEffectWord(short index, short value) => ObjectTableEffectWords[index] = value;
 
-    public void SetInteractionExecutorFloat(int selector, float value) => InteractionExecutorFloats[selector] = value;
+    public void SetInteractionExecutorFloat(int selector, float value)
+    {
+        InteractionExecutorFloats[selector] = value;
+        if (this is XPerson person && (uint)selector < (uint)person.Motives.Length)
+            person.Motives[selector] = value;
+    }
 
     public void SetInteractionExecutorWord(int offset, short value)
     {
         if (offset == 0x59c) InteractionBehaviorSavedWord = value;
         else InteractionExecutorWords[offset] = value;
+        if (this is XPerson person)
+        {
+            switch (offset)
+            {
+                case 0x62c: person.PersonData[80] = value; break;
+                case 0x62e: person.PersonData[81] = value; break;
+                case 0x630: person.PersonData[82] = value; break;
+            }
+        }
     }
 
     /// <summary>Stores slot occupant object identifiers. Entry 0 is reserved for the overlap chain, while
@@ -428,7 +442,7 @@ public readonly record struct AvatarAnimationEvent(int TimeMilliseconds, short V
         float durationMilliseconds) => new(MotionFrameToMilliseconds(frame, motionFrameCount, durationMilliseconds), value);
 }
 
-public readonly record struct AvatarAnimationSoundEvent(int TimeMilliseconds, string PackId, string Resource, string Cue, bool Loop, bool Stop);
+public readonly record struct AvatarAnimationSoundEvent(int TimeMilliseconds, string PackId, string Resource, string Cue, bool Loop, bool Stop, string BoneName = "");
 
 /// <summary>An animation marker identifying a bone and normalized event time, resolved from authored
 /// animation event tags.</summary>
@@ -508,6 +522,9 @@ public sealed record AvatarAnimationPlaybackState(string Name, int FrameCount, A
     public AvatarAnimationMarker? LocomotionMarkerTwo { get; init; }
     public int? LastPracticeApplyMils { get; init; }
     public float? PracticeScale { get; init; }
+    public int PracticePriority { get; init; }
+    public bool AllowUnblendedOverride { get; init; } = true;
+    public string? AnchorBone { get; init; }
 }
 
 /// <summary>Manages character animation playback, advancing once per update and delivering queued XEVT
@@ -539,11 +556,15 @@ public sealed class AvatarAnimationPlayback(AvatarAnimationClip clip, bool backw
     public bool Interruptible { get; set; }
     public bool PoolSwimExit { get; init; }
     public float PracticeWeight { get; set; } = 1f;
+    public int PracticePriority { get; set; }
+    public bool AllowUnblendedOverride { get; set; } = true;
+    public string? AnchorBone { get; set; }
     private bool practiceWeightFadeActive;
     private int practiceWeightFadeStartMils;
     private int practiceWeightFadeEndMils;
     private float practiceWeightFadeStart;
     private float practiceWeightFadeTarget;
+    public bool IsPracticeWeightFadeActive => practiceWeightFadeActive;
 
     public void FadePracticeWeight(int startMils, int endMils, float startWeight, float targetWeight)
     {
@@ -554,12 +575,24 @@ public sealed class AvatarAnimationPlayback(AvatarAnimationClip clip, bool backw
         practiceWeightFadeTarget = targetWeight;
     }
 
+    public float EvaluatePracticeWeight(int animatorMils, float subTickAlpha = 0f)
+    {
+        if (!practiceWeightFadeActive || subTickAlpha <= 0f)
+            return PracticeWeight;
+        var duration = unchecked(practiceWeightFadeEndMils - practiceWeightFadeStartMils);
+        if (duration <= 0)
+            return practiceWeightFadeTarget;
+        var elapsed = unchecked(animatorMils - practiceWeightFadeStartMils) + subTickAlpha * 42f;
+        var amount = Math.Clamp(elapsed / duration, 0f, 1f);
+        return practiceWeightFadeStart + amount * (practiceWeightFadeTarget - practiceWeightFadeStart);
+    }
+
     private void ApplyPracticeWeightFade(int animatorMils)
     {
         if (!practiceWeightFadeActive) return;
         var elapsed = unchecked(animatorMils - practiceWeightFadeStartMils);
         var duration = unchecked(practiceWeightFadeEndMils - practiceWeightFadeStartMils);
-        if (elapsed > duration)
+        if (duration <= 0 || elapsed > duration)
         {
             practiceWeightFadeActive = false;
             PracticeWeight = practiceWeightFadeTarget;
@@ -595,6 +628,9 @@ public sealed class AvatarAnimationPlayback(AvatarAnimationClip clip, bool backw
         LastPracticeApplyMils = LastPracticeApplyMils,
         PracticeScale = PracticeScale,
         InterpolatePose = InterpolatePose,
+        PracticePriority = PracticePriority,
+        AllowUnblendedOverride = AllowUnblendedOverride,
+        AnchorBone = AnchorBone,
     };
 
     public static AvatarAnimationPlayback RestoreState(AvatarAnimationPlaybackState state)
@@ -628,6 +664,9 @@ public sealed class AvatarAnimationPlayback(AvatarAnimationClip clip, bool backw
             practiceWeightFadeEndMils = state.PracticeWeightFadeEndMils ?? 0,
             practiceWeightFadeStart = state.PracticeWeightFadeStart ?? state.PracticeWeight,
             practiceWeightFadeTarget = state.PracticeWeightFadeTarget ?? state.PracticeWeight,
+            PracticePriority = state.PracticePriority,
+            AllowUnblendedOverride = state.AllowUnblendedOverride,
+            AnchorBone = state.AnchorBone,
             EventsRun = state.EventsRun,
             nextEventIndex = state.NextEventIndex,
             nextSoundEventIndex = state.NextSoundEventIndex,
@@ -795,10 +834,11 @@ public sealed class AvatarAnimationPlayback(AvatarAnimationClip clip, bool backw
 
     /// <summary>Supplies missing expected numbered animation events one at a time after all authored events
     /// have been exhausted, preventing waiting scripts from stalling.</summary>
-    public short? TakeMissingExpectedEvent(sbyte expectedCount)
+    public short? TakeMissingExpectedEvent(sbyte expectedCount, bool? backwardsOverride = null)
     {
         if (EventsRun >= expectedCount) return null;
-        var expected = Backwards ? expectedCount - EventsRun - 1 : EventsRun;
+        var backwards = backwardsOverride ?? Backwards;
+        var expected = backwards ? expectedCount - EventsRun - 1 : EventsRun;
         EventsRun++;
         return (short)expected;
     }
@@ -806,11 +846,12 @@ public sealed class AvatarAnimationPlayback(AvatarAnimationClip clip, bool backw
     /// <summary>Validates an authored numbered animation event against the next expected index before
     /// exposing it to the script. Animation events 100 and above are independent substitutes and do not
     /// advance this counter.</summary>
-    public bool TryConsumeExpectedEvent(short value, sbyte expectedCount, out short expectedValue)
+    public bool TryConsumeExpectedEvent(short value, sbyte expectedCount, out short expectedValue, bool? backwardsOverride = null)
     {
         expectedValue = value;
         if (value >= 100) return true;
-        var expected = Backwards ? expectedCount - EventsRun - 1 : EventsRun;
+        var backwards = backwardsOverride ?? Backwards;
+        var expected = backwards ? expectedCount - EventsRun - 1 : EventsRun;
         if (expected < 0 || expected >= expectedCount || value != expected) return false;
         expectedValue = (short)expected;
         EventsRun++;
@@ -838,6 +879,12 @@ public sealed class XPerson(short id, short[] definition, int attributes = 0) : 
     {
         get => PersonData[(int)global::SimsEngine.Simulation.PersonData.PersonType];
         set => PersonData[(int)global::SimsEngine.Simulation.PersonData.PersonType] = value;
+    }
+
+    public override short SelectionWord606
+    {
+        get => PersonData[(int)global::SimsEngine.Simulation.PersonData.FamilyNumber];
+        set => PersonData[(int)global::SimsEngine.Simulation.PersonData.FamilyNumber] = value;
     }
 
     public bool TryBeginObjectReferenceNotification()
@@ -915,15 +962,25 @@ public sealed class XPerson(short id, short[] definition, int attributes = 0) : 
     public short AnimatorBodyStringMode { get; set; }
     public AvatarAnimationPlayback? BackgroundAnimationPlayback { get; set; }
     public short BackgroundPracticePersonState { get; set; } = -1;
+    public AvatarAnimationPlayback? LastAnimationPlayback { get; set; }
+    public bool AnimatorDiscontinuityPending { get; set; }
+    public string? AnimatorAnchorBone { get; set; }
+    public bool AnimatorAnchorInitialized { get; set; }
+    public Vector3 AnimatorAnchorWorldPosition { get; set; }
+    public bool PrimaryAnimationWaiting { get; set; }
+    public byte PrimaryAnimationEventsRun { get; set; }
+    public bool PrimaryAnimationBackwards { get; set; }
     public AvatarAnimationPlayback? CarryAnimationPlayback { get; set; }
     public int CarryPracticeMode { get; set; }
     /// <summary>Returns active animation practices in skeletal layering order: background practices at
-    /// priority -10, primary practices at priority 0, and carry practices at priority +10.</summary>
+    /// priority -10, primary practices at PracticePriority (default 0, +5 on discontinuity), fading Last
+    /// practices at oldPrimary.PracticePriority + 1, and carry practices at priority +10.</summary>
     public IReadOnlyList<AvatarAnimationPlayback> GetAnimationPracticeApplicationOrder()
     {
-        var result = new List<(AvatarAnimationPlayback Playback, int Priority, long StartOrder)>(3);
+        var result = new List<(AvatarAnimationPlayback Playback, int Priority, long StartOrder)>(4);
         if (BackgroundAnimationPlayback is { } background) result.Add((background, -10, background.PracticeStartOrder));
-        if (AnimationPlayback is { } primary) result.Add((primary, 0, primary.PracticeStartOrder));
+        if (AnimationPlayback is { } primary) result.Add((primary, primary.PracticePriority, primary.PracticeStartOrder));
+        if (LastAnimationPlayback is { } last) result.Add((last, last.PracticePriority, last.PracticeStartOrder));
         if (CarryAnimationPlayback is { } carry)
             result.Add((carry, 10, carry.PracticeStartOrder));
         result.Sort(static (left, right) =>
@@ -1698,6 +1755,7 @@ public sealed partial class SimulationWorld
 {
     public Func<XPerson, string, (float MarkerOneStride, float MarkerTwoStride)?>? LocomotionStrideResolver { get; set; }
     public Func<XPerson, XObject, HeadSeekGeometry?>? HeadSeekGeometryResolver { get; set; }
+    public Func<XPerson, string, Vector3?>? AnchorBoneWorldResolver { get; set; }
     private static long s_uiMessageSequence;
     private readonly Dictionary<short, (StackFrame Frame, TreeStack? Stack)> _directPositionRoutes = [];
     private int _visitorAvatarAnimationKey;
@@ -1748,7 +1806,13 @@ public sealed partial class SimulationWorld
         ArgumentNullException.ThrowIfNull(data);
         data.ToVariables().CopyTo(NeighborhoodData, 0);
         NeighborInventories = data.Inventories;
-        _neighborInventories.Clear();
+        foreach (var (neighborId, inventory) in _neighborInventories)
+        {
+            while (inventory.Entries.Count > 0) inventory.Adjust(0, -1);
+            if (NeighborInventories.TryGetValue(neighborId, out var items))
+                foreach (var item in items)
+                    inventory.Add(item.Type, unchecked((int)item.GUID), unchecked((short)item.Count));
+        }
     }
 
     private readonly Dictionary<short, AvatarInventory> _neighborInventories = [];
@@ -1856,10 +1920,10 @@ public sealed partial class SimulationWorld
             if (live is null) continue;
             var values = state.Values0x108.ToArray();
             var bounds = live.FootprintBounds;
-            values[0] = bounds.MinX;
-            values[1] = bounds.MinY;
-            values[2] = bounds.MaxX;
-            values[3] = bounds.MaxY;
+            values[0] = bounds.MinY;
+            values[1] = bounds.MinX;
+            values[2] = bounds.MaxY;
+            values[3] = bounds.MaxX;
             // Object positions are stored in sixteenths of a tile (X followed by Y).
             values[4] = live.Position.X;
             values[5] = live.Position.Y;
@@ -1883,11 +1947,18 @@ public sealed partial class SimulationWorld
                     Actions = person.WriteActionQueue(),
                 };
             }
+            var isPortal = SavedObjectClasses.TryGetValue(saved.TypeIndex, out var savedClass) &&
+                           savedClass.Class == Formats.ObjectClass.Portal;
             overrides[saved.ObjectId] = state with
             {
                 Person = personState,
                 MultiTile = (live.SavedMultiTileState ?? state.MultiTile) is { } multiTile
-                    ? multiTile with { LeadObject = live.MultiTileMasterId } : null,
+                    ? multiTile with
+                    {
+                        LeadObject = live.MultiTileMasterId,
+                        PortalValues = isPortal ? multiTile.PortalValues ?? [] : multiTile.PortalValues,
+                    }
+                    : null,
                 Relationships = live.Relationships.WriteSavedEntries(state.Relationships),
                 Values0x108 = values,
                 Value0x110 = live.Position.Height,
@@ -1976,10 +2047,10 @@ public sealed partial class SimulationWorld
     private int _actionQueueSequence;
 
     public void RestoreActionSequence(int sequence) => _actionQueueSequence = Math.Max(_actionQueueSequence, sequence);
-    private static readonly byte[] PersonRecordFieldsVersion9 =
+    private static readonly byte[] PersonRecordFieldsVersion10 =
     [
         2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 16, 20, 15, 26, 17, 18, 46, 47, 48, 49, 50, 51, 52, 53,
-        13, 14, 58, 60, 61, 56, 57, 63, 65, 67, 68, 69, 74, 55, 75, 76, 80, 81, 82,
+        13, 14, 58, 60, 61, 56, 57, 63, 65, 67, 68, 69, 74, 54, 55, 75, 76, 80, 81, 82, 83, 84, 85, 86,
     ];
 
     public const int GlobalCount = 0x40;
@@ -2452,8 +2523,9 @@ public sealed partial class SimulationWorld
         var index = (int)field;
         if (neighbor.PersonData[index] == value) return;
         neighbor.PersonData[index] = value;
-        if (neighbor.PersonRecordVersion == 0) neighbor.PersonRecordVersion = 9;
+        if (neighbor.PersonRecordVersion == 0) neighbor.PersonRecordVersion = 10;
         PersistentPersonDataDirty = true;
+        DirtyPersistentPersonNeighborIds.Add(neighbor.Id);
     }
 
     public short InitializeRelationshipZodiac(NeighborState neighbor, bool hasName, Func<short[], short> compute)
@@ -2470,6 +2542,35 @@ public sealed partial class SimulationWorld
         return zodiac;
     }
     public HashSet<short> DirtyRelationshipFamilies { get; } = [];
+    public HashSet<short> DirtyRelationshipNeighbors { get; } = [];
+    public HashSet<(short SourceNeighborId, short TargetNeighborId)> DirtyRelationshipPairs { get; } = [];
+    public HashSet<short> DirtyPersistentPersonNeighborIds { get; } = [];
+    public IReadOnlySet<short> RemovedNeighbors => _removedNeighbors;
+    public IReadOnlyDictionary<short, uint> RemovedNeighborGuids => _removedNeighborGuids;
+    public Func<XPerson, bool>? TryInterceptConnectedVisitorRemoval { get; set; }
+    public Action<short>? NotifyRemovedNeighborCleared { get; set; }
+
+    public void ClearRemovedNeighbor(short neighborId)
+    {
+        _removedNeighbors.Remove(neighborId);
+        _removedNeighborGuids.Remove(neighborId);
+        NotifyRemovedNeighborCleared?.Invoke(neighborId);
+    }
+
+    public void ClearAllRemovedNeighbors()
+    {
+        _removedNeighbors.Clear();
+        _removedNeighborGuids.Clear();
+    }
+
+    private bool IsRemovedNeighborEntry(short neighborId, uint guid)
+    {
+        if (!_removedNeighbors.Contains(neighborId))
+            return false;
+        if (!_removedNeighborGuids.TryGetValue(neighborId, out var deletedGuid) || deletedGuid == 0 || guid == 0)
+            return true;
+        return guid == deletedGuid;
+    }
 
     public void MarkRelationshipsChanged(NeighborState source, NeighborState target)
     {
@@ -2479,6 +2580,8 @@ public sealed partial class SimulationWorld
         var targetFamily = target.PersonData[(int)PersonData.FamilyNumber];
         if (sourceFamily != 0) DirtyRelationshipFamilies.Add(sourceFamily);
         if (targetFamily != 0) DirtyRelationshipFamilies.Add(targetFamily);
+        DirtyRelationshipNeighbors.Add(source.Id);
+        DirtyRelationshipPairs.Add((source.Id, target.Id));
         RelationshipModuleDirtyFlag12 = true;
     }
 
@@ -2493,7 +2596,7 @@ public sealed partial class SimulationWorld
         var entries = new List<Neighbor>(SavedNeighbors.Entries.Count);
         foreach (var saved in SavedNeighbors.Entries)
         {
-            if (_removedNeighbors.Contains(saved.NeighborId)) continue;
+            if (IsRemovedNeighborEntry(saved.NeighborId, saved.Guid)) continue;
             var updated = Neighbors.TryGetValue(saved.NeighborId, out var live)
                 ? saved with
                 {
@@ -2516,7 +2619,7 @@ public sealed partial class SimulationWorld
         for (var slotIndex = 0; slotIndex < NeighborWalkOrder.Count; slotIndex++)
         {
             var live = NeighborWalkOrder[slotIndex];
-            if (live is null || _removedNeighbors.Contains(live.Id) || entriesById.ContainsKey(live.Id))
+            if (live is null || IsRemovedNeighborEntry(live.Id, unchecked((uint)live.TypeRecordKey)) || entriesById.ContainsKey(live.Id))
                 continue;
             if (live.PersonRecordVersion <= 0 && live.Relationships.Snapshot().Count == 0)
                 continue;
@@ -2529,7 +2632,7 @@ public sealed partial class SimulationWorld
             var versioned = live.PersonRecordVersion > 0;
             var added = new Neighbor(
                 Slot: targetSlot,
-                RecordVersion: versioned ? live.PersonRecordVersion : (SavedNeighbors.Version > 0x48 ? 9 : 4),
+                RecordVersion: versioned ? live.PersonRecordVersion : (SavedNeighbors.Version > 0x48 ? 10 : 4),
                 Name: live.Name,
                 Field0x1C: 0,
                 PersonData: versioned ? live.PersonData.ToArray() : null,
@@ -2552,6 +2655,7 @@ public sealed partial class SimulationWorld
             rewritten.WriteChunkData(chunk.Data.Span[0] != 0));
     }
     private readonly HashSet<short> _removedNeighbors = [];
+    private readonly Dictionary<short, uint> _removedNeighborGuids = [];
 
     /// <summary>Determines whether a neighbor is a character Sim, checked by testing if bits 2–3 of the
     /// object flags equal 1.</summary>
@@ -2594,6 +2698,7 @@ public sealed partial class SimulationWorld
             other?.Relationships.RemoveTarget(neighbor.Id);
         Neighbors.Remove(neighbor.Id);
         _removedNeighbors.Add(neighbor.Id);
+        _removedNeighborGuids[neighbor.Id] = unchecked((uint)neighbor.TypeRecordKey);
         RelationshipModuleDirtyFlag12 = true;
         return true;
     }
@@ -2997,10 +3102,10 @@ public sealed partial class SimulationWorld
     /// constraints while bypassing ordinary floor permission, wall-placement, and footprint collision
     /// checks.</summary>
     internal bool CanPlaceRouteCandidate(XObject item, ObjectPosition at, XObject? referenceObject,
-        int referenceSlotIndex = -1)
+        int referenceSlotIndex = -1, TreeStack? checkStack = null)
     {
         LastPlacementFailureCode = 0;
-        if (referenceObject is null) return CanPlaceObject(item, at);
+        if (referenceObject is null) return CanPlaceObject(item, at, checkStack);
         return CanPlaceReferencedSlot(item, at, referenceObject, referenceSlotIndex);
     }
 
@@ -3176,12 +3281,25 @@ public sealed partial class SimulationWorld
         return current;
     }
 
+    /// <summary>Active lot dimension in tiles, matching classic Sims.exe's house lot size (Global 23 when
+    /// populated in the valid range 4..64, defaulting to <see cref="LotGeometry.LotDimension"/>).</summary>
+    public int ActiveLotDimension
+    {
+        get
+        {
+            var configured = this[SimulationGlobal.LotSize];
+            return configured is > 3 and <= LotGeometry.LotDimension
+                ? configured
+                : LotGeometry.LotDimension;
+        }
+    }
+
     private bool PassesCommonPlacementChecks(XObject item, ObjectPosition at, bool hasRelativeObject = false,
         TreeStack? checkStack = null, short relativeObjectClockManagerIndex = 0)
     {
         var tileX = at.X >> 4;
         var tileY = at.Y >> 4;
-        var size = LotGeometry.LotDimension;
+        var size = ActiveLotDimension;
         if (tileX <= 0 || tileY <= 0 || tileX >= size - 1 || tileY >= size - 1)
         {
             LastPlacementFailureCode = 1;
@@ -3937,7 +4055,13 @@ public sealed partial class SimulationWorld
             foreach (var member in placedMembers)
             {
                 var tree = FunctionTreeId(member, 9);
-                if (tree != 0) checkStack!.RunToReturn(member.TypeRecord?.BehaviorScope, [], false, tree, 0);
+                if (tree != 0)
+                {
+                    if (checkStack is not null && checkStack.GetType().DeclaringType != typeof(TreeRunner))
+                        checkStack.RunToReturn(member.TypeRecord?.BehaviorScope, [], false, tree, 0);
+                    else
+                        TreeRunner.RunWithParameters(this, member, member.TypeRecord?.BehaviorScope, tree, 0, []);
+                }
             }
         }
         else ApplyMemberCallbacks(item);
@@ -4061,7 +4185,7 @@ public sealed partial class SimulationWorld
     /// succeeds.</summary>
     private void RunEditorUserPlacementCallbacks(IReadOnlyList<XObject> members)
     {
-        var callerLocation = CurrentExecutionLocation;
+        var callerLocation = CaptureExecutionLocation();
         try
         {
             foreach (var member in members)
@@ -4073,7 +4197,7 @@ public sealed partial class SimulationWorld
         }
         finally
         {
-            CurrentExecutionLocation = callerLocation;
+            RestoreExecutionLocation(callerLocation);
         }
 
         void RunUserPlacementCallbackOnObject(XObject target)
@@ -4752,9 +4876,11 @@ public sealed partial class SimulationWorld
     /// 0x2 if a phone is present).</summary>
     public int ComputeSaveHouseInfo(out bool lotHasHouse, out int lotSize, out int transitFilterFlags, out int familyFlagsMask)
     {
-        lotSize = LotRoomMaps.Values.FirstOrDefault()?.Width is { } width && width > 0
-            ? width
-            : LotGeometry.LotDimension;
+        lotSize = this[SimulationGlobal.LotSize] is > 3 and <= LotGeometry.LotDimension
+            ? this[SimulationGlobal.LotSize]
+            : LotRoomMaps.Values.FirstOrDefault()?.Width is { } width && width > 0
+                ? width
+                : LotGeometry.LotDimension;
         this[SimulationGlobal.LotSize] = unchecked((short)lotSize);
 
         lotHasHouse = ComputeLotHasHouse(lotSize);
@@ -5066,7 +5192,66 @@ public sealed partial class SimulationWorld
     /// <summary>Provides career track data loaded from work.iff independently of the simulation host.</summary>
     public ISimulationCareerHost? CareerHost { get; set; }
     public ISimulationAutonomyHost? AutonomyHost { get; set; }
-    internal string? CurrentExecutionLocation { get; set; }
+    internal readonly record struct ExecutionLocationSnapshot(
+        XObject Me,
+        short TreeId,
+        int Instruction,
+        ushort Opcode,
+        byte[] Operand,
+        short StackObjectKey,
+        XObject? StackObject);
+
+    private ExecutionLocationSnapshot? _executionLocationSnapshot;
+    private string? _executionLocationOverride;
+
+    internal void SetExecutionLocation(
+        XObject me,
+        short treeId,
+        int instruction,
+        ushort opcode,
+        byte[] operand,
+        short stackObjectKey,
+        XObject? stackObject)
+    {
+        _executionLocationOverride = null;
+        _executionLocationSnapshot = new ExecutionLocationSnapshot(
+            me, treeId, instruction, opcode, operand, stackObjectKey, stackObject);
+    }
+
+    internal (ExecutionLocationSnapshot? Snapshot, string? Override) CaptureExecutionLocation() =>
+        (_executionLocationSnapshot, _executionLocationOverride);
+
+    internal void RestoreExecutionLocation((ExecutionLocationSnapshot? Snapshot, string? Override) state)
+    {
+        _executionLocationSnapshot = state.Snapshot;
+        _executionLocationOverride = state.Override;
+    }
+
+    internal string? CurrentExecutionLocation
+    {
+        get
+        {
+            if (_executionLocationOverride is { } cached)
+                return cached;
+            if (_executionLocationSnapshot is not { } snap)
+                return null;
+            var objectType = snap.Me.Definition[(int)ObjdField.Type];
+            int? objectGuid = snap.Me.TypeRecord is { Key: not 0 } typeRecord ? typeRecord.Key : null;
+            var tileX = snap.Me.Position.X >> 4;
+            var tileY = snap.Me.Position.Y >> 4;
+            var tileValue = TileValueAt(tileX, tileY, snap.Me.Position.Height);
+            var stackObject = snap.StackObject;
+            var stackType = stackObject?.TypeRecord is { } stackRecord ? $", GUID 0x{stackRecord.Key:X8}" : string.Empty;
+            var formatted = $"object {snap.Me.Id} (OBJD type {objectType}, GUID {(objectGuid is { } guid ? $"0x{guid:X8}" : "unknown")}), BHAV {snap.TreeId}, instruction {snap.Instruction}, opcode 0x{snap.Opcode:X}, operand {Convert.ToHexString(snap.Operand)}, stack key {snap.StackObjectKey}, stack object {(stackObject is null ? "none" : $"{stackObject.Id} (OBJD type {stackObject.Definition[(int)ObjdField.Type]}{stackType})")}, position {snap.Me.Position}, tile key {tileValue}";
+            _executionLocationOverride = formatted;
+            return formatted;
+        }
+        set
+        {
+            _executionLocationOverride = value;
+            _executionLocationSnapshot = null;
+        }
+    }
     public bool DisplayRefreshRequested { get; set; }
     public IFamilyBudget? FamilyBudget { get; set; }
     public INeighborhoodFamilies? NeighborhoodFamilies { get; set; }
@@ -5075,6 +5260,33 @@ public sealed partial class SimulationWorld
     public LotSwitchRequest? PendingLotSwitch { get; set; }
 
     public Action? PersistNeighborhoodStateImmediately { get; set; }
+    public Action? PersistLotSimulationStateImmediately { get; set; }
+    public Action<int>? ReleaseGenericSimsCall03PrimaryHandle { get; set; }
+    public Action<int>? ReleaseGenericSimsCall03SecondaryHandle { get; set; }
+
+    public delegate bool FamilyValuationLookup(short familyNumber, out int houseNumber, out int budget, out int value);
+    public FamilyValuationLookup? TryLookupFamilyValuation { get; set; }
+    public Func<(int Furnishings, int Architecture)>? LiveLotValuationProvider { get; set; }
+    public Func<IReadOnlyList<int>>? OccupiedVacationHousesProvider { get; set; }
+
+    public delegate bool ActiveFamilyUpkeepLookup(out short familyNumber, out bool hasMembers, out IReadOnlyList<short> minResources);
+    public ActiveFamilyUpkeepLookup? TryLookupActiveFamilyUpkeep { get; set; }
+
+    public List<XObject> WorldLotListEntries { get; } = [];
+
+    /// <summary>Executes GenericSimsCall 0x00, 0x08, and 0x09 initialization natively, clearing tutorial
+    /// state on mode 0 and persisting NGBH neighborhood mode flags.</summary>
+    public void RunGenericSimsCallInitialization(int mode)
+    {
+        if (mode == 0)
+        {
+            this[SimulationGlobal.IsTutorialHouseNoYes] = 0;
+            PersistLotSimulationStateImmediately?.Invoke();
+        }
+        NeighborhoodData[1] = checked((short)(mode + 1));
+        NeighborhoodData[2] = 0;
+        PersistNeighborhoodState();
+    }
 
     /// <summary>Flushes immediate neighborhood state projections to disk, updating NBRS and FAMI resources.</summary>
     public void PersistNeighborhoodState()
@@ -5745,16 +5957,19 @@ public sealed partial class SimulationWorld
         item.MultiTileNextId = 0;
     }
 
-    /// <summary>Resets an object after a script error by temporarily unplacing it, clearing instance data
-    /// and temps, queuing its reset tree (function 1), and attempting to restore its prior placement.</summary>
-    private void ResetObjectAfterScriptError(XObject item, TreeStack? activeStack)
+    private sealed record ResetObjectSnapshot(
+        XObject Item,
+        ObjectPosition PreviousPosition,
+        Dictionary<ObjectData, short> PreservedData,
+        XObject? Parent,
+        short ParentSlot,
+        bool RestoreParentSlot,
+        bool ValidPriorTile,
+        XObject? DirectParent,
+        short DirectSlot);
+
+    private ResetObjectSnapshot CaptureResetObjectSnapshot(XObject item)
     {
-        if (item is XPerson resettingPerson)
-        {
-            InteractionLifecycle.FinalizeActor(resettingPerson);
-            ResetPersonAnimatorForChangedCode(resettingPerson);
-        }
-        else InteractionLifecycle.FinalizeRink(item);
         var previousPosition = item.Position;
         var preservedData = PreservedInitializerData(item);
         // Climbs slot-0 parent links to find the first non-zero container slot.
@@ -5768,25 +5983,32 @@ public sealed partial class SimulationWorld
         var validPriorTile = previousPosition.Height is >= 1 and <= 3 &&
             previousPosition.X >> 4 is > 0 and < LotGeometry.LotDimension - 1 &&
             previousPosition.Y >> 4 is > 0 and < LotGeometry.LotDimension - 1;
-
         var directParent = ObjectTableEntry(item[ObjectData.ParentId]);
         var directSlot = item[ObjectData.SlotHierNumber];
+        var restoreParentSlot = parent is not null && parentSlot >= 0 && parentSlot < parent.Slots.Count;
+        return new ResetObjectSnapshot(item, previousPosition, preservedData, parent, parentSlot,
+            restoreParentSlot, validPriorTile, directParent, directSlot);
+    }
 
+    private void DetachAndInitializeResetObject(ResetObjectSnapshot snapshot)
+    {
+        var item = snapshot.Item;
         BeginObjectRemoval(item, 1);
 
-        if (directParent is not null && directSlot >= 0 && directSlot < directParent.Slots.Count)
+        if (snapshot.DirectParent is not null && snapshot.DirectSlot >= 0 && snapshot.DirectSlot < snapshot.DirectParent.Slots.Count)
         {
-            if (directParent.Slots[directSlot] == item.ClockManagerIndex) directParent.Slots[directSlot] = 0;
-            if (directSlot > 0 && directSlot - 1 < directParent.FootprintSlots.Count &&
-                directParent.FootprintSlots[directSlot - 1].OccupantObjectId == item.ClockManagerIndex)
-                directParent.FootprintSlots[directSlot - 1].OccupantObjectId = 0;
+            if (snapshot.DirectParent.Slots[snapshot.DirectSlot] == item.ClockManagerIndex) snapshot.DirectParent.Slots[snapshot.DirectSlot] = 0;
+            if (snapshot.DirectSlot > 0 && snapshot.DirectSlot - 1 < snapshot.DirectParent.FootprintSlots.Count &&
+                snapshot.DirectParent.FootprintSlots[snapshot.DirectSlot - 1].OccupantObjectId == item.ClockManagerIndex)
+                snapshot.DirectParent.FootprintSlots[snapshot.DirectSlot - 1].OccupantObjectId = 0;
         }
 
-        var restoreParentSlot = parent is not null && parentSlot >= 0 && parentSlot < parent.Slots.Count;
-        InitializeObjectData(item, preservedData);
+        InitializeObjectData(item, snapshot.PreservedData);
 
-        if (restoreParentSlot && parent is not null)
+        if (snapshot.RestoreParentSlot && snapshot.Parent is not null)
         {
+            var parent = snapshot.Parent;
+            var parentSlot = snapshot.ParentSlot;
             var existingSlotKey = parentSlot > 0 && parentSlot - 1 < parent.FootprintSlots.Count
                 ? parent.FootprintSlots[parentSlot - 1].OccupantObjectId
                 : parent.Slots[parentSlot];
@@ -5816,13 +6038,78 @@ public sealed partial class SimulationWorld
                 displacedPeer[ObjectData.SlotHierNumber] = 0;
             }
         }
-        // Runs init (function 0) and the initial tick only for lead objects.
+    }
+
+    /// <summary>Resets an object after a script error by temporarily unplacing it, clearing instance data
+    /// and temps, queuing its reset tree (function 1), and attempting to restore its prior placement.</summary>
+    private void ResetObjectAfterScriptError(XObject item, TreeStack? activeStack)
+    {
+        if (item.MultiTileMasterId != 0 || item.MultiTileNextId != 0)
+        {
+            var lead = item.MultiTileMasterId != 0 ? ObjectById(item.MultiTileMasterId) ?? item : item;
+            var group = MultiTileMembers(lead);
+            if (group.Count > 1)
+            {
+                // Matches Sims.exe cXMTObject::Reset (004231a8.c): unplace/initialize all parts,
+                // run init (function 0) on every part, and re-place the group so cross-part
+                // placement callbacks (e.g. stair BHAV 4122) see initialized sibling Attributes.
+                var snapshots = new List<ResetObjectSnapshot>(group.Count);
+                foreach (var member in group)
+                {
+                    if (member is XPerson resettingMember)
+                    {
+                        InteractionLifecycle.FinalizeActor(resettingMember);
+                        ResetPersonAnimatorForChangedCode(resettingMember);
+                    }
+                    else InteractionLifecycle.FinalizeRink(member);
+                    snapshots.Add(CaptureResetObjectSnapshot(member));
+                }
+                foreach (var snapshot in snapshots)
+                {
+                    SavedExecutionStacks.Remove(snapshot.Item.Id);
+                    DetachAndInitializeResetObject(snapshot);
+                }
+                foreach (var snapshot in snapshots)
+                    FinishObjectInitializer(snapshot.Item, runTick: true, finishMultiTileMember: true);
+
+                var leadSnapshot = snapshots[0];
+                if (lead.RuntimeClass is SimsEngine.Formats.ObjectClass.MultiTileObject or SimsEngine.Formats.ObjectClass.Portal)
+                {
+                    if (leadSnapshot.RestoreParentSlot || leadSnapshot.ValidPriorTile)
+                        PlaceObject(lead, leadSnapshot.PreviousPosition, activeStack ?? TreeRunner.CreateTransientStack(this, lead),
+                            leadSnapshot.RestoreParentSlot ? leadSnapshot.Parent : null,
+                            leadSnapshot.RestoreParentSlot ? checked((short)leadSnapshot.ParentSlot) : (short)0);
+                }
+                else
+                {
+                    foreach (var snapshot in snapshots)
+                    {
+                        if (snapshot.RestoreParentSlot || snapshot.ValidPriorTile)
+                            PlaceObject(snapshot.Item, snapshot.PreviousPosition, activeStack ?? TreeRunner.CreateTransientStack(this, snapshot.Item),
+                                snapshot.RestoreParentSlot ? snapshot.Parent : null,
+                                snapshot.RestoreParentSlot ? checked((short)snapshot.ParentSlot) : (short)0);
+                    }
+                }
+                foreach (var member in group) StopObjectSounds(member.Id);
+                return;
+            }
+        }
+
+        if (item is XPerson resettingPerson)
+        {
+            InteractionLifecycle.FinalizeActor(resettingPerson);
+            ResetPersonAnimatorForChangedCode(resettingPerson);
+        }
+        else InteractionLifecycle.FinalizeRink(item);
+        var singleSnapshot = CaptureResetObjectSnapshot(item);
+        DetachAndInitializeResetObject(singleSnapshot);
+        // Runs init (function 0) and the initial tick only for lead/single objects (cXObject::Reset 00431c90.c:70).
         FinishObjectInitializer(item, runTick: true, finishMultiTileMember: false);
 
-        if (restoreParentSlot || validPriorTile)
-            PlaceObject(item, previousPosition, activeStack,
-                restoreParentSlot ? parent : null,
-                restoreParentSlot ? checked((short)parentSlot) : (short)0);
+        if (singleSnapshot.RestoreParentSlot || singleSnapshot.ValidPriorTile)
+            PlaceObject(item, singleSnapshot.PreviousPosition, activeStack,
+                singleSnapshot.RestoreParentSlot ? singleSnapshot.Parent : null,
+                singleSnapshot.RestoreParentSlot ? checked((short)singleSnapshot.ParentSlot) : (short)0);
         StopObjectSounds(item.Id);
     }
 
@@ -5868,7 +6155,7 @@ public sealed partial class SimulationWorld
         if (item.ClockManagerIndex > 0) ClockManager.SetWaitTicksAt(item.ClockManagerIndex, -1);
         if (item.Definition is not { Length: > (int)ObjdField.MasterId } definition ||
             (definition[(int)ObjdField.MasterId] != 0 && !finishMultiTileMember)) return;
-        var callerLocation = CurrentExecutionLocation;
+        var callerLocation = CaptureExecutionLocation();
         try
         {
             if (FunctionTreeId(item, 0) is var initTree && initTree != 0 && item.TypeRecord?.BehaviorScope is { } scope)
@@ -5878,7 +6165,7 @@ public sealed partial class SimulationWorld
         }
         finally
         {
-            CurrentExecutionLocation = callerLocation;
+            RestoreExecutionLocation(callerLocation);
         }
         if (item.ClockManagerIndex <= 0 || !ReferenceEquals(item, ObjectById(item.Id))) return;
         ClockManager.SetFlag(item.ClockManagerIndex, 1, item[ObjectData.SimulateOnPause] != 0);
@@ -5916,11 +6203,14 @@ public sealed partial class SimulationWorld
         {
             neighbor = AddCreatedPersonNeighbor(person, typeKey.Value);
             person[PersonData.NeighborId] = neighbor.Id;
+            SyncPersonScopeWithNeighborInventory(person, neighbor.Id);
+            if (Neighborhood.TrackingEnabled) Neighborhood.OnPersonInstantiated(this, person);
             return neighbor;
         }
         if (neighbor is not null)
         {
             person[PersonData.NeighborId] = neighbor.Id;
+            SyncPersonScopeWithNeighborInventory(person, neighbor.Id);
             var version = neighbor.PersonRecordVersion;
             if (version > 0)
             {
@@ -5933,7 +6223,7 @@ public sealed partial class SimulationWorld
                     (0x38, 2), (0x39, 2), (0x3f, 2),
                     (0x41, 3),
                     (0x43, 4), (0x44, 4),
-                    (0x45, 5),
+                    (0x45, 5), (0x46, 1),
                     (0x4a, 6),
                     (0x36, 7), (0x37, 7), (0x4b, 7), (0x4c, 7),
                     (0x50, 8), (0x51, 8),
@@ -5949,8 +6239,35 @@ public sealed partial class SimulationWorld
             // Preserves the saved family number on unpersisted catalog or tutorial Sims.
             if (version > 0 || neighbor.PersonData[(int)PersonData.FamilyNumber] != 0)
                 person[PersonData.FamilyNumber] = neighbor.PersonData[(int)PersonData.FamilyNumber];
+            if (Neighborhood.TrackingEnabled) Neighborhood.OnPersonInstantiated(this, person);
         }
         return neighbor;
+    }
+
+    private void SyncPersonScopeWithNeighborInventory(XPerson person, short neighborId)
+    {
+        if (neighborId <= 0) return;
+        var inventory = NeighborInventory(neighborId);
+        if (InteractionScopes.TryGetValue(person.InteractionScopeKey5CA, out var existing))
+        {
+            if (existing.IsBackedBy(inventory)) return;
+            for (short i = 0; i < existing.Count; i++)
+            {
+                if (existing.TryGet(i, out var entry))
+                    inventory.Add(entry.Value, entry.Mode, unchecked((short)entry.Result));
+            }
+            if (existing.Count > 0) inventory.MarkChanged();
+            if (!existing.TryBindResolver(() => NeighborInventory(neighborId)))
+            {
+                var backed = new InteractionScopeTable(() => NeighborInventory(neighborId));
+                backed.AvatarObjects.AddRange(existing.AvatarObjects);
+                InteractionScopes[person.InteractionScopeKey5CA] = backed;
+            }
+        }
+        else
+        {
+            InteractionScopes[person.InteractionScopeKey5CA] = new InteractionScopeTable(() => NeighborInventory(neighborId));
+        }
     }
 
     /// <summary>Initializes a created person from their neighborhood record, copying persistent fields and
@@ -6012,6 +6329,7 @@ public sealed partial class SimulationWorld
             // Character objects use OBJD category flag 4 for friend eligibility.
             FriendEligibilityObjectFlagsB4 = 4u,
         };
+        ClearRemovedNeighbor(id);
         Neighbors.Add(id, neighbor);
         NeighborWalkOrder[slot] = neighbor;
         return neighbor;
@@ -6290,12 +6608,12 @@ public sealed partial class SimulationWorld
             }
         }
         Collect(item);
-        var callerLocation = CurrentExecutionLocation;
+        var callerLocation = CaptureExecutionLocation();
         if (runCleanup)
         foreach (var member in doomed)
             if (FunctionTreeId(member, 12) is var tree && tree != 0 && member.TypeRecord?.BehaviorScope is { } scope)
                 TreeRunner.RunWithParameters(this, member, scope, tree, 0, []);
-        CurrentExecutionLocation = callerLocation;
+        RestoreExecutionLocation(callerLocation);
         foreach (var member in doomed) BeginObjectRemoval(member, 1);
         foreach (var member in doomed) KillObject(member.Id);
         WakeSimulateOnPauseObjects();
@@ -6389,9 +6707,53 @@ public sealed partial class SimulationWorld
     /// cleanup, and executing function 0 to completion.</summary>
     public void ResetObjectsWithChangedCode()
     {
+        var resetIds = new HashSet<short>();
         foreach (var item in WalkOrder.ToArray())
         {
-            if (!ReferenceEquals(item, ObjectById(item.Id))) continue;
+            if (!ReferenceEquals(item, ObjectById(item.Id)) || resetIds.Contains(item.Id)) continue;
+            if (item is not XPerson && (item.MultiTileMasterId != 0 || item.MultiTileNextId != 0))
+            {
+                var lead = item.MultiTileMasterId != 0 ? ObjectById(item.MultiTileMasterId) ?? item : item;
+                var group = MultiTileMembers(lead);
+                if (group.Count > 1 && group.Any(m => FunctionTreeId(m, 3) == 0))
+                {
+                    var anyResetTarget = false;
+                    foreach (var member in group)
+                    {
+                        var memberGuid = unchecked((uint)(member.TypeRecord?.Key ?? 0));
+                        if (ChangedCodeTypeGuids.Contains(memberGuid) || memberGuid == 0x3C08965F)
+                        {
+                            anyResetTarget = true;
+                            break;
+                        }
+                    }
+                    if (!anyResetTarget) continue;
+                    foreach (var member in group)
+                    {
+                        NotifyPersonObjectReferenceRecipients(member);
+                        SavedExecutionStacks.Remove(member.Id);
+                    }
+                    if (!group.Any(m => (m.Flags & 0x40u) != 0))
+                        ResetObjectAfterScriptError(lead, TreeRunner.CreateTransientStack(this, lead));
+                    else
+                    {
+                        foreach (var member in group)
+                        {
+                            BeginObjectRemoval(member, 1);
+                            member.SavedStack.Clear();
+                            member.SavedStackSize = 0;
+                            StopObjectSounds(member.Id);
+                        }
+                    }
+                    foreach (var member in group)
+                    {
+                        resetIds.Add(member.Id);
+                        if (member.ClockManagerIndex > 0) ClockManager.SetWaitTicksAt(member.ClockManagerIndex, -1);
+                    }
+                    continue;
+                }
+            }
+
             var guid = unchecked((uint)(item.TypeRecord?.Key ?? 0));
             var changed = ChangedCodeTypeGuids.Contains(guid);
             if (!changed && guid != 0x3C08965F) continue;
@@ -6399,8 +6761,9 @@ public sealed partial class SimulationWorld
             SavedExecutionStacks.Remove(item.Id);
             if (item is XPerson person) ResetPersonForChangedCode(person);
             else ResetObjectForChangedCode(item);
+            resetIds.Add(item.Id);
             if (item.ClockManagerIndex > 0) ClockManager.SetWaitTicksAt(item.ClockManagerIndex, -1);
-            if (changed) RunFunctionToCompletion(item, 0);
+            if (changed && (item is XPerson || FunctionTreeId(item, 3) != 0)) RunFunctionToCompletion(item, 0);
         }
         foreach (var (typeIndex, updatedType) in CurrentObjectTypes)
             SavedObjectTypes[typeIndex] = updatedType;
@@ -6833,6 +7196,14 @@ public sealed partial class SimulationWorld
         InvalidateAnimatorRootGrid(person);
         person.SetAnimatorDisplacements(0f, 0f, 0f);
         person.AnimationPlayback = null;
+        person.LastAnimationPlayback = null;
+        person.AnimatorDiscontinuityPending = true;
+        person.AnimatorAnchorBone = null;
+        person.AnimatorAnchorInitialized = false;
+        person.AnimatorAnchorWorldPosition = Vector3.Zero;
+        person.PrimaryAnimationWaiting = false;
+        person.PrimaryAnimationEventsRun = 0;
+        person.PrimaryAnimationBackwards = false;
         person.BackgroundAnimationPlayback = null;
         person.CarryAnimationPlayback = null;
         person.PendingAnimationEvents.Clear();
@@ -6859,9 +7230,9 @@ public sealed partial class SimulationWorld
     {
         if (FunctionTreeId(item, function) is not (var tree and not 0) || item.TypeRecord?.BehaviorScope is not { } scope)
             return;
-        var callerLocation = CurrentExecutionLocation;
+        var callerLocation = CaptureExecutionLocation();
         TreeRunner.RunWithParameters(this, item, scope, tree, stackObject, []);
-        CurrentExecutionLocation = callerLocation;
+        RestoreExecutionLocation(callerLocation);
     }
 
     private void RunObjectResetInitializer(XObject item)
@@ -7012,8 +7383,12 @@ public sealed partial class SimulationWorld
     public InteractionScopeTable InteractionExecutorScope(XObject item)
     {
         ArgumentNullException.ThrowIfNull(item);
-        if (!InteractionScopes.TryGetValue(item.InteractionScopeKey5CA, out var scope))
-            InteractionScopes[item.InteractionScopeKey5CA] = scope = new InteractionScopeTable([]);
+        if (InteractionScopes.TryGetValue(item.InteractionScopeKey5CA, out var scope))
+            return scope;
+        scope = item is XPerson person && person[PersonData.NeighborId] is > 0 and var neighborId
+            ? new InteractionScopeTable(() => NeighborInventory(neighborId))
+            : new InteractionScopeTable([]);
+        InteractionScopes[item.InteractionScopeKey5CA] = scope;
         return scope;
     }
 
@@ -7108,17 +7483,26 @@ public sealed partial class SimulationWorld
 
     private static void StoreGenericSimsCall11State(InteractionScopeTable scope, XObject source)
     {
-        scope.RemoveEntriesWithDifferentKey(2);
+        scope.RemoveEntriesWithKey(2);
         ReadOnlySpan<(int Selector, int Mode)> floatFields = [(9, 0), (6, 1), (5, 2), (15, 3), (7, 4), (8, 5), (14, 6)];
+        var person = source as XPerson;
         foreach (var (selector, mode) in floatFields)
         {
-            var value = source.InteractionExecutorFloats.GetValueOrDefault(selector);
+            var value = person is not null && (uint)selector < (uint)person.Motives.Length
+                ? person.Motives[selector]
+                : source.InteractionExecutorFloats.GetValueOrDefault(selector);
             scope.AddOrIncrement(2, mode, unchecked((int)MathF.Truncate(value)));
         }
         scope.AddOrIncrement(2, 9, source.InteractionBehaviorSavedWord);
-        scope.AddOrIncrement(2, 10, source.InteractionExecutorWords.GetValueOrDefault(0x62c));
-        scope.AddOrIncrement(2, 11, source.InteractionExecutorWords.GetValueOrDefault(0x630));
-        scope.AddOrIncrement(2, 12, source.InteractionExecutorWords.GetValueOrDefault(0x62e));
+        scope.AddOrIncrement(2, 10, person is not null
+            ? person.PersonData[80]
+            : source.InteractionExecutorWords.GetValueOrDefault(0x62c));
+        scope.AddOrIncrement(2, 11, person is not null
+            ? person.PersonData[82]
+            : source.InteractionExecutorWords.GetValueOrDefault(0x630));
+        scope.AddOrIncrement(2, 12, person is not null
+            ? person.PersonData[81]
+            : source.InteractionExecutorWords.GetValueOrDefault(0x62e));
     }
 
     /// <summary>Checks whether a visitor has an active inventory entry by querying the person's interaction
@@ -7305,6 +7689,7 @@ public sealed partial class SimulationWorld
         HouseUpkeepPenaltyPerBrokenObject = (int)Math.Round(constants.Get("upkeep penalty per broken object", 15f), MidpointRounding.ToEven);
         HouseLayoutHistoryFillValue = (int)Math.Round(constants.Get("fill value for layout history", 200f), MidpointRounding.ToEven);
         FriendshipThreshold = SimulatorTuning.FriendshipThreshold;
+        ArchitectureValueMultiplier = constants.Get("architecture value multiplier", 0.7f);
     }
 
     /// <summary>Initializes the autonomy candidate flag for an object after its multi-tile root and
@@ -7419,7 +7804,7 @@ public sealed partial class SimulationWorld
         var person = key == 0 ? null : ObjectByTypeRecordKey(key);
         if (person is null) return new PersonRecordSelection(null);
 
-        var state = person.StateValue;
+        var state = person.StateValue != 0 ? person.StateValue : NeighborInteractionGlobalStateValue;
         var stateClass = StateClass(state);
         if (stateClass == 1)
             return new PersonRecordSelection(PersonSelectionOverride || person.SelectionWord5CC == 0 ? person : null);
@@ -7430,9 +7815,8 @@ public sealed partial class SimulationWorld
         if (PersonSelectionOverride) return new PersonRecordSelection(person);
         if (state <= 0x14 || state >= 0x1f)
         {
-            if (StoredSlotPersonId is null)
-                throw new InvalidOperationException("FUN_004E99D7 reads the stored slot word, but the manager slot object is missing.");
-            if (person.SelectionWord606 == StoredSlotPersonId.Value) return new PersonRecordSelection(person);
+            if (StoredSlotPersonId is { } stored && person.SelectionWord606 == stored)
+                return new PersonRecordSelection(person);
         }
 
         return new PersonRecordSelection(person.SelectionWord5CC != 2 ? person : null);
@@ -7522,22 +7906,42 @@ public sealed partial class SimulationWorld
     }
 
     /// <summary>Performs lot upkeep by raising the six attributes of the active Magic Master Spells
-    /// controller to match the caller's minimum resource requirements.</summary>
+    /// controller to match the caller's or active family's minimum resource requirements.</summary>
     public void RunLotUpkeep(XObject runningObject)
     {
         ArgumentNullException.ThrowIfNull(runningObject);
-        if (!LotUpkeepManagerPresent || !runningObject.LotUpkeepGateByte14C ||
-            runningObject.TableWord10C == 0 || runningObject.TableWord10C != GlobalPerson.LotUpkeepMatchWord22 ||
-            StateClass(runningObject.StateValue) != 1 || !runningObject.LotUpkeepPointer128Present)
+        if (!LotUpkeepManagerPresent) return;
+
+        IReadOnlyList<short> minResources;
+        if (runningObject.LotUpkeepGateByte14C)
+        {
+            if (runningObject.TableWord10C == 0 || runningObject.TableWord10C != GlobalPerson.LotUpkeepMatchWord22 ||
+                StateClass(runningObject.StateValue) != 1 || !runningObject.LotUpkeepPointer128Present)
+                return;
+            minResources = runningObject.LotUpkeepMinimumResources;
+        }
+        else if (TryLookupActiveFamilyUpkeep is { } lookup &&
+                 lookup(out var familyNumber, out var hasMembers, out var familyResources) &&
+                 familyNumber != 0 &&
+                 familyNumber == GlobalPerson.LotUpkeepMatchWord22 &&
+                 StateClass(unchecked((short)ActiveLotNumber)) == 1 &&
+                 hasMembers &&
+                 familyResources.Count >= 6)
+        {
+            minResources = familyResources;
+        }
+        else
+        {
             return;
+        }
 
         var resources = ObjectByTypeRecordKey(unchecked((int)0xB6C90029))?.Attributes;
         if (resources is null) return;
         if (resources.Length < 6)
             throw new InvalidOperationException("Sims.exe FUN_00410b89 requires six Magic Master Spells resource attributes.");
         for (var i = 0; i < 6; i++)
-            if (resources[i] < runningObject.LotUpkeepMinimumResources[i])
-                resources[i] = runningObject.LotUpkeepMinimumResources[i];
+            if (resources[i] < minResources[i])
+                resources[i] = minResources[i];
     }
 
     /// <summary>Updates a Sim's cached room location, toggles room lighting transitions, and recalculates
@@ -7655,8 +8059,9 @@ public sealed partial class SimulationWorld
     /// the list transitions from empty to non-empty.</summary>
     public void MaintainLotList(XObject owner)
     {
-        var wasEmpty = owner.LotListEntries.Count == 0;
+        var wasEmpty = WorldLotListEntries.Count == 0 && owner.LotListEntries.Count == 0;
         owner.LotListEntries.Add(owner);
+        WorldLotListEntries.Add(owner);
         if (wasEmpty) DispatchNotice(0x108, 0);
     }
 
@@ -7664,10 +8069,12 @@ public sealed partial class SimulationWorld
     /// transitions between empty and non-empty.</summary>
     public void RemoveFromLotList(XObject owner)
     {
-        var wasEmpty = owner.LotListEntries.Count == 0;
+        var wasEmpty = WorldLotListEntries.Count == 0 && owner.LotListEntries.Count == 0;
         var index = owner.LotListEntries.FindIndex(item => ReferenceEquals(item, owner));
         if (index >= 0) owner.LotListEntries.RemoveAt(index);
-        var isEmpty = owner.LotListEntries.Count == 0;
+        var worldIndex = WorldLotListEntries.FindIndex(item => ReferenceEquals(item, owner));
+        if (worldIndex >= 0) WorldLotListEntries.RemoveAt(worldIndex);
+        var isEmpty = WorldLotListEntries.Count == 0 && owner.LotListEntries.Count == 0;
         if (wasEmpty != isEmpty) DispatchNotice(0x108, 0);
     }
 
@@ -7713,25 +8120,53 @@ public sealed partial class SimulationWorld
 
         static InvalidOperationException MissingObjectValueState(string name) =>
             new($"GenericSimsCall 0x05 special value path needs {name} from the game state.");
+    }
 
-        static int MultiplyAndTruncateX87(int value, float factor)
+    /// <summary>Computes family net worth for GenericSimsCall 0x05 natively from FAMI and live lot
+    /// valuation state when no test interaction object entry is registered.</summary>
+    public bool TryGetGenericSimsCall05FamilyAmount(short familyNumber, out int amount)
+    {
+        amount = 0;
+        if (TryLookupFamilyValuation is not { } lookup ||
+            !lookup(familyNumber, out var houseNumber, out var budget, out var value))
+            return false;
+
+        if (ActiveLotNumber != 0 && houseNumber == ActiveLotNumber)
         {
-            var bits = BitConverter.SingleToInt32Bits(factor);
-            var exponentBits = (bits >> 23) & 0xff;
-            if (exponentBits == 0xff) return 0;
-            var significand = bits & 0x7fffff;
-            var exponent = exponentBits == 0 ? -149 : exponentBits - 127 - 23;
-            if (exponentBits != 0) significand |= 1 << 23;
-
-            var product = new BigInteger(value) * significand;
-            if ((bits & int.MinValue) != 0) product = -product;
-            var negative = product.Sign < 0;
-            var magnitude = BigInteger.Abs(product);
-            magnitude = exponent >= 0 ? magnitude << exponent : magnitude >> -exponent;
-            var truncated = negative ? -magnitude : magnitude;
-            if (truncated < long.MinValue || truncated > long.MaxValue) return 0;
-            return unchecked((int)(long)truncated);
+            var availableFunds = this[SimulationGlobal.SimlessBuildMode] == 1
+                ? 999_999
+                : (FamilyBudget?.ReadFamilyBudget() ?? budget);
+            var simi = SavedSimulationState;
+            var lotValue = simi?.Field0x9C ?? 0;
+            var (furnishings, arch) = LiveLotValuationProvider?.Invoke()
+                ?? (simi?.Field0xA0 ?? 0, simi?.Field0xA4 ?? 0);
+            var scaled = MultiplyAndTruncateX87(arch, ArchitectureValueMultiplier ?? 0.7f);
+            amount = unchecked(availableFunds + lotValue + furnishings + scaled);
         }
+        else
+        {
+            amount = unchecked(budget + value);
+        }
+        return true;
+    }
+
+    private static int MultiplyAndTruncateX87(int value, float factor)
+    {
+        var bits = BitConverter.SingleToInt32Bits(factor);
+        var exponentBits = (bits >> 23) & 0xff;
+        if (exponentBits == 0xff) return 0;
+        var significand = bits & 0x7fffff;
+        var exponent = exponentBits == 0 ? -149 : exponentBits - 127 - 23;
+        if (exponentBits != 0) significand |= 1 << 23;
+
+        var product = new BigInteger(value) * significand;
+        if ((bits & int.MinValue) != 0) product = -product;
+        var negative = product.Sign < 0;
+        var magnitude = BigInteger.Abs(product);
+        magnitude = exponent >= 0 ? magnitude << exponent : magnitude >> -exponent;
+        var truncated = negative ? -magnitude : magnitude;
+        if (truncated < long.MinValue || truncated > long.MaxValue) return 0;
+        return unchecked((int)(long)truncated);
     }
 
     /// <summary>Resolves a stack-object reference to a live simulation object through the caller's object
@@ -7742,13 +8177,13 @@ public sealed partial class SimulationWorld
         return me.HasRequestKey ? null : ObjectById(key);
     }
 
-    /// <summary>Saves a person's persistent data into their neighbor record using layout version 9 format.</summary>
+    /// <summary>Saves a person's persistent data into their neighbor record using layout version 10 format.</summary>
     public void SavePersonRecord(XPerson person)
     {
         var neighborId = person[PersonData.NeighborId];
         if (neighborId < 1 || !Neighbors.TryGetValue(neighborId, out var neighbor)) return;
-        var changed = neighbor.PersonRecordVersion != 9;
-        neighbor.PersonRecordVersion = 9;
+        var changed = neighbor.PersonRecordVersion != 10;
+        neighbor.PersonRecordVersion = 10;
         // NBRS chunks store Sim names separately from persistent person data.
         if (SavedNeighbors?.Entries.FirstOrDefault(saved => saved.NeighborId == neighborId) is { } savedNeighbor &&
             !string.Equals(savedNeighbor.Name, neighbor.Name, StringComparison.Ordinal))
@@ -7758,13 +8193,15 @@ public sealed partial class SimulationWorld
             neighbor.Name = personName;
             changed = true;
         }
-        foreach (var field in PersonRecordFieldsVersion9)
+        foreach (var field in PersonRecordFieldsVersion10)
         {
+            if (field >= neighbor.PersonData.Length || field >= person.PersonData.Length) continue;
             if (neighbor.PersonData[field] == person.PersonData[field]) continue;
             neighbor.PersonData[field] = person.PersonData[field];
             changed = true;
         }
         PersistentPersonDataDirty |= changed;
+        if (changed) DirtyPersistentPersonNeighborIds.Add(neighborId);
     }
 
     /// <summary>Flushes persistent data from all instantiated persons to their neighbor records prior to
@@ -7919,13 +8356,7 @@ public sealed partial class SimulationWorld
         UpdatePersonRoomMotive(person);
         person[PersonData.TickCounter] = unchecked((short)(person[PersonData.TickCounter] + 1));
         person.ApplyMotiveChanges();
-        var moneyOverHead = person[PersonData.MoneyAmountOverHead];
-        if (moneyOverHead != 0)
-        {
-            if (moneyOverHead is >= -20000 and <= -10001)
-                PlaySoundEvent?.Invoke("sting_char_winner", person.Id, false, false);
-            person[PersonData.MoneyAmountOverHead] = 0;
-        }
+        ProcessPersonMoneyOverhead(person);
     }
 
     /// <summary>Advances one simulation tick, running active object behavior stacks followed by request
@@ -8028,7 +8459,16 @@ public sealed partial class SimulationWorld
         if (PendingRemovals.Count == 0) return;
         var removals = PendingRemovals.Distinct().ToArray();
         PendingRemovals.Clear();
-        foreach (var id in removals) KillObject(id);
+        foreach (var id in removals)
+        {
+            if (Neighborhood.TrackingEnabled &&
+                ObjectById(id) is XPerson person &&
+                TryInterceptConnectedVisitorRemoval?.Invoke(person) == true)
+            {
+                continue;
+            }
+            KillObject(id);
+        }
     }
 
     /// <summary>Executes the clock manager pass across objects. Yielded stacks suspend the pass, while
@@ -8119,8 +8559,11 @@ public sealed partial class SimulationWorld
     internal void TickAvatarAnimations(XPerson person)
     {
         person.AnimatorMilliseconds = unchecked(person.AnimatorMilliseconds + 42);
+        if (person.LastAnimationPlayback is { } expiredLast &&
+            MathF.Abs(expiredLast.PracticeWeight) <= LastPracticePruneWeightThreshold)
+            person.LastAnimationPlayback = null;
         if (person.AnimationPlayback is { RouteDriven: true } && person.NativeRoute is null)
-            person.AnimationPlayback = null;
+            StopCurrentAnimation(person);
         UpdateCarryPractice(person);
         UpdateBackgroundPractice(person);
         UpdateAnimatorWalkingScale(person);
@@ -8188,25 +8631,88 @@ public sealed partial class SimulationWorld
             RouteExecutor.TickStandingStartRootInterpolation(this, person);
             RouteExecutor.TickRouteRootMovement(this, person,
                 SavedExecutionStacks.GetValueOrDefault(person.Id));
+            TickAnchorRootPinning(person);
         }
         if (AvatarAnimationRootOnly) return;
         foreach (var playback in person.GetAnimationPracticeApplicationOrder())
             Tick(playback);
+        if (person.LastAnimationPlayback is { } fadedLast &&
+            !fadedLast.IsPracticeWeightFadeActive &&
+            MathF.Abs(fadedLast.PracticeWeight) <= LastPracticePruneWeightThreshold)
+        {
+            person.LastAnimationPlayback = null;
+        }
 
         void Tick(AvatarAnimationPlayback playback)
         {
-            playback.Tick(deliverAnimationEvents: true, person.AnimatorMilliseconds);
+            var isLast = ReferenceEquals(playback, person.LastAnimationPlayback);
+            playback.Tick(deliverAnimationEvents: !isLast, person.AnimatorMilliseconds);
+            if (isLast)
+            {
+                playback.EventQueue.Clear();
+                playback.SoundEventQueue.Clear();
+                return;
+            }
             person.PendingAnimationEvents.AddRange(playback.EventQueue);
             playback.EventQueue.Clear();
             foreach (var sound in playback.SoundEventQueue)
             {
                 if (ApplyAnimationTimeProperty(person, playback, sound)) continue;
+                if (string.IsNullOrEmpty(sound.PackId) &&
+                    sound.Resource is "anchor" or "discontinuity")
+                    continue;
                 AnimationSound?.Invoke(person.Id, sound);
             }
             playback.SoundEventQueue.Clear();
         }
         // Updates head posture only during full practice ticks, not root-only ticks.
         TickHeadPosture(person);
+    }
+
+    private void TickAnchorRootPinning(XPerson person)
+    {
+        if (AnchorBoneWorldResolver is null || person.AnimationPlayback is null ||
+            person.NativeRoute is not { AnimatorFollowState: 1 } ||
+            person.AnimatorControlState is not (6 or 8 or 9 or 10))
+        {
+            person.AnimatorAnchorInitialized = false;
+            return;
+        }
+        if (string.IsNullOrEmpty(person.AnimatorAnchorBone) ||
+            person.AnimatorRootX is not { } rx || person.AnimatorRootY is not { } ry ||
+            !float.IsFinite(rx) || !float.IsFinite(ry))
+        {
+            person.AnimatorAnchorInitialized = false;
+            return;
+        }
+        if (AnchorBoneWorldResolver.Invoke(person, person.AnimatorAnchorBone) is not { } boneAvatarPos)
+            return;
+        // 0058dc76.c:101-103 zeroes avatar-local X/Y and transforms (0, 0, bz) by the avatar world transform
+        // (LotFacingAngle rotation + body scale + root translation in VitaBoy units).
+        const float scale = 16f / 3f;
+        var rootDirection = AvatarDirection.RootDirection(person.AnimatorRootDirection,
+            person[ObjectData.Direction], person.AnimatorDisplacementDirection);
+        var facingMatrix = Matrix4x4.CreateRotationY(AvatarDirection.LotFacingAngle(rootDirection));
+        var bodyScale = float.IsFinite(person.AnimatorBodyScale) && person.AnimatorBodyScale > 0f
+            ? person.AnimatorBodyScale
+            : 1f;
+        var curPos = Vector3.Transform(new Vector3(0f, 0f, boneAvatarPos.Z), facingMatrix) * bodyScale +
+                     new Vector3(ry / scale, 0f, rx / scale);
+        if (!person.AnimatorAnchorInitialized)
+        {
+            person.AnimatorAnchorWorldPosition = curPos;
+            person.AnimatorAnchorInitialized = true;
+            return;
+        }
+        var delta = person.AnimatorAnchorWorldPosition - curPos;
+        var dx = scale * delta.Z;
+        var dy = scale * delta.X;
+        var distSq = dx * dx + dy * dy;
+        if (distSq > 0.01f && distSq <= 10000.0f)
+        {
+            person.AnimatorRootX = rx + dx;
+            person.AnimatorRootY = ry + dy;
+        }
     }
 
     /// <summary>Applies animation event time properties for non-audio visual cues such as dressing and
@@ -8236,6 +8742,38 @@ public sealed partial class SimulationWorld
             case "undress":
                 person.UndressAccessory(prop.Cue);
                 return true;
+            case "discontinuity":
+                if (person.LastAnimationPlayback is not null)
+                {
+                    person.LastAnimationPlayback = null;
+                    person.AnimatorDiscontinuityPending = true;
+                }
+                return true;
+            case "anchor":
+            {
+                if (!ReferenceEquals(playback, person.AnimationPlayback))
+                    return false;
+                var boneName = prop.BoneName ?? "";
+                if (intValue == 0)
+                {
+                    playback.AnchorBone = null;
+                    if (string.Equals(person.AnimatorAnchorBone, boneName, StringComparison.Ordinal))
+                    {
+                        person.AnimatorAnchorBone = null;
+                        person.AnimatorAnchorInitialized = false;
+                    }
+                }
+                else
+                {
+                    playback.AnchorBone = boneName;
+                    if (!string.Equals(person.AnimatorAnchorBone, boneName, StringComparison.Ordinal))
+                    {
+                        person.AnimatorAnchorBone = boneName;
+                        person.AnimatorAnchorInitialized = false;
+                    }
+                }
+                return true;
+            }
             default:
                 return false;
         }
@@ -8295,11 +8833,52 @@ public sealed partial class SimulationWorld
         }
     }
 
-    /// <summary>Stops the primary animation playback and resets the active skill index to -1.</summary>
+    internal const int StopPracticeFadeDurationMilliseconds = 200;
+    private const float LastPracticePruneWeightThreshold = 1e-6f;
+
+    /// <summary>Stops the primary animation playback, fading it out in the Last slot per FUN_00586ed8,
+    /// and resets the active skill index to -1.</summary>
     internal void StopCurrentAnimation(XPerson person)
     {
+        if (person.AnimationPlayback is { } current)
+        {
+            current.EventQueue.Clear();
+            current.SoundEventQueue.Clear();
+            if (current.PracticeWeight > LastPracticePruneWeightThreshold)
+            {
+                current.AllowUnblendedOverride = false;
+                current.PracticePriority = current.PracticePriority + 1;
+                current.FadePracticeWeight(person.AnimatorMilliseconds,
+                    unchecked(person.AnimatorMilliseconds + StopPracticeFadeDurationMilliseconds),
+                    current.PracticeWeight, 0f);
+                person.LastAnimationPlayback = current;
+            }
+            else
+            {
+                person.LastAnimationPlayback = null;
+            }
+        }
         person.AnimationPlayback = null;
+        person.AnimatorAnchorBone = null;
+        person.AnimatorAnchorInitialized = false;
+        person.AnimatorAnchorWorldPosition = Vector3.Zero;
         person.AnimatorCurrentSkill = -1;
+    }
+
+    /// <summary>Transitions out any active primary animation and installs a new primary playback,
+    /// consuming any pending discontinuity flag per FUN_005926e6.</summary>
+    internal void BeginPrimaryAnimation(XPerson person, AvatarAnimationPlayback next)
+    {
+        StopCurrentAnimation(person);
+        if (person.AnimatorDiscontinuityPending)
+        {
+            person.AnimatorDiscontinuityPending = false;
+            person.LastAnimationPlayback = null;
+            next.PracticePriority += 5;
+        }
+        person.PendingAnimationEvents.Clear();
+        person.AnimatorCurrentSkill = -1;
+        person.AnimationPlayback = next;
     }
 
     /// <summary>Stops reach playback, clears event queues, and transitions to the appropriate posture
@@ -8308,6 +8887,9 @@ public sealed partial class SimulationWorld
     {
         StopCurrentAnimation(person);
         person.ReachAnimationActive = false;
+        person.PrimaryAnimationWaiting = false;
+        person.PrimaryAnimationEventsRun = 0;
+        person.PrimaryAnimationBackwards = false;
         person.PendingAnimationEvents.Clear();
         person.AnimatorControlState = person[PersonData.Sitting] switch
         {
@@ -8448,7 +9030,7 @@ public sealed partial class SimulationWorld
                     route = route with { MotionAnimationIndex = startSkill, MotionFrame = 0f, MotionPracticeFrame = 0f };
                 }
                 person.NativeRoute = route;
-                RouteExecutor.ShowWalkSkill(person, startClip, 0f, startClip.StandardRootMotionSamples.Count);
+                RouteExecutor.ShowWalkSkill(this, person, startClip, 0f, startClip.StandardRootMotionSamples.Count);
             }
             return;
         }
@@ -8468,7 +9050,7 @@ public sealed partial class SimulationWorld
         if (clip?.StandardRootMotionSamples is not { Count: > 1 } samples) return;
         route = route with { MotionAnimationIndex = (short)gaitSkill, MotionFrame = 0f, MotionPracticeFrame = 0f };
         person.NativeRoute = route;
-        RouteExecutor.ShowWalkSkill(person, clip, 0f, samples.Count);
+        RouteExecutor.ShowWalkSkill(this, person, clip, 0f, samples.Count);
     }
 
     private bool AnimatorOutOfBounds(XPerson person)
@@ -8521,8 +9103,9 @@ public sealed partial class SimulationWorld
             if (route.LookTowardsFollow)
                 person.AnimatorRootDirection = route.ArrivalFacing;
             person.AnimatorControlState = 3;
-            person.AnimationPlayback = null;
-            person.AnimatorCurrentSkill = -1;
+            person.AnimatorDiscontinuityPending = true;
+            StopCurrentAnimation(person);
+            person.LastAnimationPlayback = null;
             person.NativeRoute = route with
             {
                 AnimatorFollowState = -1,
@@ -8665,20 +9248,22 @@ public sealed partial class SimulationWorld
     {
         person.AnimatorControlState = 7;
         var swimExit = RouteExecutor.ResolveWalkAnimation(this, person, 0x13);
-        person.AnimatorCurrentSkill = 0x13;
         if (swimExit is not null)
+        {
             // Swimming exit plays the swim transition skill in reverse.
-            person.AnimationPlayback = new AvatarAnimationPlayback(swimExit, backwards: true, loop: false,
+            BeginPrimaryAnimation(person, new AvatarAnimationPlayback(swimExit, backwards: true, loop: false,
                 startedAtMils: person.AnimatorMilliseconds)
             {
                 Interruptible = true,
                 PoolSwimExit = true,
-            };
+            });
+        }
+        person.AnimatorCurrentSkill = 0x13;
     }
 
     /// <summary>Finalizes swimming route completion while allowing the one-shot exit animation to finish
     /// playing.</summary>
-    private static void TickPoolSwimExit(XPerson person)
+    private void TickPoolSwimExit(XPerson person)
     {
         if (person.NativeRoute is not { PoolSwimExitPending: true } route) return;
         if (person.AnimatorControlState == 7 &&
@@ -8693,8 +9278,7 @@ public sealed partial class SimulationWorld
             person.AnimatorRootDirection = direction;
             person[ObjectData.Direction] = SimsEngine.Character.AvatarDirection.ToObjectDirection(direction);
             person.AnimatorStateTailField198 = 1;
-            person.AnimationPlayback = null;
-            person.AnimatorCurrentSkill = -1;
+            StopCurrentAnimation(person);
             person.AnimatorControlState = 3;
             person.NativeRoute = route with
             {
@@ -8713,8 +9297,7 @@ public sealed partial class SimulationWorld
         if (person.AnimatorRouteTransitionState != 3) return;
         if (person.AnimationPlayback is { PoolSwimExit: true, EndReached: true })
         {
-            person.AnimationPlayback = null;
-            person.AnimatorCurrentSkill = -1;
+            StopCurrentAnimation(person);
             person.AnimatorControlState = 3;
             person.NativeRoute = route with
             {
@@ -9308,6 +9891,7 @@ public sealed partial class SimulationWorld
     public bool Remove(short id)
     {
         if (!Objects.Remove(id, out var item)) return false;
+        if (Neighborhood.TrackingEnabled && item is XPerson removedPerson) Neighborhood.OnPersonRemoved(this, removedPerson);
         if (item is XPerson person) InteractionLifecycle.FinalizeActor(person);
         else InteractionLifecycle.FinalizeRink(item);
         StopObjectSounds(id);
@@ -9328,6 +9912,7 @@ public sealed partial class SimulationWorld
             }
         }
         WalkOrder.Remove(item);
+        WorldLotListEntries.RemoveAll(entry => ReferenceEquals(entry, item));
         ClockManager.Remove(item);
         if (tableSlot > 0 && tableSlot <= _objectTableEntries.Count && ReferenceEquals(_objectTableEntries[tableSlot - 1], item))
             _objectTableEntries[tableSlot - 1] = null;
@@ -9431,6 +10016,55 @@ public sealed partial class SimulationWorld
 
     public List<SimulationDialogRecord> DialogRecords { get; } = [];
     private long _dialogSequence;
+    private int? _dialogOwnedGenericSimsCall03PrimaryHandle;
+
+    public void SyncGenericSimsCall03DialogHandle()
+    {
+        if (Host is not null) return;
+        if (HasVisibleDialog)
+        {
+            if (GenericSimsCall03State.PrimaryHandle == 0)
+            {
+                var handle = unchecked((int)Math.Max(1L, _dialogSequence));
+                GenericSimsCall03State.PrimaryHandle = handle;
+                if (GenericSimsCall03State.LinkedGlobalWord60 is null or 0)
+                    GenericSimsCall03State.LinkedGlobalWord60 = 0xf;
+                _dialogOwnedGenericSimsCall03PrimaryHandle = handle;
+            }
+            return;
+        }
+        if (_dialogOwnedGenericSimsCall03PrimaryHandle is { } owned &&
+            GenericSimsCall03State.PrimaryHandle == owned)
+        {
+            GenericSimsCall03State.PrimaryHandle = 0;
+            if (GenericSimsCall03State.LinkedGlobalWord60 == 0xf)
+                GenericSimsCall03State.LinkedGlobalWord60 = 0;
+            _dialogOwnedGenericSimsCall03PrimaryHandle = null;
+        }
+    }
+
+    public void DismissVisibleDialogRecords()
+    {
+        for (var i = DialogRecords.Count - 1; i >= 0; i--)
+        {
+            var record = DialogRecords[i];
+            if (!record.Visible) continue;
+            record.State = record.AwaitsResponse ? 2 : 5;
+            record.Visible = false;
+            if (!record.AwaitsResponse)
+                DialogRecords.RemoveAt(i);
+        }
+        if (_dialogOwnedGenericSimsCall03PrimaryHandle is { } owned &&
+            GenericSimsCall03State.PrimaryHandle == owned)
+        {
+            GenericSimsCall03State.PrimaryHandle = 0;
+            if (GenericSimsCall03State.LinkedGlobalWord60 == 0xf)
+                GenericSimsCall03State.LinkedGlobalWord60 = 0;
+        }
+        _dialogOwnedGenericSimsCall03PrimaryHandle = null;
+        ShowNextDialogRecord();
+        SyncGenericSimsCall03DialogHandle();
+    }
 
     public SimulationDialogRecord? DialogRecord(XObject owner) =>
         DialogRecords.FirstOrDefault(record => ReferenceEquals(record.Owner, owner));
@@ -9452,6 +10086,7 @@ public sealed partial class SimulationWorld
             State = !awaitsResponse && !blocking ? 1 : 0,
         };
         DialogRecords.Add(record);
+        SyncGenericSimsCall03DialogHandle();
         return record;
     }
 
@@ -9486,6 +10121,7 @@ public sealed partial class SimulationWorld
             }
         }
         DialogRecords.Add(record);
+        SyncGenericSimsCall03DialogHandle();
         return record;
     }
 
@@ -9539,6 +10175,7 @@ public sealed partial class SimulationWorld
         record.State = 5;
         record.Visible = false;
         ShowNextDialogRecord();
+        SyncGenericSimsCall03DialogHandle();
     }
 
     public void RespondMessageDialog(string token, byte code, string? responseText = null)
@@ -9552,6 +10189,7 @@ public sealed partial class SimulationWorld
             record.Visible = false;
             if (!record.AwaitsResponse) DialogRecords.Remove(record);
             ShowNextDialogRecord();
+            SyncGenericSimsCall03DialogHandle();
             return;
         }
         if (record.Kind == 2 || record.Kind == 14)
@@ -9632,12 +10270,14 @@ public sealed partial class SimulationWorld
         if (!record.AwaitsResponse || record.Kind is 5 or 6 or 7 or 8 or 9 or 10 or 11 or 13)
             DialogRecords.Remove(record);
         ShowNextDialogRecord();
+        SyncGenericSimsCall03DialogHandle();
     }
 
     public void CompleteDialogRecord(SimulationDialogRecord record)
     {
         DialogRecords.Remove(record);
         ShowNextDialogRecord();
+        SyncGenericSimsCall03DialogHandle();
     }
 
     private void ShowNextDialogRecord()

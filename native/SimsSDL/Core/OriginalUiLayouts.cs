@@ -21,15 +21,17 @@ public static class OriginalUIScalingLayout
         public const double RightBevelCapWidth = 10;
     }
 
+    public const float DefaultUIScaleBoost = 1.15f;
+
     public static float AutomaticUIScale(int width, int height, float pixelDensity)
     {
         if (width <= 0 || height <= 0)
-            return MathF.Max(1f, pixelDensity);
+            return MathF.Max(1f, pixelDensity) * DefaultUIScaleBoost;
         float w = width;
         float h = height;
         float fit800x600 = MathF.Min(w / 800.0f, h / 600.0f);
-        float nativeDensity = MathF.Max(1.0f, pixelDensity);
-        return MathF.Max(0.25f, MathF.Min(nativeDensity, fit800x600));
+        float targetScale = MathF.Max(1.0f, pixelDensity) * DefaultUIScaleBoost;
+        return MathF.Max(0.25f, MathF.Min(targetScale, fit800x600));
     }
 
     /// <summary>Computes the aspect-fit scale for non-lot full screens, bounded by uiScale * 1.15 so 2K/4K

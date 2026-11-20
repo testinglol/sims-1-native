@@ -2,9 +2,9 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleName</key><string>The Sims Native</string>
-  <key>CFBundleDisplayName</key><string>The Sims Native</string>
-  <key>CFBundleIdentifier</key><string>local.sims.native-preview</string>
+  <key>CFBundleName</key><string>Plumbob Engine</string>
+  <key>CFBundleDisplayName</key><string>Plumbob Engine</string>
+  <key>CFBundleIdentifier</key><string>local.plumbob.engine</string>
   <key>CFBundleExecutable</key><string>SimsSDL</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>

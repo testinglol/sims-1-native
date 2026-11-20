@@ -1,0 +1,133 @@
+#pragma clang diagnostic ignored "-Wmissing-prototypes"
+
+#include <metal_stdlib>
+#include <simd/simd.h>
+
+using namespace metal;
+
+struct Ambient
+{
+    float4 view;
+    float4 params;
+    float4 light;
+    float4 extent;
+    float4 lamp;
+    float4 contact;
+    float4 frame;
+    float4 sunLot;
+    float4 clouds;
+    float4 drift;
+    float4 weather;
+    float4 tone;
+    float4 season;
+    float4 lamps[16];
+    float4 prints[16];
+    float4 seasonExtra;
+    float4 seasonExtra2;
+    float4 shadowView;
+};
+
+struct main0_out
+{
+    float4 color [[color(0)]];
+};
+
+static inline __attribute__((always_inline))
+float3 lotPoint(thread const float2& scene, thread const float& key, thread const bool& terrain, thread const float2& frame)
+{
+    float2 local = scene - frame;
+    float _33;
+    if (terrain)
+    {
+        _33 = ((16.0 * key) - local.y) / 40.0;
+    }
+    else
+    {
+        _33 = ((16.0 * key) - local.y) / 52.799999237060546875;
+    }
+    float h = _33;
+    float _57;
+    if (terrain)
+    {
+        _57 = key;
+    }
+    else
+    {
+        _57 = key - (0.800000011920928955078125 * h);
+    }
+    float s = _57;
+    float u = local.x / 32.0;
+    return float3(0.5 * (s + u), 0.5 * (s - u), h);
+}
+
+static inline __attribute__((always_inline))
+float zetaAt(thread const int2& pixel, texture2d<float> depthMap, sampler depthMapSmplr, texture2d<float> groundMap, sampler groundMapSmplr, constant Ambient& ambient, texture2d<float> liftMap, sampler liftMapSmplr)
+{
+    float depth = depthMap.read(uint2(pixel), 0).x;
+    bool terrain = depth >= 1.0;
+    if (terrain)
+    {
+        depth = groundMap.read(uint2(pixel), 0).x;
+    }
+    if (depth >= 1.0)
+    {
+        return -100000.0;
+    }
+    float _125;
+    if (terrain)
+    {
+        _125 = ambient.view.w;
+    }
+    else
+    {
+        _125 = 0.0;
+    }
+    float key = ((0.89999997615814208984375 - depth) / 0.0030000000260770320892333984375) + _125;
+    if (int2(liftMap.get_width(), liftMap.get_height()).x > 1)
+    {
+        float3 lift = liftMap.read(uint2(pixel), 0).xyz;
+        if (lift.z > 0.5)
+        {
+            float2 scene = ((float2(pixel) + float2(0.5)) - ambient.view.xy) / float2(ambient.view.z);
+            float2 param = scene;
+            float param_1 = key;
+            bool param_2 = terrain;
+            float2 param_3 = ambient.frame.xy;
+            float3 surface = lotPoint(param, param_1, param_2, param_3);
+            surface += float3(0.5 * lift.x, 0.5 * lift.x, lift.y);
+            key = (surface.x + surface.y) + (0.800000011920928955078125 * surface.z);
+        }
+    }
+    return key * 27.7128124237060546875;
+}
+
+fragment main0_out main0(constant Ambient& ambient [[buffer(0)]], texture2d<float> ambientMap [[texture(0)]], texture2d<float> depthMap [[texture(1)]], texture2d<float> groundMap [[texture(2)]], texture2d<float> liftMap [[texture(3)]], sampler ambientMapSmplr [[sampler(0)]], sampler depthMapSmplr [[sampler(1)]], sampler groundMapSmplr [[sampler(2)]], sampler liftMapSmplr [[sampler(3)]], float4 gl_FragCoord [[position]])
+{
+    main0_out out = {};
+    int2 pixel = int2(gl_FragCoord.xy);
+    int2 limit = int2(ambient.extent.xy) - int2(1);
+    if (any(pixel > limit))
+    {
+        out.color = float4(0.5);
+        return out;
+    }
+    int2 param = pixel;
+    float z = zetaAt(param, depthMap, depthMapSmplr, groundMap, groundMapSmplr, ambient, liftMap, liftMapSmplr);
+    float tolerance = 4.5 + (3.0 / fast::max(ambient.view.z, 0.25));
+    float3 total = float3(0.0);
+    float weight = 0.0;
+    for (int y = -1; y <= 1; y++)
+    {
+        for (int x = -1; x <= 1; x++)
+        {
+            int2 tap = clamp(pixel + int2(x, y), int2(0), limit);
+            int2 param_1 = tap;
+            float dz = abs(zetaAt(param_1, depthMap, depthMapSmplr, groundMap, groundMapSmplr, ambient, liftMap, liftMapSmplr) - z);
+            float w = exp((-dz) / tolerance) * exp((-float((x * x) + (y * y))) / 2.599999904632568359375);
+            total += (ambientMap.read(uint2(tap), 0).xyz * w);
+            weight += w;
+        }
+    }
+    out.color = float4(total / float3(weight), 1.0);
+    return out;
+}

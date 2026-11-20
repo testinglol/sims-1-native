@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Diagnostics;
 using System.Numerics;
+using SimsSDL.Core;
 using SimsSDL.UI;
 
 namespace SimsSDL;
@@ -26,6 +27,11 @@ public sealed class LiveUI
     public OriginalSoundOptionsOverlay SoundOptions { get; }
 
     public OriginalCatalogPopup CatalogPopup { get; }
+    public OriginalCheatConsoleOverlay CheatConsole { get; }
+    public IReadOnlyList<SceneAnimation.OverheadFeedbackDescriptor>? ActiveOverheadFeedback { get; set; }
+
+    private readonly Dictionary<uint, UITexture> _overheadBgTextures = new();
+    private readonly Dictionary<(string Text, uint FgRgb), OriginalGameplayOverlay.Image> _overheadTextImages = new();
 
     private readonly UITexture _panel;
     private readonly UITexture _backPatch;
@@ -490,6 +496,7 @@ public sealed class LiveUI
         HelpOverlay = new OriginalHelpOverlay(content, MediumFont, Device, strings);
         BudgetReport = new OriginalBudgetReportOverlay(content, Font, Device, strings);
         CatalogPopup = new OriginalCatalogPopup(content, Device);
+        CheatConsole = new OriginalCheatConsoleOverlay(Font, Device);
 
         foreach (var control in OriginalUniversalControl.All)
             _universalTextures.Add(LoadTexture("UIGraphics/cpanel/Buttons/" + control.Asset, transparent: true));
@@ -566,6 +573,8 @@ public sealed class LiveUI
         Neighborhood?.ClearTextCaches();
         ModsOverlay?.ClearTextCaches();
         CatalogPopup.ClearTextCaches();
+        CheatConsole.ClearTextCaches();
+        _overheadTextImages.Clear();
 
         bool cameraVisible = Camera.Visible;
         int cameraSize = Camera.Size;
@@ -731,6 +740,8 @@ public sealed class LiveUI
         PieHeadImage = CreateOverlayImage(width, height, pixels);
     }
 
+    private readonly ArrayBufferWriter<byte> _panelStateBuffer = new(4096);
+
     public void Update(IReadOnlyDictionary<string, JsonElement> state, string root)
     {
         ArgumentNullException.ThrowIfNull(state);
@@ -741,8 +752,8 @@ public sealed class LiveUI
             ? modeStr
             : (WallsUp ? "up" : "down");
 
-        var buffer = new ArrayBufferWriter<byte>();
-        using (var writer = new Utf8JsonWriter(buffer))
+        _panelStateBuffer.ResetWrittenCount();
+        using (var writer = new Utf8JsonWriter(_panelStateBuffer))
         {
             writer.WriteStartObject();
             foreach (var (key, value) in state)
@@ -756,7 +767,7 @@ public sealed class LiveUI
             writer.WriteEndObject();
         }
 
-        var panelState = JsonSerializer.Deserialize<GameplayPanelState>(buffer.WrittenSpan, PackContentPaths.JsonReadOptions)
+        var panelState = JsonSerializer.Deserialize<GameplayPanelState>(_panelStateBuffer.WrittenSpan, PackContentPaths.JsonReadOptions)
             ?? throw new ContentError("Invalid gameplay panel state");
         Gameplay.Update(panelState, root);
 
@@ -940,7 +951,12 @@ public sealed class LiveUI
         return null;
     }
 
-    public List<UIDraw> Draws(Vector2 canvas, float scale, int speed)
+    public List<UIDraw> Draws(
+        Vector2 canvas,
+        float scale,
+        int speed,
+        SceneViewport? viewport = null,
+        LotZoom zoom = LotZoom.Medium)
     {
         var draws = new List<UIDraw>();
         PreviewPlacement = null;
@@ -1094,12 +1110,15 @@ public sealed class LiveUI
                     }
                 }
 
+                AppendCheatConsole(screenScale, draws);
                 if (GameDialog is not null)
                     DrawDialog(GameDialog, canvas, screenScale, draws);
                 AppendHelp(screenLogical, screenScale, draws);
                 return draws;
             }
         }
+
+        AppendOverheadFeedback(viewport, zoom, scale, draws);
 
         float top = canvas.Y - 150f * scale;
         bool minimizedLive = PanelMinimized && !Camera.Visible && !BuildMode && !BuyMode && !OptionsMode;
@@ -1330,12 +1349,6 @@ public sealed class LiveUI
         Gameplay.QuickTips = quickTips;
         Gameplay.InterfaceEffects = OptionsPanel.PlayOptions.InterfaceEffects;
 
-        if (OptionsMode && GameDialog is null && PieMenu is null)
-        {
-            foreach (var part in OptionsPanel.TooltipParts(logical, true, quickTips))
-                draws.Add(new UIDraw(part.Image.Texture, ScaledRect(part.Rect), part.UV));
-        }
-
         if (PieMenu is not null)
         {
             PieMenu.Prepare(size, scale);
@@ -1411,12 +1424,6 @@ public sealed class LiveUI
                 draws.Add(new UIDraw(item.Image.Texture, ScaledRect(item.Rect), item.UV));
         }
 
-        if (GameDialog is null && PieMenu is null)
-        {
-            foreach (var part in Gameplay.TooltipParts(logical))
-                draws.Add(new UIDraw(part.Image.Texture, ScaledRect(part.Rect), part.UV));
-        }
-
         foreach (var part in placementErrorDraws)
             draws.Add(new UIDraw(part.Image.Texture, ScaledRect(part.Rect), part.UV, part.Opacity));
 
@@ -1464,6 +1471,15 @@ public sealed class LiveUI
 
         if (GameDialog is null && PieMenu is null)
         {
+            if (OptionsMode)
+            {
+                foreach (var part in OptionsPanel.TooltipParts(logical, true, quickTips))
+                    draws.Add(new UIDraw(part.Image.Texture, ScaledRect(part.Rect), part.UV));
+            }
+
+            foreach (var part in Gameplay.TooltipParts(logical))
+                draws.Add(new UIDraw(part.Image.Texture, ScaledRect(part.Rect), part.UV));
+
             foreach (var item in Camera.TooltipParts(logical, quickTips))
                 draws.Add(new UIDraw(item.Image.Texture, ScaledRect(item.Rect), item.UV));
         }
@@ -1479,6 +1495,8 @@ public sealed class LiveUI
                     draws.Add(new UIDraw(item.Image.Texture, ScaledRect(item.Rect), item.UV));
             }
         }
+
+        AppendCheatConsole(scale, draws);
 
         if (GameDialog is not null)
             DrawDialog(GameDialog, canvas, scale, draws);
@@ -2244,5 +2262,74 @@ public sealed class LiveUI
                 chars[i] = b is >= 0x80 and <= 0x9F ? Cp1252High[b - 0x80] : (char)b;
             }
         });
+    }
+
+    private void AppendCheatConsole(float drawScale, List<UIDraw> draws)
+    {
+        if (!CheatConsole.Visible)
+            return;
+
+        foreach (var item in CheatConsole.DrawItems(drawScale))
+            draws.Add(item);
+    }
+
+    private void AppendOverheadFeedback(SceneViewport? viewport, LotZoom zoom, float uiScale, List<UIDraw> draws)
+    {
+        if (viewport is not { } vp || ActiveOverheadFeedback is not { Count: > 0 } items)
+            return;
+
+        int zoomInt = zoom switch
+        {
+            LotZoom.Far => 1,
+            LotZoom.Medium => 2,
+            _ => 3,
+        };
+        float verticalOffset = vp.Scale > 2f * uiScale + 1e-4f
+            ? (0xaf * 0.5f) * vp.Scale
+            : ((0xaf >> (3 - zoomInt)) + (zoomInt == 1 ? 4 : 0)) * uiScale;
+
+        foreach (var item in items)
+        {
+            if (item.HasSprite || string.IsNullOrEmpty(item.Text))
+                continue;
+
+            if (!_overheadBgTextures.TryGetValue(item.BackgroundRgb, out var bgTex))
+            {
+                byte r = (byte)((item.BackgroundRgb >> 16) & 0xff);
+                byte g = (byte)((item.BackgroundRgb >> 8) & 0xff);
+                byte b = (byte)(item.BackgroundRgb & 0xff);
+                bgTex = new UITexture(1, 1, SpritePixels.PremultipliedSRGB([r, g, b, 255], removeMagenta: false));
+                _overheadBgTextures[item.BackgroundRgb] = bgTex;
+            }
+
+            var textKey = (item.Text, item.ForegroundRgb);
+            if (!_overheadTextImages.TryGetValue(textKey, out var textImg))
+            {
+                byte fr = (byte)((item.ForegroundRgb >> 16) & 0xff);
+                byte fg = (byte)((item.ForegroundRgb >> 8) & 0xff);
+                byte fb = (byte)(item.ForegroundRgb & 0xff);
+                var raster = Font.RasterizeHiDpi(item.Text, fr, fg, fb, logicalMargin: 0);
+                textImg = OriginalGameplayOverlay.CreateImage(Device, raster);
+                _overheadTextImages[textKey] = textImg;
+            }
+
+            if (textImg.Size.Width <= 0 || textImg.Size.Height <= 0)
+                continue;
+
+            float textW = (float)textImg.Size.Width * uiScale;
+            float textH = (float)textImg.Size.Height * uiScale;
+            float pad = 4f * uiScale;
+            float pillW = textW + pad;
+            float pillH = textH + pad;
+
+            float anchorX = vp.Origin.X + item.X * vp.Scale;
+            float anchorY = vp.Origin.Y + item.Y * vp.Scale - verticalOffset - item.StackIndex * (pillH + 2f * uiScale);
+            float pillX = MathF.Round(anchorX - pillW * 0.5f);
+            float pillY = MathF.Round(anchorY - pillH * 0.5f);
+
+            if (!string.Equals(item.Kind, "relationship", StringComparison.OrdinalIgnoreCase))
+                draws.Add(new UIDraw(bgTex, new Vector4(pillX, pillY, pillW, pillH)));
+            draws.Add(new UIDraw(textImg.Texture, new Vector4(pillX + pad * 0.5f, pillY + pad * 0.5f, textW, textH)));
+        }
     }
 }

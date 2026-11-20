@@ -1,6 +1,7 @@
 using SimsEngine.Content;
 using SimsEngine.Formats;
 using SimsEngine.Simulation;
+using SimsEngine.Simulation.Neighborhood;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
@@ -80,7 +81,10 @@ internal sealed record WorldBootstrap(
         ushort? activeFamilyChunkId = null, string? userDataPath = null, IffFile? preloadedLot = null,
         Func<XPerson, XObject, short, string, float, float>? scoreAutonomy = null,
         IReadOnlyDictionary<uint, uint>? objectMigrations = null, bool stripMissingObjects = false,
-        ObjectRegistry? existingRegistry = null)
+        ObjectRegistry? existingRegistry = null,
+        NeighborhoodManager? neighborhoodManager = null,
+        bool connectedNeighborhoodEnabled = false,
+        IffFile? preloadedNeighborhood = null)
     {
         var profile = Environment.GetEnvironmentVariable("SIMS_PROFILE") is not null;
         var stageStarted = Stopwatch.GetTimestamp();
@@ -129,7 +133,7 @@ internal sealed record WorldBootstrap(
         Mark("lot file read");
         var neighborhoodPath = Path.Combine(userData, "Neighborhood.iff");
         if (!File.Exists(neighborhoodPath)) neighborhoodPath = Path.Combine(userData, "UserData", "Neighborhood.iff");
-        var neighborhood = File.Exists(neighborhoodPath) ? IffFile.Open(neighborhoodPath) : null;
+        var neighborhood = preloadedNeighborhood ?? (File.Exists(neighborhoodPath) ? IffFile.Open(neighborhoodPath) : null);
         Mark("neighborhood read");
         var world = SavedLotObjectLoader.Load(lot, registry, library, language, neighborhood);
         world.GlobalSprites = LoadGlobalSprites(gameRoot);
@@ -181,6 +185,9 @@ internal sealed record WorldBootstrap(
         if (activeFamily is not null) world.NeighborhoodData[2] = checked((short)house);
         world.FamilyBudget = new FamilyBudget(world, activeFamily, active?.ChunkId);
         world.NeighborhoodFamilies = new NeighborhoodFamilies(world, neighborhood, active?.ChunkId);
+        SyncFamilyBridgeState(world, activeFamily, active?.ChunkId);
+        WireNeighborhoodDelegates(world, () => neighborhood);
+        world.LiveLotValuationProvider ??= () => world.SavedSimulationState is { } s ? (s.Field0xA0, s.Field0xA4) : (0, 0);
         // Registers active family member GUIDs so neighbor interaction systems can check household
         // membership.
         if (activeFamily is not null)
@@ -189,6 +196,7 @@ internal sealed record WorldBootstrap(
         world.StateClasses.AddRange(Neighborhoods.StateClasses(userData));
         world[SimulationGlobal.CurrentFamily] = homeFamily;
         world[SimulationGlobal.CurrentHouse] = checked((short)house);
+        world.NeighborInteractionGlobalStateValue = checked((short)house);
         var isNonResidentialLot =
             (house > 0 && Neighborhoods.IsCommunityLot(userData, checked((short)house))) ||
             house is (>= 21 and <= 31) or (>= 40 and <= 49) or (>= 81 and <= 89) or (>= 93 and <= 99);
@@ -198,6 +206,8 @@ internal sealed record WorldBootstrap(
         AvatarAnimations.Populate(world, library.Global, gameRoot, userData, registry);
         world.LocomotionStrideResolver = (person, animationName) =>
             AvatarSceneGeometry.For(gameRoot, registry).LocomotionStrides(person, animationName);
+        world.AnchorBoneWorldResolver = (person, boneName) =>
+            AvatarSceneGeometry.For(gameRoot, registry).ResolveAnchorBoneAvatarPosition(person, boneName);
         Mark("avatar animation catalog");
         world.AutonomyForced = autonomyForced;
         if (library.Global is { } global)
@@ -219,9 +229,126 @@ internal sealed record WorldBootstrap(
         ExpansionBootstrap.EnsureGlobalSimObjects(world, registry);
         ExpansionBootstrap.EnsureSpellboundController(world, userData, house, activeFamily);
         ExpansionBootstrap.EnsurePhonePlugins(world);
+        if (neighborhoodManager is not null)
+            world.Neighborhood = neighborhoodManager;
+        if (connectedNeighborhoodEnabled || world.Neighborhood.TrackingEnabled)
+        {
+            world.Neighborhood.TrackingEnabled = true;
+            if (world.Neighborhood.GetAllSimLocations().Count == 0 && neighborhood is not null)
+                world.Neighborhood.SyncFromUserData(userData, language);
+            if (house > 0)
+                world.Neighborhood.SyncFromWorld(world, checked((short)house));
+        }
         Mark("host setup");
         return new WorldBootstrap(lot, world, registry, library, library.Global, neighborhoodPath, neighborhood,
             active?.ChunkId, activeFamily, lotMigration);
+    }
+
+    internal static void SyncFamilyBridgeState(SimulationWorld world, Family? activeFamily, ushort? activeChunkId)
+    {
+        var familyNumber = activeFamily is not null
+            ? unchecked((short)(activeFamily.FamilyNumber != 0 ? activeFamily.FamilyNumber : (activeChunkId ?? 0)))
+            : (short?)null;
+        world.StoredSlotPersonId = familyNumber;
+        world.LotUpkeepManagerPresent = activeFamily is not null;
+        world.GlobalPerson.LotUpkeepMatchWord22 = familyNumber ?? 0;
+    }
+
+    internal static void WireNeighborhoodDelegates(SimulationWorld world, Func<IffFile?> getNeighborhood)
+    {
+        world.TryLookupFamilyValuation = (short familyNumber, out int houseNumber, out int budget, out int value) =>
+        {
+            houseNumber = 0;
+            budget = 0;
+            value = 0;
+            if (familyNumber == 0) return false;
+            var fb = world.FamilyBudget as FamilyBudget;
+            if (fb?.ActiveFamily is { } active && active.FamilyNumber == familyNumber)
+            {
+                houseNumber = active.HouseNumber;
+                budget = active.Budget;
+                value = active.Value;
+                return true;
+            }
+            var nf = world.NeighborhoodFamilies as NeighborhoodFamilies;
+            if (nf is not null)
+            {
+                foreach (var (chunkId, changed) in nf.Changed)
+                {
+                    if (fb?.FamilyChunkId == chunkId) continue;
+                    if (changed.FamilyNumber == familyNumber)
+                    {
+                        houseNumber = changed.HouseNumber;
+                        budget = changed.Budget;
+                        value = changed.Value;
+                        return true;
+                    }
+                }
+            }
+            var ngh = getNeighborhood();
+            if (ngh is null) return false;
+            var famiType = ResourceType.Parse("FAMI");
+            foreach (var chunk in ngh.OfType(famiType))
+            {
+                if (chunk.Id == 0) continue;
+                if (fb?.FamilyChunkId == chunk.Id) continue;
+                if (nf?.Changed.ContainsKey(chunk.Id) == true) continue;
+                var fam = Family.Read(ngh, chunk);
+                if (fam.FamilyNumber == familyNumber)
+                {
+                    houseNumber = fam.HouseNumber;
+                    budget = fam.Budget;
+                    value = fam.Value;
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        world.OccupiedVacationHousesProvider = () =>
+        {
+            var occupied = new HashSet<int>();
+            var fb = world.FamilyBudget as FamilyBudget;
+            var nf = world.NeighborhoodFamilies as NeighborhoodFamilies;
+            if (fb?.ActiveFamily is { } active && active.Field0x13C is >= 40 and <= 48)
+                occupied.Add(active.Field0x13C);
+            if (nf is not null)
+            {
+                foreach (var (chunkId, changed) in nf.Changed)
+                {
+                    if (fb?.FamilyChunkId == chunkId) continue;
+                    if (changed.Field0x13C is >= 40 and <= 48) occupied.Add(changed.Field0x13C);
+                }
+            }
+            var ngh = getNeighborhood();
+            if (ngh is not null)
+            {
+                foreach (var chunk in ngh.OfType(ResourceType.Parse("FAMI")))
+                {
+                    if (chunk.Id == 0) continue;
+                    if (fb?.FamilyChunkId == chunk.Id) continue;
+                    if (nf?.Changed.ContainsKey(chunk.Id) == true) continue;
+                    var fam = Family.Read(ngh, chunk);
+                    if (fam.Field0x13C is >= 40 and <= 48) occupied.Add(fam.Field0x13C);
+                }
+            }
+            return occupied.ToArray();
+        };
+
+        world.TryLookupActiveFamilyUpkeep = (out short familyNumber, out bool hasMembers, out IReadOnlyList<short> minResources) =>
+        {
+            familyNumber = 0;
+            hasMembers = false;
+            minResources = Array.Empty<short>();
+            if (world.FamilyBudget is not FamilyBudget { ActiveFamily: { } active } fb)
+                return false;
+            if (active.Version <= 8 || active.Field0x14E.Count != 6)
+                return false;
+            familyNumber = unchecked((short)(active.FamilyNumber != 0 ? active.FamilyNumber : (fb.FamilyChunkId ?? 0)));
+            hasMembers = active.Members.Count > 0;
+            minResources = active.Field0x14E;
+            return true;
+        };
     }
 
     private static int ParseHouseNumber(string path)

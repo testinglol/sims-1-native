@@ -36,8 +36,11 @@ public static class InteractionTestEvaluator
         if (target is null || interaction is null) return;
         person[ObjectData.HideInteraction] = 0;
         var eligible = (target[ObjectData.Flags] & 0x200) == 0 && (!autonomy || target[ObjectData.LockoutCount] < 1);
+        var connectedResidentialVisitor = !autonomy && world.Neighborhood.TrackingEnabled && person.SelectionWord5CC != 0 &&
+            world.StateClass(person.StateValue != 0 ? person.StateValue : world.NeighborInteractionGlobalStateValue) == 1;
         if (eligible && (interaction.Flags & 1) == 0 && person.SelectionWord5CC != 0 &&
-            (world.StateClass(person.StateValue) == 1 || (interaction.Flags & 0x20) == 0))
+            (world.StateClass(person.StateValue) == 1 || (interaction.Flags & 0x20) == 0) &&
+            !(connectedResidentialVisitor && person[PersonData.GreetStatus] > 0))
         {
             eligible = false;
             // Category 4 and 7 objects require a positive visitor inventory entry in the Sim's interaction
@@ -53,6 +56,9 @@ public static class InteractionTestEvaluator
         else eligible &= (interaction.Flags & 0x40) == 0;
         if (autonomy && world.StateClass(person.StateValue) == 1 && person.SelectionWord5CC != 0 &&
             (gender & 6) != 0 && person[PersonData.GreetStatus] == 0 && target[ObjectData.Room] != 0)
+            eligible = false;
+        if (connectedResidentialVisitor && person[PersonData.GreetStatus] <= 0 &&
+            target is not XPerson && target[ObjectData.Room] != 0)
             eligible = false;
 
         var passed = false;

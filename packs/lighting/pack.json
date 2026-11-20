@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "local.lighting",
+  "name": "Enhanced Graphics",
+  "version": "1.0.0",
+  "baseGameVersion": "1.90",
+  "dependencies": [],
+  "overrides": [],
+  "plugin": {
+    "assembly": "plugin/LocalLighting.dll",
+    "entryType": "Local.Lighting.LightingPlugin",
+    "apiVersion": 4,
+    "stateVersion": 1
+  },
+  "panels": [
+    "panels/lighting-settings.json"
+  ]
+}

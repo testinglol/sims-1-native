@@ -618,6 +618,7 @@ internal sealed partial class LiveController
     public void Press(CGPoint point, CGSize canvas, bool shift, bool alt, bool ctrl = false)
     {
         _canvas = canvas;
+        TickConnectedNeighborhoodRefresh();
         Ui.Gameplay.DismissTooltips();
         try
         {
@@ -1002,6 +1003,14 @@ internal sealed partial class LiveController
             return;
         }
 
+        CGRect seasonReelRect = CycleIndicator.ReelRect.OffsetBy(0, LogicalCanvas.Height - 150);
+        if (!HasBlockingDialog && Ui.ShowsLot && !Ui.BuyMode && !Ui.BuildMode && !Ui.OptionsMode && !Ui.Camera.Visible
+            && Ui.Gameplay.Environment?.Effect.Indicator is not null && seasonReelRect.Contains(Local(point))
+            && TryTogglePluginPanelById("almanac"))
+        {
+            return;
+        }
+
         if (Ui.PieMenu is null && Ui.GameDialog is { Submitting: false, Dialog.Blocking: false } nonBlockingDialog
             && (nonBlockingDialog.Dialog.Buttons.Count > 0 || nonBlockingDialog.Dialog.Kind == 10 || nonBlockingDialog.TutorialCloseBox is not null)
             && nonBlockingDialog.Contains(point, OverlayScale))
@@ -1292,6 +1301,26 @@ internal sealed partial class LiveController
                     ChooseOption(optionButton);
                 }
 
+                return;
+            }
+
+            if (Ui.OptionsMode && Ui.OptionsPanel.GraphicsArrowAt(local, LogicalCanvas) is int graphicsArrow and not 0)
+            {
+                Ui.OptionsPanel.StepGraphicsSubpage(graphicsArrow);
+                PlayUISound("button_press");
+                return;
+            }
+
+            if (Ui.OptionsMode && Ui.OptionsPanel.LightingItemAt(local, LogicalCanvas) is { } lightingItem)
+            {
+                PlayUISound("button_press");
+                _ = Send("pluginAction", new Dictionary<string, object?>
+                {
+                    ["packId"] = "local.lighting",
+                    ["panelId"] = "lighting-settings",
+                    ["action"] = lightingItem.Action
+                });
+                _ = Send("pluginPanels");
                 return;
             }
 
@@ -1660,7 +1689,12 @@ internal sealed partial class LiveController
             {
                 menu.Prepare(_canvas, Scale);
                 (SimInteraction? Action, bool KeepOpen) result = menu.Choose(point, Scale);
-                if (result.Action is { } action
+                if (result.Action is { } connectedAction
+                    && menu.ObjectID < 0
+                    && TryHandleConnectedPieAction(menu, connectedAction))
+                {
+                }
+                else if (result.Action is { } action
                     && menu.SelectedSim == _selectedSim
                     && ((menu.ObjectID == 0 && _pieGround is not null) || Renderer.ContainsObject(menu.ObjectID)))
                 {
@@ -1720,7 +1754,7 @@ internal sealed partial class LiveController
                 _selectedSim = sim;
                 RecordButton(person: sim);
                 RequestAutoCenterOnSelection();
-                _ = Send("selectSim", new Dictionary<string, object?> { ["objectID"] = sim });
+                SendConnectedSelectSim(sim);
                 return;
             }
 
@@ -1869,6 +1903,9 @@ internal sealed partial class LiveController
                     Ground = (tile, Renderer.ViewLevel),
                 };
             }
+            else if (TryHandleAdjacentLotClick(point, local))
+            {
+            }
             else
             {
                 PlayUISound("ui_error");
@@ -1884,6 +1921,7 @@ internal sealed partial class LiveController
     public void Hover(CGPoint point, CGSize canvas)
     {
         _canvas = canvas;
+        TickConnectedNeighborhoodRefresh();
         try
         {
             Pointer = point;
@@ -2053,11 +2091,9 @@ internal sealed partial class LiveController
                 : panel;
             Ui.Gameplay.IndicatorHovered = suppressHover
                 ? null
-                : CycleIndicator.GlyphRect.Contains(panel)
-                    ? CycleIndicator.Hover.Weather
-                    : CycleIndicator.ReelRect.Contains(panel)
-                        ? CycleIndicator.Hover.Season
-                        : null;
+                : CycleIndicator.ReelRect.Contains(panel)
+                    ? CycleIndicator.Hover.Season
+                    : null;
 
             (int Index, CGRect Rect)? panelTip = null;
             Ui.HoveredUniversalControl = null;
@@ -2246,8 +2282,18 @@ internal sealed partial class LiveController
 
     private string? EdgeScrollCursor()
     {
-        if (!Ui.OptionsPanel.PlayOptions.EdgeScrolling || HasBlockingDialog || !Ui.ShowsLot
-            || Ui.OutfitPicker is not null || Ui.PluginPanel is not null
+        if (SuppressEdgeScrollForScript
+            || !Ui.OptionsPanel.PlayOptions.EdgeScrolling
+            || !_windowActive
+            || HasBlockingDialog
+            || Ui.IsModalDialogBlocking
+            || !Ui.ShowsLot
+            || Ui.OutfitPicker is not null
+            || Ui.PluginPanel is not null
+            || Ui.Album.Visible
+            || Ui.Camera.Visible
+            || Ui.GenericSimsCallPicker is not null
+            || Ui.SoundOptions.IsVisible
             || Pointer is not { } pointer
             || EdgeScrollRegion(pointer) is not { } region)
         {
@@ -2272,7 +2318,7 @@ internal sealed partial class LiveController
     private (int X, int Y)? EdgeScrollRegion(CGPoint pointer)
     {
         double margin = 32.0 * Scale;
-        double bottom = _canvas.Height - 150.0 * Scale;
+        double bottom = IsLivePanelMinimized ? _canvas.Height : _canvas.Height - 150.0 * Scale;
         if (pointer.Y >= bottom)
         {
             return null;
@@ -2312,6 +2358,7 @@ internal sealed partial class LiveController
     public void Tick(CGSize canvas)
     {
         _canvas = canvas;
+        TickConnectedNeighborhoodRefresh();
         if (Ui.Loading && Ui.TravelLoadScreen is null && _splashProgressQueue.Count > 0)
         {
             double uptime = CurrentUptime();
@@ -2358,10 +2405,11 @@ internal sealed partial class LiveController
             _pendingGenericSimsCallPoll = Send("genericSimsCallPersonPicker", parameters);
         }
 
-        if (UsesNativeEngine && HasActiveLot && Ui.ShowsLot && Renderer.Zoom != _simulatorZoom
-            && Send("zoom", new Dictionary<string, object?> { ["scale"] = (int)Renderer.Zoom }) is not null)
+        LotZoom simulatorZoom = Renderer.Zoom.AssetZoom();
+        if (UsesNativeEngine && HasActiveLot && Ui.ShowsLot && simulatorZoom != _simulatorZoom
+            && Send("zoom", new Dictionary<string, object?> { ["scale"] = (int)simulatorZoom }) is not null)
         {
-            _simulatorZoom = Renderer.Zoom;
+            _simulatorZoom = simulatorZoom;
         }
 
         string interfaceMode = Ui.OptionsMode ? "options" : Ui.BuyMode ? "buy" : Ui.BuildMode ? "build" : "live";
@@ -2421,9 +2469,20 @@ internal sealed partial class LiveController
             return;
         }
 
-        if (!Ui.OptionsPanel.PlayOptions.EdgeScrolling || HasBlockingDialog || !Ui.ShowsLot
-            || Ui.OutfitPicker is not null || Ui.PluginPanel is not null
-            || Pointer is not { } ptr || EdgeScrollRegion(ptr) is not { } region)
+        if (SuppressEdgeScrollForScript
+            || !Ui.OptionsPanel.PlayOptions.EdgeScrolling
+            || !_windowActive
+            || HasBlockingDialog
+            || Ui.IsModalDialogBlocking
+            || !Ui.ShowsLot
+            || Ui.OutfitPicker is not null
+            || Ui.PluginPanel is not null
+            || Ui.Album.Visible
+            || Ui.Camera.Visible
+            || Ui.GenericSimsCallPicker is not null
+            || Ui.SoundOptions.IsVisible
+            || Pointer is not { } ptr
+            || EdgeScrollRegion(ptr) is not { } region)
         {
             _edgeScrollRegionKey = null;
             SyncSimulatorViewScrolling(active: false);
@@ -2463,7 +2522,8 @@ internal sealed partial class LiveController
         && !Ui.Album.Visible
         && Ui.GenericSimsCallPicker is null
         && !(Ui.Camera.Visible && DeleteModifier)
-        && !Ui.SoundOptions.IsVisible;
+        && !Ui.SoundOptions.IsVisible
+        && !Ui.CheatConsole.Visible;
 
     private void SyncSimulatorViewScrolling(bool active)
     {
@@ -2678,7 +2738,7 @@ internal sealed partial class LiveController
             if (target != _selectedSim)
             {
                 _selectedSim = target;
-                RequestAutoCenterOnSelection();
+                RequestAutoCenterOnSelection(playErrorSound: false);
                 _ = Send("selectSim", new Dictionary<string, object?> { ["objectID"] = target });
             }
 

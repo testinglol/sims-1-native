@@ -152,13 +152,18 @@ void main() {
     }
 
     // Two-pass compositing:
-    // Pass 1 (inDepthInterval.w == 1.0): opaque core (alpha >= cutoff) writes clean solid color + foreground Z.
-    // Pass 2 (inDepthInterval.w == 2.0): translucent & AA fringe (1/255 <= alpha < cutoff) blends without Z-write.
+    // Pass 1 (inDepthInterval.w == 1.0): opaque core (alpha >= coreCutoff) writes clean solid color + foreground Z.
+    // Pass 2 (inDepthInterval.w == 2.0): translucent & AA fringe (1/255 <= alpha < coreCutoff) blends without Z-write.
+    // For opaque silhouettes (at least one tap >= cutoff), lower the core threshold to 0.49 so complementary
+    // tiles of multi-tile objects meet seamlessly in Z and color (no depth trench or background bleed) while
+    // genuinely translucent surfaces (glass, shadows, ghosts where all taps < cutoff) stay in the fringe pass.
+    float maxTapA = max(max(c00.a, c10.a), max(c01.a, c11.a));
+    float coreCutoff = maxTapA >= inDepthInterval.z ? min(inDepthInterval.z, 0.49) : inDepthInterval.z;
     bool isEdgePass = inDepthInterval.w > 1.5;
     if (isEdgePass) {
-        if (sampled.a >= inDepthInterval.z || sampled.a < (1.0 / 255.0)) discard;
+        if (sampled.a >= coreCutoff || sampled.a < (1.0 / 255.0)) discard;
     } else {
-        if (sampled.a < inDepthInterval.z) discard;
+        if (sampled.a < coreCutoff) discard;
         sampled = vec4(sampled.rgb / max(sampled.a, 1e-4), 1.0);
     }
 

@@ -247,7 +247,7 @@ internal static class SceneExporter
 
     private static readonly JsonSerializerOptions Json = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
-    internal sealed record Vertex(float X, float Y, float Z, float U, float V, float Nx, float Ny, float Nz);
+    internal readonly record struct Vertex(float X, float Y, float Z, float U, float V, float Nx, float Ny, float Nz);
     internal sealed record Texture(string File, int Width, int Height, string Encoding);
     internal sealed record WallSide(int X, int Y, int Level, int Direction, int Cut = 0, int? Edge = null, int? Side = null);
     internal sealed record WallDepth(int X, int Y, int Level, int Configuration);
@@ -271,7 +271,7 @@ internal static class SceneExporter
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ZoomImage? FloorShadowNear = null,
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ZoomImage? FloorShadowFar = null,
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] float[]? Tint = null);
-    internal sealed record TerrainVertex(float X, float Y, int R, int G, int B, int Dr, int Dg, int Db, int Grass);
+    internal readonly record struct TerrainVertex(float X, float Y, int R, int G, int B, int Dr, int Dg, int Db, int Grass);
     /// <summary>Represents mask art for a wall style, referencing either a base style in walls.iff or six
     /// SPR# frames defined within a door or window object file.</summary>
     internal sealed record WallStyleArt(IffFile? File, ushort SpriteBase, ushort BaseStyle)
@@ -302,6 +302,28 @@ internal static class SceneExporter
 
     internal sealed record OverheadMapRecord(int Width, int Height, int SamplesPerTile, byte[] Pixels);
 
+    internal sealed record OverheadFeedbackRecord(
+        [property: JsonPropertyName("objectID")] short ObjectID,
+        string Kind,
+        string Text,
+        uint BackgroundRgb,
+        uint ForegroundRgb,
+        int Delta,
+        float X,
+        float Y,
+        int Level,
+        int StackIndex,
+        int RemainingTicks,
+        bool HasSprite);
+
+    internal sealed record SkillMeterRecord(
+        [property: JsonPropertyName("objectID")] short ObjectID,
+        int SpriteId,
+        int ProgressTenths,
+        float X,
+        float Y,
+        int Level);
+
     private sealed record ShelterCacheEntry(
         IffFile Lot,
         ulong Fingerprint,
@@ -310,7 +332,14 @@ internal static class SceneExporter
         LotArray?[] Walls,
         RoofGrid?[] Roofs,
         RoomMap?[] Rooms,
-        HashSet<ushort>?[] RoofableRooms);
+        HashSet<ushort>?[] RoofableRooms)
+    {
+        public OverheadMapRecord? CachedOverheadMap;
+        public int CachedOverheadLotSize;
+        public float CachedOverheadBaseHeight;
+    }
+
+    private static readonly bool ProfileEnabled = Environment.GetEnvironmentVariable("SIMS_PROFILE") is not null;
 
     private static readonly object shelterCacheLock = new();
     private static ShelterCacheEntry? cachedShelter;
@@ -505,6 +534,15 @@ internal static class SceneExporter
         return pattern is > 0 and < 65534 && pattern != byte.MaxValue && pattern is < 9 or > 11;
     }
 
+    internal sealed record CrossLotTransitRecord(
+        short ObjectId,
+        float TileX,
+        float TileY,
+        float Direction,
+        float SeamProgress,
+        short FromHouse,
+        short ToHouse);
+
     internal sealed record ExportedLotScene(
         short House,
         float Width,
@@ -529,7 +567,10 @@ internal static class SceneExporter
         CensorRect[] CensorRects,
         string[] Limitations,
         string[] MissingResources,
-        OverheadMapRecord? OverheadMap = null);
+        OverheadMapRecord? OverheadMap = null,
+        OverheadFeedbackRecord[]? OverheadFeedback = null,
+        SkillMeterRecord[]? SkillMeters = null,
+        CrossLotTransitRecord[]? Transits = null);
 
     internal sealed record DirectAnimationMesh(
         int Texture,
@@ -554,7 +595,10 @@ internal static class SceneExporter
         Texture[] Textures,
         SceneSprite[] Sprites,
         DirectAnimationMesh[] Meshes,
-        CensorRect[] CensorRects);
+        CensorRect[] CensorRects,
+        OverheadFeedbackRecord[]? OverheadFeedback = null,
+        SkillMeterRecord[]? SkillMeters = null,
+        CrossLotTransitRecord[]? Transits = null);
     private static readonly (int X, int Y, int Width, int Height)[] WallRectangles = [(2, 39, 32, 136), (34, 39, 32, 136), (2, 55, 64, 120), (30, 73, 8, 116)];
     private static readonly (int X, int Y, int Width, int Height)[] NearWallRectangles = [(4, 77, 64, 271), (68, 77, 64, 271), (4, 109, 128, 240), (60, 145, 16, 232)];
     private static readonly (int X, int Y, int Width, int Height)[] FarWallRectangles = [(1, 20, 16, 68), (17, 20, 16, 68), (1, 28, 32, 60), (15, 37, 4, 58)];
@@ -631,6 +675,17 @@ internal static class SceneExporter
     /// <summary>Normalizes stored wall styles to standard style 1 while preserving opening cutout styles 2,
     /// 12, 13, and 14 before object-supplied styles are applied.</summary>
     internal static ushort NormalizedWallStyle(byte style) => style is 1 or 2 or 12 or 13 or 14 ? style : (ushort)1;
+
+    /// <summary>Returns the wall record pattern byte slot (6 or 7) and wallpaper side (1..4) facing the
+    /// camera for a diagonal wall segment (0x10 or 0x20) at the given camera orientation (0..3).</summary>
+    internal static (int Slot, int Side) DiagonalFacingSlotAndSide(int sourceDiag, int cameraOrientation)
+    {
+        var orientation = ((cameraOrientation % 4) + 4) % 4;
+        var useSlot6 = sourceDiag == 0x10
+            ? orientation is 1 or 2
+            : orientation is 2 or 3;
+        return (useSlot6 ? 6 : 7, useSlot6 ? (sourceDiag == 0x10 ? 2 : 1) : (sourceDiag == 0x10 ? 4 : 3));
+    }
 
     /// <summary>Wall top junction cap pieces (SPR# 4096..4098) are rendered only when walls are fully up on
     /// the active story, or on stories below the active view level.</summary>
@@ -723,7 +778,7 @@ internal static class SceneExporter
         int width, int height, int scale = 2)
     {
         var slotX = renderX - (8 << scale) / 2f;
-        var slotY = renderY - slotZ * (1 << (scale + 1));
+        var slotY = renderY + (4 << scale) - slotZ * (1 << (scale + 1));
         var imageOffsetX = scale == 2 ? 0x20 / 2 : 0x20;
         var imageOffsetY = scale == 2 ? -36 / 2 : -36;
         return ((int)(slotX + imageOffsetX - width / 2f), (int)(slotY + imageOffsetY - height / 2f));
@@ -734,22 +789,26 @@ internal static class SceneExporter
     internal static (int X, int Y) RuntimeSlotSpritePosition(float renderX, float renderY, float slotZ,
         int height, short boundsLeft = 0, short boundsTop = 0, int scale = 2) =>
         ((int)(renderX - (8 << scale) / 2f + boundsLeft),
-            (int)(renderY - slotZ * (1 << (scale + 1)) - height + boundsTop));
+            (int)(renderY + (4 << scale) - slotZ * (1 << (scale + 1)) - height + boundsTop));
 
     /// <summary>Applies transparency to composited speech balloon bitmaps using the 16-bit RGB565 color key
-    /// sampled from the top-left corner pixel.</summary>
-    internal static void KeySpeechBitmapTransparency(int width, int height, byte[] rgba)
+    /// sampled from the top-left corner pixel (for people, constrained to magenta or Speech white).</summary>
+    internal static void KeySpeechBitmapTransparency(int width, int height, byte[] rgba, bool isPerson = false)
     {
         if (width <= 0 || height <= 0 || rgba.Length < 4) return;
         var keyR = rgba[0] >> 3;
         var keyG = rgba[1] >> 2;
         var keyB = rgba[2] >> 3;
+        var useCornerKey = !isPerson || (keyR == 31 && keyB == 31 && (keyG == 0 || keyG == 63));
         for (var at = 0; at + 3 < rgba.Length; at += 4)
         {
             var r5 = rgba[at] >> 3;
             var g6 = rgba[at + 1] >> 2;
             var b5 = rgba[at + 2] >> 3;
-            if ((r5 == keyR && g6 == keyG && b5 == keyB) || (r5 == 31 && g6 == 0 && b5 == 31))
+            var isKey = (useCornerKey && r5 == keyR && g6 == keyG && b5 == keyB)
+                || (r5 == 31 && g6 == 0 && b5 == 31)
+                || (isPerson && r5 == 31 && g6 == 63 && b5 == 31);
+            if (isKey)
             {
                 rgba[at] = 0;
                 rgba[at + 1] = 0;
@@ -1116,6 +1175,8 @@ internal static class SceneExporter
         public long LastAnimatedUpdates = -1;
         public SceneSprite[]? CachedNonCarriedObjectSprites;
         public SceneLighting.Light[]? CachedSubTickLights;
+        public IffFile? FloorArtwork;
+        public bool HasFloorArtwork;
         public SceneLighting.Window[]? CachedSubTickWindows;
     }
 
@@ -1270,17 +1331,17 @@ internal static class SceneExporter
         return true;
     }
 
-    public static string Export(IffFile lot, SimulationWorld world, ObjectRegistry registry, string gameRoot, string directory, short house, long revision, int viewLevel = 1, string wallMode = "down", int cameraOrientation = 0, (int X, int Y)? cutawayTile = null, bool roofsVisible = false, AnimationState? state = null, IReadOnlyList<ushort>? cutawayRooms = null, (int X, int Y)? cutawaySim = null, int cutawayZoom = 2, bool showLoweredPortals = false) =>
-        (string)Build(lot, world, registry, gameRoot, directory, house, revision, viewLevel, wallMode, cameraOrientation, cutawayTile, roofsVisible, state, false, 0, 0, cutawayRooms, cutawaySim, cutawayZoom, showLoweredPortals, 0f);
+    public static string Export(IffFile lot, SimulationWorld world, ObjectRegistry registry, string gameRoot, string directory, short house, long revision, int viewLevel = 1, string wallMode = "down", int cameraOrientation = 0, (int X, int Y)? cutawayTile = null, bool roofsVisible = false, AnimationState? state = null, IReadOnlyList<ushort>? cutawayRooms = null, (int X, int Y)? cutawaySim = null, int cutawayZoom = 2, bool showLoweredPortals = false, bool hideInteriorPeople = false) =>
+        (string)Build(lot, world, registry, gameRoot, directory, house, revision, viewLevel, wallMode, cameraOrientation, cutawayTile, roofsVisible, state, false, 0, 0, cutawayRooms, cutawaySim, cutawayZoom, showLoweredPortals, 0f, hideInteriorPeople: hideInteriorPeople);
 
-    public static object? Animation(IffFile lot, SimulationWorld world, ObjectRegistry registry, string gameRoot, string directory, short house, long revision, AnimationState state, long sequence, long updates, int viewLevel = 1, string wallMode = "down", int cameraOrientation = 0, (int X, int Y)? cutawayTile = null, bool roofsVisible = false, IReadOnlyList<ushort>? cutawayRooms = null, (int X, int Y)? cutawaySim = null, int cutawayZoom = 2, bool showLoweredPortals = false, float subTickAlpha = 0f) =>
+    public static object? Animation(IffFile lot, SimulationWorld world, ObjectRegistry registry, string gameRoot, string directory, short house, long revision, AnimationState state, long sequence, long updates, int viewLevel = 1, string wallMode = "down", int cameraOrientation = 0, (int X, int Y)? cutawayTile = null, bool roofsVisible = false, IReadOnlyList<ushort>? cutawayRooms = null, (int X, int Y)? cutawaySim = null, int cutawayZoom = 2, bool showLoweredPortals = false, float subTickAlpha = 0f, bool hideInteriorPeople = false) =>
         state.Kept is Kept && state.Revision == revision
-            ? Build(lot, world, registry, gameRoot, directory, house, revision, viewLevel, wallMode, cameraOrientation, cutawayTile, roofsVisible, state, true, sequence, updates, cutawayRooms, cutawaySim, cutawayZoom, showLoweredPortals, subTickAlpha, directAnimation: false)
+            ? Build(lot, world, registry, gameRoot, directory, house, revision, viewLevel, wallMode, cameraOrientation, cutawayTile, roofsVisible, state, true, sequence, updates, cutawayRooms, cutawaySim, cutawayZoom, showLoweredPortals, subTickAlpha, directAnimation: false, hideInteriorPeople: hideInteriorPeople)
             : null;
 
-    internal static DirectAnimationFrame? AnimationDirect(IffFile lot, SimulationWorld world, ObjectRegistry registry, string gameRoot, string directory, short house, long revision, AnimationState state, long sequence, long updates, int viewLevel = 1, string wallMode = "down", int cameraOrientation = 0, (int X, int Y)? cutawayTile = null, bool roofsVisible = false, IReadOnlyList<ushort>? cutawayRooms = null, (int X, int Y)? cutawaySim = null, int cutawayZoom = 2, bool showLoweredPortals = false, float subTickAlpha = 0f) =>
+    internal static DirectAnimationFrame? AnimationDirect(IffFile lot, SimulationWorld world, ObjectRegistry registry, string gameRoot, string directory, short house, long revision, AnimationState state, long sequence, long updates, int viewLevel = 1, string wallMode = "down", int cameraOrientation = 0, (int X, int Y)? cutawayTile = null, bool roofsVisible = false, IReadOnlyList<ushort>? cutawayRooms = null, (int X, int Y)? cutawaySim = null, int cutawayZoom = 2, bool showLoweredPortals = false, float subTickAlpha = 0f, bool hideInteriorPeople = false) =>
         state.Kept is Kept && state.Revision == revision
-            ? (DirectAnimationFrame)Build(lot, world, registry, gameRoot, directory, house, revision, viewLevel, wallMode, cameraOrientation, cutawayTile, roofsVisible, state, true, sequence, updates, cutawayRooms, cutawaySim, cutawayZoom, showLoweredPortals, subTickAlpha, directAnimation: true)
+            ? (DirectAnimationFrame)Build(lot, world, registry, gameRoot, directory, house, revision, viewLevel, wallMode, cameraOrientation, cutawayTile, roofsVisible, state, true, sequence, updates, cutawayRooms, cutawaySim, cutawayZoom, showLoweredPortals, subTickAlpha, directAnimation: true, hideInteriorPeople: hideInteriorPeople)
             : null;
 
     private static ulong MixLightingTerm(ulong value)
@@ -1318,15 +1379,34 @@ internal static class SceneExporter
             world.Clock.Hour * 60 + world.Clock.Minute, world.Clock.TimeOfDay);
     }
 
-    private static object Build(IffFile lot, SimulationWorld world, ObjectRegistry registry, string gameRoot, string directory, short house, long revision, int viewLevel, string wallMode, int cameraOrientation, (int X, int Y)? cutawayTile, bool roofsVisible, AnimationState? retain, bool animating, long sequence, long updates, IReadOnlyList<ushort>? cutawayRooms, (int X, int Y)? cutawaySim, int cutawayZoom, bool showLoweredPortals = false, float subTickAlpha = 0f, bool directAnimation = false)
+    private static bool IsPersonHiddenBehindClosedRoof(SimulationWorld world, XPerson person)
+    {
+        if (world.TransitVisualOverrides.ContainsKey(person.Id))
+            return false;
+        int tx = person.Position.X >> 4;
+        int ty = person.Position.Y >> 4;
+        if (!world.LotRoomMaps.TryGetValue(person.Position.Height, out var pRooms))
+            return false;
+        if (tx < 0 || ty < 0 || tx >= pRooms.Width || ty >= pRooms.Height)
+            return false;
+        var room = pRooms.RoomAt(tx, ty);
+        return room != RoomMap.NoRoom && !pRooms.IsOutside(room);
+    }
+
+    private static object Build(IffFile lot, SimulationWorld world, ObjectRegistry registry, string gameRoot, string directory, short house, long revision, int viewLevel, string wallMode, int cameraOrientation, (int X, int Y)? cutawayTile, bool roofsVisible, AnimationState? retain, bool animating, long sequence, long updates, IReadOnlyList<ushort>? cutawayRooms, (int X, int Y)? cutawaySim, int cutawayZoom, bool showLoweredPortals = false, float subTickAlpha = 0f, bool directAnimation = false, bool hideInteriorPeople = false)
     {
         var shadowParts = GetShadowParts(registry);
         // SIMI global 23 defines the active lot size, while saved ARRY layers retain a fixed 64-cell
         // storage stride.
         var lotSize = world.Globals.Length > 23 && world.Globals[23] is > 0 and <= Size ? world.Globals[23] : Size;
-        var lapWatch = Stopwatch.StartNew();
-        var lapText = new StringBuilder();
-        void Lap(string name) { lapText.Append($" {name}={lapWatch.ElapsedMilliseconds}"); lapWatch.Restart(); }
+        var lapWatch = ProfileEnabled ? Stopwatch.StartNew() : null;
+        var lapText = ProfileEnabled ? new StringBuilder() : null;
+        void Lap(string name)
+        {
+            if (lapWatch is null || lapText is null) return;
+            lapText.Append($" {name}={lapWatch.ElapsedMilliseconds}");
+            lapWatch.Restart();
+        }
         var kept = animating ? (Kept)retain!.Kept! : new Kept();
         var heights = animating ? kept.Heights : ReadHeights(lot);
         var baseHeight = animating ? kept.BaseHeight : heights[0];
@@ -1377,7 +1457,17 @@ internal static class SceneExporter
         var meshes = new List<Mesh>();
         var sprites = new List<SceneSprite>();
         var missingResources = new HashSet<string>(StringComparer.Ordinal);
-        var floorArtwork = TryOpenOptionalArtwork(Path.Combine(gameRoot, "GameData", "floors.iff"));
+        IffFile? floorArtwork;
+        if (animating && kept.HasFloorArtwork)
+        {
+            floorArtwork = kept.FloorArtwork;
+        }
+        else
+        {
+            floorArtwork = TryOpenOptionalArtwork(Path.Combine(gameRoot, "GameData", "floors.iff"));
+            kept.FloorArtwork = floorArtwork;
+            kept.HasFloorArtwork = true;
+        }
         var floorShadowTextures = animating
             ? kept.FloorShadowTextures
             : new Dictionary<(int Shadow, int Attenuation, int Zoom), int?>();
@@ -2023,7 +2113,7 @@ internal static class SceneExporter
                     var rgba = new byte[f.Width * f.Height * 4];
                     for (var p = 0; p < f.Indices.Length; p++)
                     {
-                        if (f.Alpha[p] == 0 || f.Indices[p] >= colors.Length) continue;
+                        if (f.Alpha[p] == 0 || f.Indices[p] == f.TransparentIndex || f.Indices[p] >= colors.Length) continue;
                         var c = colors[f.Indices[p]];
                         var at = p * 4;
                         rgba[at] = c.Red;
@@ -2092,6 +2182,18 @@ internal static class SceneExporter
                     }
                 }
             }
+            bool IsOutsideDiamond(int px, int py)
+            {
+                var hw = loaded.Width * 0.5;
+                var hh = loaded.Height * 0.5;
+                return Math.Abs(px + 0.5 - hw) / hw + Math.Abs(py + 0.5 - hh) / hh > 1.0;
+            }
+            bool IsAtDiamondBoundary(int px, int py)
+            {
+                var hw = loaded.Width * 0.5;
+                var hh = loaded.Height * 0.5;
+                return Math.Abs(px + 0.5 - hw) / hw + Math.Abs(py + 0.5 - hh) / hh > 0.94;
+            }
             var firstOpaqueRow = -1;
             var lastOpaqueRow = -1;
             for (var py = 0; py < loaded.Height; py++)
@@ -2108,34 +2210,62 @@ internal static class SceneExporter
                 if (firstX < 0) continue;
                 if (firstOpaqueRow < 0) firstOpaqueRow = py;
                 lastOpaqueRow = py;
-                var leftAt = (rowStart + firstX) * 4;
-                for (var px = 0; px < firstX; px++)
+                if (IsAtDiamondBoundary(firstX - 1, py))
                 {
-                    var dst = (rowStart + px) * 4;
-                    bytes[dst] = bytes[leftAt];
-                    bytes[dst + 1] = bytes[leftAt + 1];
-                    bytes[dst + 2] = bytes[leftAt + 2];
-                    bytes[dst + 3] = 255;
+                    var leftAt = (rowStart + firstX) * 4;
+                    for (var px = 0; px < firstX; px++)
+                    {
+                        if (!IsOutsideDiamond(px, py)) continue;
+                        var dst = (rowStart + px) * 4;
+                        bytes[dst] = bytes[leftAt];
+                        bytes[dst + 1] = bytes[leftAt + 1];
+                        bytes[dst + 2] = bytes[leftAt + 2];
+                        bytes[dst + 3] = 255;
+                    }
                 }
-                var rightAt = (rowStart + lastX) * 4;
-                for (var px = lastX + 1; px < loaded.Width; px++)
+                if (IsAtDiamondBoundary(lastX + 1, py))
                 {
-                    var dst = (rowStart + px) * 4;
-                    bytes[dst] = bytes[rightAt];
-                    bytes[dst + 1] = bytes[rightAt + 1];
-                    bytes[dst + 2] = bytes[rightAt + 2];
-                    bytes[dst + 3] = 255;
+                    var rightAt = (rowStart + lastX) * 4;
+                    for (var px = lastX + 1; px < loaded.Width; px++)
+                    {
+                        if (!IsOutsideDiamond(px, py)) continue;
+                        var dst = (rowStart + px) * 4;
+                        bytes[dst] = bytes[rightAt];
+                        bytes[dst + 1] = bytes[rightAt + 1];
+                        bytes[dst + 2] = bytes[rightAt + 2];
+                        bytes[dst + 3] = 255;
+                    }
                 }
             }
             if (firstOpaqueRow > 0)
             {
                 for (var py = 0; py < firstOpaqueRow; py++)
-                    Array.Copy(bytes, firstOpaqueRow * loaded.Width * 4, bytes, py * loaded.Width * 4, loaded.Width * 4);
+                for (var px = 0; px < loaded.Width; px++)
+                {
+                    if (!IsOutsideDiamond(px, py)) continue;
+                    var src = (firstOpaqueRow * loaded.Width + px) * 4;
+                    if (bytes[src + 3] == 0) continue;
+                    var dst = (py * loaded.Width + px) * 4;
+                    bytes[dst] = bytes[src];
+                    bytes[dst + 1] = bytes[src + 1];
+                    bytes[dst + 2] = bytes[src + 2];
+                    bytes[dst + 3] = bytes[src + 3];
+                }
             }
             if (lastOpaqueRow >= 0 && lastOpaqueRow < loaded.Height - 1)
             {
                 for (var py = lastOpaqueRow + 1; py < loaded.Height; py++)
-                    Array.Copy(bytes, lastOpaqueRow * loaded.Width * 4, bytes, py * loaded.Width * 4, loaded.Width * 4);
+                for (var px = 0; px < loaded.Width; px++)
+                {
+                    if (!IsOutsideDiamond(px, py)) continue;
+                    var src = (lastOpaqueRow * loaded.Width + px) * 4;
+                    if (bytes[src + 3] == 0) continue;
+                    var dst = (py * loaded.Width + px) * 4;
+                    bytes[dst] = bytes[src];
+                    bytes[dst + 1] = bytes[src + 1];
+                    bytes[dst + 2] = bytes[src + 2];
+                    bytes[dst + 3] = bytes[src + 3];
+                }
             }
             var suffix = cornerMask == 0 ? "" : $"-c{cornerMask:x}";
             var waterName = zoom == 1
@@ -2484,7 +2614,8 @@ internal static class SceneExporter
                 }
             }
             // Diagonal walls use segment bit 0x10 for horizontal or 0x20 for vertical diagonals; odd camera
-            // rotations swap these bits, while rotations 1 and 2 swap the diagonal pattern slots.
+            // rotations swap these bits. For 0x10, rotations 1 and 2 face slot 6 (side 2); for 0x20,
+            // rotations 2 and 3 face slot 6 (side 1).
             void AddDiagonal()
             {
                 var owner = walls!.Element(sourceX, sourceY);
@@ -2492,9 +2623,10 @@ internal static class SceneExporter
                 if (sourceDiag is not (0x10 or 0x20)) return;
                 var cameraDiag = camera.Orientation % 2 == 0 ? sourceDiag : sourceDiag ^ 0x30;
                 var face = cameraDiag == 0x10 ? 2 : 3;
-                var swapSides = camera.Orientation is 1 or 2;
-                var primaryPattern = swapSides ? owner[6] : owner[7];
-                var secondaryPattern = swapSides ? owner[7] : owner[6];
+                var (primarySlot, facingSide) = DiagonalFacingSlotAndSide(sourceDiag, camera.Orientation);
+                var secondarySlot = primarySlot == 6 ? 7 : 6;
+                var primaryPattern = owner[primarySlot];
+                var secondaryPattern = owner[secondarySlot];
                 var pattern = primaryPattern != 0 ? primaryPattern : secondaryPattern;
                 var storedStyle = owner[3];
                 var style = (ushort)storedStyle;
@@ -2515,8 +2647,8 @@ internal static class SceneExporter
                 // Shades visible diagonal wall faces using the camera-facing room half, since diagonal
                 // dividing tiles are marked as having no room.
                 var (diagSubX, diagSubY) = sourceDiag == 0x10
-                    ? (camera.Orientation is 1 or 2 ? (4, 4) : (12, 12))
-                    : (camera.Orientation is 2 or 3 ? (4, 12) : (12, 4));
+                    ? (primarySlot == 6 ? (4, 4) : (12, 12))
+                    : (primarySlot == 6 ? (4, 12) : (12, 4));
                 var diagRoom = wallRooms is not null && sourceX >= 0 && sourceY >= 0 && sourceX < wallRooms.Width && sourceY < wallRooms.Height
                     ? wallRooms.RoomAtPosition(sourceX * 16 + diagSubX, sourceY * 16 + diagSubY)
                     : wallRooms?.RoomAt(sourceX, sourceY);
@@ -2525,7 +2657,7 @@ internal static class SceneExporter
                     ArchitectureDepth(face + 4, texture), interval.Near, interval.Far,
                     Wall: NormalizedWallStyle(storedStyle) == 1
                         ? new WallSide(sourceX, sourceY, wallLevel, camera.SourceWallDirection(face), Edge: sourceDiag,
-                            Side: swapSides ? (sourceDiag == 0x10 ? 2 : 1) : (sourceDiag == 0x10 ? 4 : 3))
+                            Side: facingSide)
                         : null,
                     Level: wallLevel, Room: diagRoom,
                     ArchitectureDepth: new WallDepth(sourceX, sourceY, wallLevel, face + 4),
@@ -2736,6 +2868,7 @@ internal static class SceneExporter
             var visibleOnStairs = person.Position.Height == viewLevel + 1 && person[PersonData.WalkingUpStairs] != 0;
             if (person.Position.X < 0 || person.Position.Y < 0 || person.Position.Height < 1 ||
                 (person.Position.Height > viewLevel && !visibleOnStairs) || person[ObjectData.Hidden] != 0) continue;
+            if (hideInteriorPeople && IsPersonHiddenBehindClosedRoof(world, person)) continue;
             BuildAvatar(person);
         }
 
@@ -2800,10 +2933,13 @@ internal static class SceneExporter
                                 ? 3
                                 : 0;
 
+                SimsEngine.Simulation.Neighborhood.CrossLotTransitVisualOverride? transitOverride =
+                    world.TransitVisualOverrides.TryGetValue(person.Id, out var tv) ? tv : null;
                 avatarParts[person.Id] = avatarGeometry.Build(person, person.Position.Height, cameraOrientation, Elevation,
                     camera, attachmentRoot: attachmentRoot, inheritedRootDirection: inheritedRootDirection,
                     headIndicatorKind: headIndicatorKind, subTickAlpha: animating ? subTickAlpha : 0f, updates: updates,
-                    careerHost: world.CareerHost, heldPropGuids: heldPropGuidsByPerson?.GetValueOrDefault(person.Id));
+                    careerHost: world.CareerHost, heldPropGuids: heldPropGuidsByPerson?.GetValueOrDefault(person.Id),
+                    transitOverride: transitOverride);
             }
             catch
             {
@@ -3363,6 +3499,14 @@ internal static class SceneExporter
                         (width, height, rgba) = generatedIcon;
                         generated = true;
                     }
+                    else if (bitmap is null && isPerson &&
+                        world.WalkOrder.OfType<XPerson>().FirstOrDefault(p => unchecked((uint)(p.TypeRecord?.Key ?? 0)) == selectorGuid) is { } speechPerson &&
+                        avatarGeometry.BuildHeadMeshes(speechPerson, speechPerson.Position.Height, camera.Orientation, Elevation, camera) is { Count: > 0 } headMeshes)
+                    {
+                        (width, height, rgba) = SimPortrait.SpeechIcon(headMeshes, iconSize);
+                        KeySpeechBitmapTransparency(width, height, rgba, isPerson: true);
+                        generated = true;
+                    }
                     else if (bitmap is not null)
                     {
                         try { (width, height, rgba) = BitmapCodec.Read(bitmap.Data.ToArray()); }
@@ -3372,7 +3516,7 @@ internal static class SceneExporter
                                 missingResources.Add($"runtime-slot:{owner.Id}:speech-image:{selectorGuid:x8}:bmp:{bitmapId}:read");
                             return null;
                         }
-                        KeySpeechBitmapTransparency(width, height, rgba);
+                        KeySpeechBitmapTransparency(width, height, rgba, isPerson: isPerson);
                     }
                     else
                     {
@@ -3544,17 +3688,42 @@ internal static class SceneExporter
         }
         Lap("items");
         var censorRects = new List<CensorRect>();
+        var skillMeters = new List<SkillMeterRecord>();
+        var personBasePoints = new Dictionary<short, (float X, float Y, int Level, bool HasRelSprite)>();
         foreach (var walkEntry in world.WalkOrder)
         {
             if (walkEntry is not XPerson person) continue;
             var visibleOnStairs = person.Position.Height == viewLevel + 1 && person[PersonData.WalkingUpStairs] != 0;
             if (person.Position.X < 0 || person.Position.Y < 0 || person.Position.Height < 1 ||
                 (person.Position.Height > viewLevel && !visibleOnStairs) || person[ObjectData.Hidden] != 0) continue;
+            if (hideInteriorPeople && IsPersonHiddenBehindClosedRoof(world, person)) continue;
             var personLevel = person.Position.Height;
             var avatarRoot = avatarGeometry.RootPosition(person);
             var avatarAnchor = avatarGeometry.PelvisPosition(person) ?? avatarRoot;
             var tileX = avatarAnchor.X;
             var tileY = avatarAnchor.Y;
+            var rootTileX = person.Position.X / 16f;
+            var rootTileY = person.Position.Y / 16f;
+            var rootAlt = (personLevel - 1) * EntityTransform.StoryHeight + Elevation(rootTileX + 0.5f, rootTileY + 0.5f) / 40f;
+            var basePt = camera.Project(rootTileX, rootTileY, rootAlt * 40f);
+            var hasRelSprite = person.RuntimeSlots.Count > 0 &&
+                person.RuntimeSlots[0].ReadWord(0x10) != 0 &&
+                person.RuntimeSlots[0].ReadWord(0x14) is >= 615 and <= 618;
+            personBasePoints[person.Id] = (basePt.X, basePt.Y, Math.Min(personLevel, viewLevel), hasRelSprite);
+            if (person.RuntimeSlots.Count > 0 &&
+                person.RuntimeSlots[0].ReadWord(0x10) != 0 &&
+                person.RuntimeSlots[0].ReadWord(0x14) is >= 800 and <= 829 and var meterSpriteId)
+            {
+                var headAnchor = avatarGeometry.HeadAttachmentPosition(person) ?? avatarRoot;
+                var headPt = camera.Project(headAnchor.X, headAnchor.Y, headAnchor.Z * 40f);
+                skillMeters.Add(new SkillMeterRecord(
+                    person.Id,
+                    meterSpriteId,
+                    (meterSpriteId - 800) % 10,
+                    headPt.X,
+                    headPt.Y,
+                    Math.Min(personLevel, viewLevel)));
+            }
             var personRooms = world.LotRoomMaps.GetValueOrDefault(personLevel);
             var parts = avatarParts.GetValueOrDefault(person.Id) ?? [];
             var isGhostOrLivingGhost = (person[PersonData.IsGhost] & 1) != 0 || (person[PersonData.IsLivingGhost] & 1) != 0;
@@ -3724,15 +3893,39 @@ internal static class SceneExporter
             }
         }
 
+        var activeOverhead = world.ActiveOverheadFeedback();
+        var overheadFeedback = new List<OverheadFeedbackRecord>(activeOverhead.Count);
+        foreach (var evt in activeOverhead)
+        {
+            if (personBasePoints.TryGetValue(evt.PersonId, out var pt))
+            {
+                var kind = evt.Kind switch
+                {
+                    OverheadFeedbackKind.Currency => "currency",
+                    OverheadFeedbackKind.SkillUp => "skillUp",
+                    OverheadFeedbackKind.Magenta => "magenta",
+                    OverheadFeedbackKind.Relationship => "relationship",
+                    _ => "currency",
+                };
+                var hasSprite = evt.Kind == OverheadFeedbackKind.Relationship && pt.HasRelSprite;
+                var remaining = Math.Max(0, evt.ExpiresAtTick - world.Clock.Ticks);
+                overheadFeedback.Add(new OverheadFeedbackRecord(
+                    evt.PersonId, kind, evt.Text, evt.BackgroundRgb, evt.ForegroundRgb,
+                    evt.Delta, pt.X, pt.Y, pt.Level, evt.StackIndex, remaining, hasSprite));
+            }
+        }
+
         if (animating)
         {
             Lap("animation");
-            if (Environment.GetEnvironmentVariable("SIMS_PROFILE") is not null && sequence % 60 == 0) Console.Error.WriteLine("Animation phases (ms):" + lapText);
+            if (ProfileEnabled && sequence % 60 == 0) Console.Error.WriteLine("Animation phases (ms):" + lapText);
             var animatingInMemory = SimsSimulation.InMemorySessionAssets.IsInMemoryPath(directory);
             foreach (var (name, bytes) in files)
             {
-                if (!kept.Written.Add(name)) continue;
                 var target = Path.Combine(directory, name);
+                if (!kept.Written.Add(name) &&
+                    (!animatingInMemory || SimsSimulation.InMemorySessionAssets.ContainsFile(target)))
+                    continue;
                 if (animatingInMemory) SimsSimulation.InMemorySessionAssets.StoreFile(target, bytes);
                 else File.WriteAllBytes(target, bytes);
             }
@@ -3835,9 +4028,37 @@ internal static class SceneExporter
                     }
                 }
 
+                OverheadFeedbackRecord[]? ShiftOverhead(float sx, float sy)
+                {
+                    if (overheadFeedback.Count == 0) return null;
+                    var arr = new OverheadFeedbackRecord[overheadFeedback.Count];
+                    for (var i = 0; i < overheadFeedback.Count; i++)
+                    {
+                        var o = overheadFeedback[i];
+                        arr[i] = o with { X = o.X + sx, Y = o.Y + sy };
+                    }
+                    return arr;
+                }
+                SkillMeterRecord[]? ShiftSkillMeters(float sx, float sy)
+                {
+                    if (skillMeters.Count == 0) return null;
+                    var arr = new SkillMeterRecord[skillMeters.Count];
+                    for (var i = 0; i < skillMeters.Count; i++)
+                    {
+                        var m = skillMeters[i];
+                        arr[i] = m with { X = m.X + sx, Y = m.Y + sy };
+                    }
+                    return arr;
+                }
+                CrossLotTransitRecord[]? exportedTransits = world.TransitVisualOverrides.Count == 0
+                    ? null
+                    : world.TransitVisualOverrides.Select(kv => new CrossLotTransitRecord(
+                        kv.Key, kv.Value.TileX, kv.Value.TileY, kv.Value.Direction, kv.Value.SeamProgress,
+                        kv.Value.FromHouse, kv.Value.ToHouse)).ToArray();
                 return new DirectAnimationFrame(
                     revision, sequence, updates, baseTextureCount, animatedLighting,
-                    animatedTextures, animatedSprites, directMeshes, directCensors);
+                    animatedTextures, animatedSprites, directMeshes, directCensors,
+                    ShiftOverhead(dx, dy), ShiftSkillMeters(dx, dy), exportedTransits);
             }
 
             var animatedMeshes = new object[dynamicMeshCount];
@@ -3872,20 +4093,20 @@ internal static class SceneExporter
                 }
             }
 
-            return new
-            {
-                schemaVersion = 1,
-                baseRevision = revision,
+            return new AnimatedJsonPayload(
+                1,
+                revision,
                 sequence,
                 updates,
-                textureStart = baseTextureCount,
-                lighting = animatedLighting,
-                missingResources = missingResources.Count == 0 ? Array.Empty<string>() : missingResources.Order().ToArray(),
-                textures = animatedTextures,
-                sprites = animatedSprites,
-                meshes = animatedMeshes,
-                censorRects = animatedCensorRects,
-            };
+                baseTextureCount,
+                animatedLighting,
+                missingResources.Count == 0 ? Array.Empty<string>() : missingResources.Order().ToArray(),
+                animatedTextures,
+                animatedSprites,
+                animatedMeshes,
+                animatedCensorRects,
+                overheadFeedback.Count == 0 ? null : overheadFeedback.Select(o => o with { X = o.X + dx, Y = o.Y + dy }).ToArray(),
+                skillMeters.Count == 0 ? null : skillMeters.Select(m => m with { X = m.X + dx, Y = m.Y + dy }).ToArray());
 
             ZoomImage? ShiftAnimationShadow(ZoomImage? shadow) => shadow is null
                 ? null
@@ -3943,6 +4164,12 @@ internal static class SceneExporter
         }).ToList();
         sprites = sprites.Select(sprite => sprite with { X = sprite.X + shiftX, Y = sprite.Y + shiftY }).ToList();
         censorRects = censorRects.Select(rect => rect with { X = rect.X + shiftX, Y = rect.Y + shiftY }).ToList();
+        var shiftedOverhead = overheadFeedback.Count == 0
+            ? null
+            : overheadFeedback.Select(o => o with { X = o.X + shiftX, Y = o.Y + shiftY }).ToArray();
+        var shiftedSkillMeters = skillMeters.Count == 0
+            ? null
+            : skillMeters.Select(m => m with { X = m.X + shiftX, Y = m.Y + shiftY }).ToArray();
         Lap("sprites");
         var lighting = baseLighting is { } built
             ? built with
@@ -3959,7 +4186,7 @@ internal static class SceneExporter
         var prunedOldRevisionFiles = false;
         if (inMemory)
         {
-            if (previousWritten is not null && SimsSimulation.InMemorySessionAssets.TotalBytesUnder(directory) > 32L * 1024 * 1024)
+            if (previousWritten is not null && SimsSimulation.InMemorySessionAssets.TotalDirectBytesIn(directory) > 192L * 1024 * 1024)
             {
                 foreach (var stale in previousWritten)
                 {
@@ -3972,8 +4199,11 @@ internal static class SceneExporter
             }
             foreach (var pair in files)
             {
-                if (previousWritten is not null && previousWritten.Contains(pair.Key)) continue;
-                SimsSimulation.InMemorySessionAssets.StoreFile(Path.Combine(directory, pair.Key), pair.Value);
+                var target = Path.Combine(directory, pair.Key);
+                if (previousWritten is not null && previousWritten.Contains(pair.Key) &&
+                    SimsSimulation.InMemorySessionAssets.ContainsFile(target))
+                    continue;
+                SimsSimulation.InMemorySessionAssets.StoreFile(target, pair.Value);
             }
         }
         else
@@ -4002,33 +4232,55 @@ internal static class SceneExporter
         if (!animating)
         {
             const int samples = 8;
-            var mapWidth = lotSize * samples;
-            var mapHeight = lotSize * samples;
-            var mapPixels = new byte[mapWidth * mapHeight * 4];
-            var totalStories = Math.Min(Stories(lot), 5);
             var shelterCache = GetShelterCache(lot, world);
-            for (var qy = 0; qy < mapHeight; qy++)
-            for (var qx = 0; qx < mapWidth; qx++)
+            if (shelterCache.CachedOverheadMap is { } cachedOverhead &&
+                shelterCache.CachedOverheadLotSize == lotSize &&
+                shelterCache.CachedOverheadBaseHeight == baseHeight)
             {
-                var tx = qx / samples;
-                var ty = qy / samples;
-                var fx = (qx % samples + 0.5f) / samples;
-                var fy = (qy % samples + 0.5f) / samples;
-                var offset = (qy * mapWidth + qx) * 4;
-                for (var level = 1; level <= totalStories; level++)
-                {
-                    if (IsCoveredSubtile(shelterCache, level, tx, ty, fx, fy))
-                        mapPixels[offset] |= (byte)(1 << (level - 1));
-                }
-                var altitude = Elevation(tx + fx, ty + fy) / 40f;
-                var code = Math.Clamp((int)MathF.Round(altitude * 256f) + 32768, 0, 65535);
-                mapPixels[offset + 1] = (byte)(code >> 8);
-                mapPixels[offset + 2] = (byte)code;
-                mapPixels[offset + 3] = 255;
+                overheadMap = cachedOverhead;
             }
-            overheadMap = new OverheadMapRecord(mapWidth, mapHeight, samples, mapPixels);
+            else
+            {
+                var mapWidth = lotSize * samples;
+                var mapHeight = lotSize * samples;
+                var mapPixels = new byte[mapWidth * mapHeight * 4];
+                var totalStories = Math.Min(Stories(lot), 5);
+                Parallel.For(0, mapHeight, qy =>
+                {
+                    var ty = qy / samples;
+                    var fy = (qy % samples + 0.5f) / samples;
+                    var rowBase = qy * mapWidth * 4;
+                    for (var qx = 0; qx < mapWidth; qx++)
+                    {
+                        var tx = qx / samples;
+                        var fx = (qx % samples + 0.5f) / samples;
+                        var offset = rowBase + qx * 4;
+                        byte mask = 0;
+                        for (var level = 1; level <= totalStories; level++)
+                        {
+                            if (IsCoveredSubtile(shelterCache, level, tx, ty, fx, fy))
+                                mask |= (byte)(1 << (level - 1));
+                        }
+                        mapPixels[offset] = mask;
+                        var altitude = ElevationAt(heights, baseHeight, tx + fx, ty + fy) / 40f;
+                        var code = Math.Clamp((int)MathF.Round(altitude * 256f) + 32768, 0, 65535);
+                        mapPixels[offset + 1] = (byte)(code >> 8);
+                        mapPixels[offset + 2] = (byte)code;
+                        mapPixels[offset + 3] = 255;
+                    }
+                });
+                overheadMap = new OverheadMapRecord(mapWidth, mapHeight, samples, mapPixels);
+                shelterCache.CachedOverheadLotSize = lotSize;
+                shelterCache.CachedOverheadBaseHeight = baseHeight;
+                shelterCache.CachedOverheadMap = overheadMap;
+            }
         }
 
+        var exportedTransitsFull = world.TransitVisualOverrides.Count == 0
+            ? null
+            : world.TransitVisualOverrides.Select(kv => new CrossLotTransitRecord(
+                kv.Key, kv.Value.TileX, kv.Value.TileY, kv.Value.Direction, kv.Value.SeamProgress,
+                kv.Value.FromHouse, kv.Value.ToHouse)).ToArray();
         var exported = new ExportedLotScene(
             house,
             sceneWidth,
@@ -4053,54 +4305,53 @@ internal static class SceneExporter
             censorRects.ToArray(),
             ["native engine scene"],
             missingResources.Order().ToArray(),
-            overheadMap);
-        static object BuildJsonScene(ExportedLotScene payload) => new
-        {
-            schemaVersion = 1,
-            house = payload.House,
-            width = payload.Width,
-            height = payload.Height,
-            lotWidth = payload.LotSize,
-            lotHeight = payload.LotSize,
-            floorDiagonals = payload.FloorDiagonals,
-            terrainHeights = payload.TerrainHeights,
-            cameraOrientation = payload.CameraOrientation,
-            originX = payload.OriginX,
-            originY = payload.OriginY,
-            wallMode = payload.WallMode,
-            wallsUp = payload.WallMode == "up",
-            roofsVisible = payload.RoofsVisible,
-            viewLevel = payload.ViewLevel,
-            stories = payload.Stories,
-            lighting = payload.Lighting,
-            textures = payload.Textures,
-            sprites = payload.Sprites,
-            soundSources = payload.SoundSources.Select(s => new { objectID = s.ObjectID, level = s.Level, x = s.X, y = s.Y, z = s.Z }).ToArray(),
-            placementVertices = payload.Terrain.Select(vertex => new
-            {
-                x = vertex.X, y = vertex.Y - payload.PlacementLift, r = vertex.R, g = vertex.G, b = vertex.B,
-                dr = vertex.Dr, dg = vertex.Dg, db = vertex.Db, grass = vertex.Grass,
-            }).ToArray(),
-            terrainVertices = payload.Terrain.Select((vertex, index) =>
+            overheadMap,
+            shiftedOverhead,
+            shiftedSkillMeters,
+            exportedTransitsFull);
+        static FullJsonPayload BuildJsonScene(ExportedLotScene payload) => new(
+            1,
+            payload.House,
+            payload.Width,
+            payload.Height,
+            payload.LotSize,
+            payload.LotSize,
+            payload.FloorDiagonals,
+            payload.TerrainHeights,
+            payload.CameraOrientation,
+            payload.OriginX,
+            payload.OriginY,
+            payload.WallMode,
+            payload.WallMode == "up",
+            payload.RoofsVisible,
+            payload.ViewLevel,
+            payload.Stories,
+            payload.Lighting,
+            payload.Textures,
+            payload.Sprites,
+            payload.SoundSources.Select(s => new SoundSourceJson(s.ObjectID, s.Level, s.X, s.Y, s.Z)).ToArray(),
+            payload.Terrain.Select(vertex => new TerrainVertex(
+                vertex.X, vertex.Y - payload.PlacementLift, vertex.R, vertex.G, vertex.B,
+                vertex.Dr, vertex.Dg, vertex.Db, vertex.Grass)).ToArray(),
+            payload.Terrain.Select((vertex, index) =>
             {
                 var tileIndex = index / 6;
                 var tx = tileIndex % payload.LotSize;
                 var ty = tileIndex / payload.LotSize;
                 var v = (tx == 0 || tx == payload.LotSize - 1 || ty == 0 || ty == payload.LotSize - 1) ? payload.Terrain[tileIndex * 6] : vertex;
-                return new
-                {
-                    x = v.X, y = v.Y, r = v.R, g = v.G, b = v.B,
-                    dr = v.Dr, dg = v.Dg, db = v.Db, grass = v.Grass,
-                };
+                return new TerrainVertex(
+                    v.X, v.Y, v.R, v.G, v.B,
+                    v.Dr, v.Dg, v.Db, v.Grass);
             }).ToArray(),
-            meshes = payload.Meshes,
-            censorRects = payload.CensorRects,
-            limitations = payload.Limitations,
-            missingResources = payload.MissingResources,
-            overheadMap = payload.OverheadMap is { } om
-                ? new { width = om.Width, height = om.Height, samplesPerTile = om.SamplesPerTile, pixels = om.Pixels }
+            payload.Meshes,
+            payload.CensorRects,
+            payload.Limitations,
+            payload.MissingResources,
+            payload.OverheadMap is { } om
+                ? new OverheadMapRecord(om.Width, om.Height, om.SamplesPerTile, om.Pixels)
                 : null,
-        };
+            payload.OverheadFeedback,
+            payload.SkillMeters);
         Lap("write");
         if (retain is not null)
         {
@@ -4147,7 +4398,7 @@ internal static class SceneExporter
             }
         }
         Lap("json");
-        if (Environment.GetEnvironmentVariable("SIMS_PROFILE") is not null) Console.Error.WriteLine("Export phases (ms):" + lapText);
+        if (ProfileEnabled) Console.Error.WriteLine("Export phases (ms):" + lapText);
         return path;
     }
 
@@ -4368,4 +4619,57 @@ internal static class SceneExporter
         var chunk = lot.Find(ResourceType.Parse("Arry"), (ushort)id);
         return chunk is null ? null : LotArray.Read(lot, chunk);
     }
+
+    private sealed record SoundSourceJson(
+        [property: JsonPropertyName("objectID")] short ObjectID,
+        int Level,
+        float X,
+        float Y,
+        float Z);
+
+    private sealed record AnimatedJsonPayload(
+        [property: JsonPropertyName("schemaVersion")] int SchemaVersion,
+        [property: JsonPropertyName("baseRevision")] long BaseRevision,
+        [property: JsonPropertyName("sequence")] long Sequence,
+        [property: JsonPropertyName("updates")] long Updates,
+        [property: JsonPropertyName("textureStart")] int TextureStart,
+        [property: JsonPropertyName("lighting")] SceneLighting.State? Lighting,
+        [property: JsonPropertyName("missingResources")] string[] MissingResources,
+        [property: JsonPropertyName("textures")] Texture[] Textures,
+        [property: JsonPropertyName("sprites")] SceneSprite[] Sprites,
+        [property: JsonPropertyName("meshes")] object[] Meshes,
+        [property: JsonPropertyName("censorRects")] CensorRect[] CensorRects,
+        [property: JsonPropertyName("overheadFeedback"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] OverheadFeedbackRecord[]? OverheadFeedback,
+        [property: JsonPropertyName("skillMeters"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] SkillMeterRecord[]? SkillMeters);
+
+    private sealed record FullJsonPayload(
+        [property: JsonPropertyName("schemaVersion")] int SchemaVersion,
+        [property: JsonPropertyName("house")] int House,
+        [property: JsonPropertyName("width")] float Width,
+        [property: JsonPropertyName("height")] float Height,
+        [property: JsonPropertyName("lotWidth")] int LotWidth,
+        [property: JsonPropertyName("lotHeight")] int LotHeight,
+        [property: JsonPropertyName("floorDiagonals")] int[] FloorDiagonals,
+        [property: JsonPropertyName("terrainHeights")] short[] TerrainHeights,
+        [property: JsonPropertyName("cameraOrientation")] int CameraOrientation,
+        [property: JsonPropertyName("originX")] float OriginX,
+        [property: JsonPropertyName("originY")] float OriginY,
+        [property: JsonPropertyName("wallMode")] string WallMode,
+        [property: JsonPropertyName("wallsUp")] bool WallsUp,
+        [property: JsonPropertyName("roofsVisible")] bool RoofsVisible,
+        [property: JsonPropertyName("viewLevel")] int ViewLevel,
+        [property: JsonPropertyName("stories")] int Stories,
+        [property: JsonPropertyName("lighting")] SceneLighting.State? Lighting,
+        [property: JsonPropertyName("textures")] Texture[] Textures,
+        [property: JsonPropertyName("sprites")] SceneSprite[] Sprites,
+        [property: JsonPropertyName("soundSources")] SoundSourceJson[] SoundSources,
+        [property: JsonPropertyName("placementVertices")] TerrainVertex[] PlacementVertices,
+        [property: JsonPropertyName("terrainVertices")] TerrainVertex[] TerrainVertices,
+        [property: JsonPropertyName("meshes")] Mesh[] Meshes,
+        [property: JsonPropertyName("censorRects")] CensorRect[] CensorRects,
+        [property: JsonPropertyName("limitations")] string[] Limitations,
+        [property: JsonPropertyName("missingResources")] string[] MissingResources,
+        [property: JsonPropertyName("overheadMap")] OverheadMapRecord? OverheadMap,
+        [property: JsonPropertyName("overheadFeedback"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] OverheadFeedbackRecord[]? OverheadFeedback,
+        [property: JsonPropertyName("skillMeters"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] SkillMeterRecord[]? SkillMeters);
 }

@@ -7,7 +7,15 @@ public readonly record struct PropertyPair(string Name, string Value);
 /// <summary>Represents a skeleton bone with its hierarchy, translation, rotation quaternion stored in (x,
 /// y, z, w) order, and trailing auxiliary numeric attributes.</summary>
 public sealed record Bone(string Name, string Parent, IReadOnlyList<PropertyPair> Properties, Vector3 Translation, Quaternion Rotation,
-    int[] Integers, float[] Floats);
+    int[] Integers, float[] Floats)
+{
+    /// <summary>Raw wiggle length metadata stored in <see cref="Floats"/>[0] (reinterpreted as int32 in binary BCF).
+    /// Sims.exe computes unused scratch vectors from this field at load time and never applies it in pose sampling or skinning.</summary>
+    public int WiggleLengthBits => Floats.Length > 0 ? BitConverter.SingleToInt32Bits(Floats[0]) : 0;
+
+    /// <summary>Wiggle power metadata stored in <see cref="Floats"/>[1], never applied by Sims.exe during pose sampling or skinning.</summary>
+    public float WigglePower => Floats.Length > 1 ? Floats[1] : 0f;
+}
 
 public sealed record Skeleton(string Name, IReadOnlyList<Bone> Bones);
 

@@ -5,7 +5,7 @@ using SimsSDL.UI;
 
 namespace SimsSDL;
 
-public sealed class LotRenderer : IDisposable
+public sealed partial class LotRenderer : IDisposable
 {
     public static readonly float OriginalUIBlue = (float)Math.Pow((82.0 / 255.0 + 0.055) / 1.055, 2.4);
 
@@ -53,6 +53,11 @@ public sealed class LotRenderer : IDisposable
         }
     }
 
+    private readonly struct OrderedDrawEntryComparer(int spriteCount) : IComparer<OrderedDrawEntry>
+    {
+        public int Compare(OrderedDrawEntry x, OrderedDrawEntry y) => OrderedDrawEntry.Compare(in x, in y, spriteCount);
+    }
+
     private readonly record struct MeshSlice(GPUBuffer Buffer, uint FirstVertex, uint VertexCount);
 
     private sealed class PreparedScene
@@ -93,8 +98,34 @@ public sealed class LotRenderer : IDisposable
         public GPUBuffer Buffer;
         public Vector4 Tint;
         public float UVRectX;
+        public Vector3 SunDir;
         public uint FirstVertex;
         public uint VertexCount;
+    }
+
+    /// <summary>Resolves the camera-space 3D sun direction used to shade roof facets. Uses the live
+    /// ambient sun when a lighting plugin supplies a directional sun, clamped so high-noon sun still
+    /// preserves facet contrast; otherwise falls back to a classic diagonal isometric sun.</summary>
+    internal static Vector3 ResolveRoofSunDirection(bool ambientActive, Vector3 ambientSun)
+    {
+        if (ambientActive)
+        {
+            var horiz = new Vector2(ambientSun.Y, ambientSun.Z);
+            float hLen = horiz.Length();
+            if (hLen > 0.05f)
+            {
+                const float invSqrt2 = 0.70710678f;
+                float up = Math.Clamp(ambientSun.X, 0.25f, 0.78f);
+                float targetHoriz = MathF.Sqrt(MathF.Max(0f, 1f - up * up));
+                horiz *= targetHoriz / hLen;
+                return Vector3.Normalize(new Vector3(
+                    (horiz.X + horiz.Y) * invSqrt2,
+                    up,
+                    (horiz.X - horiz.Y) * invSqrt2));
+            }
+        }
+
+        return Vector3.Normalize(new Vector3(0.75f, 0.55f, -0.35f));
     }
 
     private enum SpritePassMode
@@ -180,6 +211,9 @@ public sealed class LotRenderer : IDisposable
     private int[] _staticShadowSpriteIndices = [];
     private List<int> _activeShadowSpriteIndices = [];
     private List<SceneDrawItem> _drawItems = [];
+    private readonly List<LotScene.Mesh> _dynamicMeshesScratch = [];
+    private readonly List<OrderedDrawEntry> _dynamicEntriesScratch = [];
+    private readonly List<MeshSlice?> _dynamicSlicesScratch = [];
 
     private static bool HasFloorShadow(LotScene.Sprite sprite) =>
         sprite.Wall is null && (sprite.FloorShadow is not null || sprite.FloorShadowNear is not null || sprite.FloorShadowFar is not null);
@@ -216,6 +250,7 @@ public sealed class LotRenderer : IDisposable
     public bool SuppressControlPanelInset { get; set; }
 
     public int Speed { get; set; }
+    public bool AmbientPaused { get; set; }
     public float UIScale { get; set; } = 2f;
 
     private LotZoom _zoom = LotZoom.Near;
@@ -237,7 +272,7 @@ public sealed class LotRenderer : IDisposable
     /// <summary>Selects discrete asset LOD at geometric scale midpoints (0.7071 and 1.4142) so zooming
     /// preserves higher-resolution art until halfway to the next tier.</summary>
     public LotZoom EffectiveVisualZoom => !DrawsLot
-        ? Zoom
+        ? Zoom.AssetZoom()
         : _visualZoomFactor < 0.70710678f
             ? LotZoom.Far
             : _visualZoomFactor < 1.41421356f
@@ -268,7 +303,7 @@ public sealed class LotRenderer : IDisposable
         {
             PanAssignments = unchecked(PanAssignments + 1);
             _pan = Scene is not null
-                ? SimsSDL.Core.SceneViewport.ClampedPan(value, Scene, MathF.Max(UIScale, 0.01f) * _visualZoomFactor)
+                ? SimsSDL.Core.SceneViewport.ClampedPan(value, Scene, MathF.Max(UIScale, 0.01f) * _visualZoomFactor, _neighborhoodPanTileBounds)
                 : value;
         }
     }
@@ -285,6 +320,11 @@ public sealed class LotRenderer : IDisposable
     private readonly Dictionary<int, PreviewMeshes> _previews = new();
     private Dictionary<UITexture, (UITexture Source, int Version, GPUTexture Texture)> _uiTextures =
         new(ReferenceEqualityComparer.Instance);
+    private Dictionary<UITexture, (UITexture Source, int Version, GPUTexture Texture)> _uiTexturesAlt =
+        new(ReferenceEqualityComparer.Instance);
+    private readonly List<UITexture> _uiUploadsScratch = [];
+    private readonly HashSet<UITexture> _uiUploadSeenScratch = new(ReferenceEqualityComparer.Instance);
+    private readonly HashSet<GPUTexture> _retainedUiScratch = new(ReferenceEqualityComparer.Instance);
 
     private int _sceneLoadsInFlight;
     private long _newestRequestedRevision;
@@ -303,6 +343,14 @@ public sealed class LotRenderer : IDisposable
     private GPUTexture? _heightMapTexture;
     private float _heightMargin = 4f;
     private GPUTexture? _footMapTexture;
+    private GPUTexture? _worldShadowColor;
+    private GPUTexture? _worldShadowDepth;
+    private LotScene? _worldShadowScene;
+    private string _worldShadowKey = string.Empty;
+    private long _worldShadowAnimSeq;
+    private Vector4? _worldHeightFrame;
+    private Vector4? _worldFootFrame;
+    private SimsSDL.Core.SceneViewport? _worldShadowViewport;
     private GPUTexture? _overheadMap;
     private GPUTexture? _emptyOverhead;
     private GPUTexture? _indoorMask;
@@ -313,7 +361,8 @@ public sealed class LotRenderer : IDisposable
     private List<GPUTexture> _trailTextures = [];
     private int _trailIndex;
     private string _trailKey = string.Empty;
-    private ulong? _trailTicks;
+    private ulong? _ambientTimeTicks;
+    private double _ambientTimeSeconds;
     private float _trailFill;
     private readonly List<Vector4> _pendingPrints = [];
     private GPUTexture? _surfaceLiftTexture;
@@ -363,11 +412,27 @@ public sealed class LotRenderer : IDisposable
         }
     }
 
-    private void RetireDistinctBuffers(IReadOnlyList<MeshSlice?> slices, int startIndex = 0)
+    private void RetireDistinctBuffers(
+        IReadOnlyList<MeshSlice?> slices,
+        int startIndex = 0,
+        IReadOnlyList<MeshSlice?>? excludeSlices = null)
     {
         if (startIndex >= slices.Count)
         {
             return;
+        }
+
+        HashSet<GPUBuffer>? excluded = null;
+        if (excludeSlices is { Count: > 0 })
+        {
+            excluded = new HashSet<GPUBuffer>(ReferenceEqualityComparer.Instance);
+            for (int i = 0; i < excludeSlices.Count; i++)
+            {
+                if (excludeSlices[i] is { Buffer: { } excludedBuffer })
+                {
+                    excluded.Add(excludedBuffer);
+                }
+            }
         }
 
         HashSet<GPUBuffer>? seen = null;
@@ -378,7 +443,8 @@ public sealed class LotRenderer : IDisposable
                 continue;
             }
 
-            if (_dynamicMeshRing.Contains(buffer, ReferenceEqualityComparer.Instance))
+            if (_dynamicMeshRing.Contains(buffer, ReferenceEqualityComparer.Instance) ||
+                (excluded is not null && excluded.Contains(buffer)))
             {
                 continue;
             }
@@ -432,6 +498,7 @@ public sealed class LotRenderer : IDisposable
         }
 
         _disposed = true;
+        ClearAdjacentNeighborhood();
         var all = new HashSet<IDisposable>(ReferenceEqualityComparer.Instance);
         while (_retiredGpu.TryDequeue(out var entry))
         {
@@ -452,6 +519,8 @@ public sealed class LotRenderer : IDisposable
         Collect(all, _floorBrushTexture);
         Collect(all, _heightMapTexture);
         Collect(all, _footMapTexture);
+        Collect(all, _worldShadowColor);
+        Collect(all, _worldShadowDepth);
         Collect(all, _overheadMap);
         Collect(all, _emptyOverhead);
         Collect(all, _indoorMask);
@@ -486,6 +555,7 @@ public sealed class LotRenderer : IDisposable
         _cachedTextures = [];
         _dynamicTextureCache.Clear();
         _uiTextures.Clear();
+        _uiTexturesAlt.Clear();
         _previews.Clear();
         _trailTextures = [];
         _ghostTextures = [];
@@ -554,11 +624,15 @@ public sealed class LotRenderer : IDisposable
             _wallPaintTextures = GPU.UploadTextures(wallPixels);
         }
 
-        var next = new Dictionary<UITexture, (UITexture Source, int Version, GPUTexture Texture)>(ReferenceEqualityComparer.Instance);
-        List<UITexture> uploads = [];
-        foreach (UIDraw item in Overlay)
+        var next = _uiTexturesAlt;
+        next.Clear();
+        List<UITexture> uploads = _uiUploadsScratch;
+        uploads.Clear();
+        _uiUploadSeenScratch.Clear();
+
+        for (int i = 0; i < Overlay.Count; i++)
         {
-            UITexture texture = item.Texture;
+            UITexture texture = Overlay[i].Texture;
             if (next.ContainsKey(texture))
             {
                 continue;
@@ -568,7 +642,7 @@ public sealed class LotRenderer : IDisposable
             {
                 next[texture] = cached;
             }
-            else if (!uploads.Exists(u => ReferenceEquals(u, texture)))
+            else if (_uiUploadSeenScratch.Add(texture))
             {
                 uploads.Add(texture);
             }
@@ -593,9 +667,10 @@ public sealed class LotRenderer : IDisposable
             }
         }
 
-        if (_uiTextures.Count > 0)
+        if (_uiTextures.Count > 0 && (uploads.Count > 0 || next.Count != _uiTextures.Count))
         {
-            var retainedUi = new HashSet<GPUTexture>(ReferenceEqualityComparer.Instance);
+            HashSet<GPUTexture> retainedUi = _retainedUiScratch;
+            retainedUi.Clear();
             foreach (var entry in next.Values)
             {
                 retainedUi.Add(entry.Texture);
@@ -610,6 +685,8 @@ public sealed class LotRenderer : IDisposable
             }
         }
 
+        _uiTexturesAlt = _uiTextures;
+        _uiTexturesAlt.Clear();
         _uiTextures = next;
     }
 
@@ -855,7 +932,7 @@ public sealed class LotRenderer : IDisposable
             bool wantsMip = !string.Equals(image.Encoding, "depth8", StringComparison.Ordinal)
                 && (image.Width > 1 || image.Height > 1);
             GPUTexture? cached = _cachedTextures.GetValueOrDefault(key) ?? _dynamicTextureCache.GetValueOrDefault(key);
-            if (cached is not null && cached.Width == image.Width && cached.Height == image.Height && cached.Format == format
+            if (cached is not null && cached.Handle != nint.Zero && cached.Width == image.Width && cached.Height == image.Height && cached.Format == format
                 && (!wantsMip || cached.NumLevels > 1))
             {
                 textures[index] = cached;
@@ -908,7 +985,12 @@ public sealed class LotRenderer : IDisposable
             _wallPaintTextures = [];
         }
 
+        LotScene? previousScene = Scene;
         Scene = loaded.Scene;
+        if (previousScene is not null && previousScene.House != loaded.Scene.House && _adjacentLots.Count > 0)
+        {
+            ApplySeamlessConnectedLotTransition(previousScene, loaded.Scene);
+        }
         _sceneMasks = [.. loaded.Masks];
         _deferredPixelTextures = [];
         SceneRoot = rootDir;
@@ -1075,6 +1157,7 @@ public sealed class LotRenderer : IDisposable
     /// </summary>
     public void ApplyPendingAnimation(nint command = 0)
     {
+        ApplyAdjacentPendingAnimations(command);
         if (_pendingFrames.Count == 0)
         {
             return;
@@ -1099,6 +1182,7 @@ public sealed class LotRenderer : IDisposable
         {
             return;
         }
+        _worldShadowAnimSeq++;
 
         int last = matching.Count - 1;
         GPU.BatchingUploads(command, () =>
@@ -1144,7 +1228,7 @@ public sealed class LotRenderer : IDisposable
                     && string.Equals(previousScene.Textures[existingIndex].File, image.File, StringComparison.Ordinal))
                 {
                     GPUTexture existing = _sceneTextures[existingIndex];
-                    if (existing.Width == image.Width && existing.Height == image.Height && existing.Format == format
+                    if (existing.Handle != nint.Zero && existing.Width == image.Width && existing.Height == image.Height && existing.Format == format
                         && (!wantsMip || existing.NumLevels > 1))
                     {
                         resolvedNew[offset] = existing;
@@ -1164,7 +1248,7 @@ public sealed class LotRenderer : IDisposable
                     : _dynamicMaskCache.TryGetValue(key, out var dynMask)
                         ? dynMask
                         : null;
-                if (cached is not null && cached.Width == image.Width && cached.Height == image.Height && cached.Format == format
+                if (cached is not null && cached.Handle != nint.Zero && cached.Width == image.Width && cached.Height == image.Height && cached.Format == format
                     && mask is { } validMask && (!wantsMip || cached.NumLevels > 1))
                 {
                     resolvedNew[offset] = cached;
@@ -1194,10 +1278,7 @@ public sealed class LotRenderer : IDisposable
                 for (int i = 0; i < uploaded.Count; i++)
                 {
                     int idx = missingIndices[i];
-                    GPUTexture texture = uploaded[i];
-                    PickerAlphaMask uploadedMask = resolvedMasks[idx];
-                    resolvedNew[idx] = texture;
-                    CacheDynamicTexture(texture, uploadedMask, missingKeys[i]);
+                    resolvedNew[idx] = uploaded[i];
                 }
             }
         }
@@ -1221,7 +1302,8 @@ public sealed class LotRenderer : IDisposable
             {
                 LotScene.Texture image = frame.Textures[offset];
                 int index = _sceneTextures.Count;
-                _sceneTextures.Add(resolvedNew[offset]!);
+                GPUTexture texture = resolvedNew[offset]!;
+                _sceneTextures.Add(texture);
                 _textureIndexByFile[image.File] = index;
                 if (!anyMissingMask && _sceneMasks.Count == index)
                 {
@@ -1233,28 +1315,75 @@ public sealed class LotRenderer : IDisposable
                 }
             }
 
+            // Cache dynamic textures only after all resolvedNew entries are in _sceneTextures so eviction never retires a live frame texture.
+            for (int offset = 0; offset < frame.Textures.Count; offset++)
+            {
+                LotScene.Texture image = frame.Textures[offset];
+                string key = CacheTexturePath(SceneRoot, image.File);
+                if (!_cachedTextures.ContainsKey(key))
+                {
+                    CacheDynamicTexture(resolvedNew[offset]!, resolvedMasks[offset], key);
+                }
+            }
+
             if (anyMissingMask)
             {
                 _deferredPixelTextures.AddRange(frame.Textures);
             }
         }
 
-        RetireDistinctBuffers(_meshSlices, _staticMeshSlices.Count);
+        RetireDistinctBuffers(_meshSlices, startIndex: 0, excludeSlices: _staticMeshSlices);
         IReadOnlyList<LotScene.Mesh> allUpdatedMeshes = updated.Meshes ?? [];
-        List<LotScene.Mesh> dynamicMeshes = [];
+        List<LotScene.Mesh> dynamicMeshes = _dynamicMeshesScratch;
+        dynamicMeshes.Clear();
         if (allUpdatedMeshes.Count > _staticMeshCount)
         {
-            dynamicMeshes = new List<LotScene.Mesh>(allUpdatedMeshes.Count - _staticMeshCount);
+            int dynCount = allUpdatedMeshes.Count - _staticMeshCount;
+            if (dynamicMeshes.Capacity < dynCount)
+                dynamicMeshes.Capacity = dynCount;
             for (int m = _staticMeshCount; m < allUpdatedMeshes.Count; m++)
             {
                 dynamicMeshes.Add(allUpdatedMeshes[m]);
             }
         }
-        List<MeshSlice?> dynamicSlices = dynamicMeshes.Count == 0 ? [] : MakeCombinedDynamicMeshes(dynamicMeshes);
-        _meshSlices = [.. _staticMeshSlices, .. dynamicSlices];
-        _meshBounds = dynamicMeshes.Count == 0
-            ? _staticMeshBounds
-            : [.. _staticMeshBounds, .. ScenePicker.ComputeMeshBounds(dynamicMeshes)];
+
+        List<MeshSlice?> dynamicSlices = _dynamicSlicesScratch;
+        dynamicSlices.Clear();
+        if (dynamicMeshes.Count > 0)
+        {
+            MakeCombinedDynamicMeshes(dynamicMeshes, dynamicSlices);
+        }
+
+        if (_meshSlices.Count > _staticMeshSlices.Count)
+        {
+            _meshSlices.RemoveRange(_staticMeshSlices.Count, _meshSlices.Count - _staticMeshSlices.Count);
+        }
+        else if (_meshSlices.Count < _staticMeshSlices.Count)
+        {
+            _meshSlices.Clear();
+            _meshSlices.AddRange(_staticMeshSlices);
+        }
+        for (int i = 0; i < dynamicSlices.Count; i++)
+        {
+            _meshSlices.Add(dynamicSlices[i]);
+        }
+
+        if (dynamicMeshes.Count == 0)
+        {
+            _meshBounds = _staticMeshBounds;
+        }
+        else
+        {
+            int totalMeshCount = _staticMeshBounds.Length + dynamicMeshes.Count;
+            if (ReferenceEquals(_meshBounds, _staticMeshBounds) || _meshBounds.Length != totalMeshCount)
+            {
+                _meshBounds = new Vector4[totalMeshCount];
+                Array.Copy(_staticMeshBounds, _meshBounds, _staticMeshBounds.Length);
+            }
+
+            Vector4[] dynBounds = ScenePicker.ComputeMeshBounds(dynamicMeshes);
+            Array.Copy(dynBounds, 0, _meshBounds, _staticMeshBounds.Length, dynBounds.Length);
+        }
 
         _activeShadowSpriteIndices.Clear();
         for (int i = 0; i < _staticShadowSpriteIndices.Length; i++)
@@ -1263,7 +1392,14 @@ public sealed class LotRenderer : IDisposable
         }
 
         int totalSprites = _staticSpriteCount + frame.Sprites.Count;
-        List<OrderedDrawEntry> dynamicEntries = new(frame.Sprites.Count + dynamicMeshes.Count);
+        List<OrderedDrawEntry> dynamicEntries = _dynamicEntriesScratch;
+        dynamicEntries.Clear();
+        int neededEntries = frame.Sprites.Count + dynamicMeshes.Count;
+        if (dynamicEntries.Capacity < neededEntries)
+        {
+            dynamicEntries.Capacity = neededEntries;
+        }
+
         for (int offset = 0; offset < frame.Sprites.Count; offset++)
         {
             LotScene.Sprite sprite = frame.Sprites[offset];
@@ -1294,9 +1430,16 @@ public sealed class LotRenderer : IDisposable
                 SceneDrawItem.Mesh(meshIndex)));
         }
 
-        dynamicEntries.Sort((a, b) => OrderedDrawEntry.Compare(in a, in b, totalSprites));
+        CollectionsMarshal.AsSpan(dynamicEntries).Sort(new OrderedDrawEntryComparer(totalSprites));
 
-        List<SceneDrawItem> merged = new(_staticDrawEntries.Count + dynamicEntries.Count);
+        List<SceneDrawItem> merged = _drawItems;
+        merged.Clear();
+        int mergedCount = _staticDrawEntries.Count + dynamicEntries.Count;
+        if (merged.Capacity < mergedCount)
+        {
+            merged.Capacity = mergedCount;
+        }
+
         int s = 0;
         int d = 0;
         while (s < _staticDrawEntries.Count && d < dynamicEntries.Count)
@@ -1328,7 +1471,6 @@ public sealed class LotRenderer : IDisposable
         }
 
         Scene = updated;
-        _drawItems = merged;
         _picker = null;
         _pickerDirty = true;
         _cachedObjectHit = null;
@@ -1456,11 +1598,11 @@ public sealed class LotRenderer : IDisposable
         return result;
     }
 
-    private List<MeshSlice?> MakeCombinedDynamicMeshes(IReadOnlyList<LotScene.Mesh> meshes)
+    private void MakeCombinedDynamicMeshes(IReadOnlyList<LotScene.Mesh> meshes, List<MeshSlice?> slices)
     {
         if (meshes.Count == 0)
         {
-            return [];
+            return;
         }
 
         int totalVertices = 0;
@@ -1471,7 +1613,11 @@ public sealed class LotRenderer : IDisposable
 
         if (totalVertices == 0)
         {
-            return Enumerable.Repeat<MeshSlice?>(null, meshes.Count).ToList();
+            for (int i = 0; i < meshes.Count; i++)
+            {
+                slices.Add(null);
+            }
+            return;
         }
 
         if (_dynamicVertexScratch.Length < totalVertices)
@@ -1479,7 +1625,11 @@ public sealed class LotRenderer : IDisposable
             _dynamicVertexScratch = new AvatarVertex[Math.Max(totalVertices * 2, 4096)];
         }
 
-        var slices = new List<MeshSlice?>(meshes.Count);
+        if (slices.Capacity < meshes.Count)
+        {
+            slices.Capacity = meshes.Count;
+        }
+
         int writePos = 0;
         int slot = _dynamicMeshRingSlot;
         _dynamicMeshRingSlot = (_dynamicMeshRingSlot + 1) % _dynamicMeshRing.Length;
@@ -1518,7 +1668,6 @@ public sealed class LotRenderer : IDisposable
         }
 
         GPU.UploadIntoBuffer<AvatarVertex>(ring, _dynamicVertexScratch.AsSpan(0, totalVertices));
-        return slices;
     }
 
     private List<MeshSlice?> MakeCombinedMeshes(IReadOnlyList<LotScene.Mesh> meshes, IReadOnlyList<int>? order = null)
@@ -1594,7 +1743,7 @@ public sealed class LotRenderer : IDisposable
             return null;
         }
 
-        float[]? groundDepth = depths ?? TerrainDepth(scene);
+        float[]? groundDepth = depths ?? (vertices is null ? TerrainDepth(scene) : null);
         var buffer = new TerrainVertex[source.Count];
         for (int index = 0; index < source.Count; index++)
         {
@@ -1603,7 +1752,7 @@ public sealed class LotRenderer : IDisposable
             Vector4 dark = vertex.DR is byte dr
                 ? new Vector4(Unit(dr), Unit(vertex.DG ?? 0), Unit(vertex.DB ?? 0), 1f)
                 : light * new Vector4(0.2f, 0.45f, 0.15f, 1f);
-            float depth = groundDepth is not null ? groundDepth[index] : 1f;
+            float depth = groundDepth is not null && index < groundDepth.Length ? groundDepth[index] : 1f;
             buffer[index] = new TerrainVertex
             {
                 Position = new Vector2(vertex.X, vertex.Y),
@@ -1687,7 +1836,7 @@ public sealed class LotRenderer : IDisposable
         _visualZoomFactor = next;
         Vector2 rescaled = SimsSDL.Core.SceneViewport.RescaledPan(_pan, prev, next);
         _pan = Scene is not null
-            ? SimsSDL.Core.SceneViewport.ClampedPan(rescaled, Scene, MathF.Max(UIScale, 0.01f) * next)
+            ? SimsSDL.Core.SceneViewport.ClampedPan(rescaled, Scene, MathF.Max(UIScale, 0.01f) * next, _neighborhoodPanTileBounds)
             : rescaled;
     }
 
@@ -1727,7 +1876,8 @@ public sealed class LotRenderer : IDisposable
             _visualZoomFactor,
             UIScale,
             _pan,
-            snapOriginToPixel: !IsZoomInterpolating);
+            snapOriginToPixel: !IsZoomInterpolating,
+            panTileBounds: _neighborhoodPanTileBounds);
     }
 
     public bool ContainsObject(int id) =>
@@ -2282,7 +2432,7 @@ public sealed class LotRenderer : IDisposable
 
         bool previewing = PreviewPlacement is { } pp && pp.Rects.Keys.Any(k => _previews.ContainsKey(k));
         int split = previewing ? Math.Min(Overlay.Count, Math.Max(0, PreviewPlacement!.Value.Index + 1)) : Overlay.Count;
-        bool needsAmbient = DrawsLot && AmbientEnabled && Environment is not null && Viewport(canvas) is not null;
+        bool needsAmbient = DrawsLot && !HasAdjacentNeighborhood && AmbientEnabled && Environment is not null && Viewport(canvas) is not null;
         bool needsCensor = DrawsLot && Scene?.CensorRects is { Count: > 0 } && Viewport(canvas) is not null;
         bool useMsaa = msaaColor is not null
             && msaaDepth is not null
@@ -2292,7 +2442,8 @@ public sealed class LotRenderer : IDisposable
             && msaaDepth.Height == depth.Height
             && msaaColor.SampleCount > SDL_GPU_SAMPLECOUNT_1
             && msaaColor.SampleCount == msaaDepth.SampleCount
-            && !needsAmbient;
+            && !needsAmbient
+            && !HasAdjacentNeighborhood;
         int passSamples = useMsaa ? msaaColor!.SampleCount : SDL_GPU_SAMPLECOUNT_1;
         int activePassSamples = passSamples;
         GPUTexture targetColor = useMsaa ? msaaColor! : color;
@@ -2311,7 +2462,22 @@ public sealed class LotRenderer : IDisposable
         {
             if (DrawsLot)
             {
-                EncodeLot(pass, command, canvas, passSamples, deferTranslucentAvatars: needsAmbient);
+                if (HasAdjacentNeighborhood)
+                {
+                    EncodeConnectedNeighborhood(
+                        command,
+                        canvas,
+                        targetColor,
+                        targetDepth,
+                        initialResolve,
+                        passSamples,
+                        deferTranslucentAvatars: needsAmbient,
+                        ref pass);
+                }
+                else
+                {
+                    EncodeLot(pass, command, canvas, passSamples, deferTranslucentAvatars: needsAmbient);
+                }
             }
 
             if (needsAmbient && Viewport(canvas) is { } viewport)
@@ -2321,9 +2487,8 @@ public sealed class LotRenderer : IDisposable
 
                 GPUTexture ground = GroundTexture(color.Width, color.Height);
                 EncodeGroundDepth(command, ground, viewport, canvas);
-                (GPUTexture Texture, Vector4? Frame) heightMap = EncodeHeightMap(command, depth, viewport, canvas);
-                (GPUTexture Texture, Vector4? Frame) footMap = EncodeHeightMap(command, depth, viewport, canvas, feet: true);
-                EncodeAmbient(command, color, depth, ground, heightMap, footMap.Texture, viewport, canvas);
+                var (heightMap, footMap, worldDepth, worldShadowViewport) = EnsureWorldShadowMaps(command, depth, viewport, canvas);
+                EncodeAmbient(command, color, depth, ground, heightMap, footMap.Texture, worldDepth, worldShadowViewport, viewport, canvas);
                 if (HasTranslucentAvatars())
                 {
                     pass = BeginPass(command, color, depth, clearColor: false, clearDepth: false);
@@ -2771,6 +2936,93 @@ public sealed class LotRenderer : IDisposable
         return new Vector2(first.X - 32f * (corner.X - corner.Y), first.Y - 16f * (corner.X + corner.Y));
     }
 
+    private unsafe ((GPUTexture Texture, Vector4? Frame) HeightMap, (GPUTexture Texture, Vector4? Frame) FootMap, GPUTexture WorldDepth, SimsSDL.Core.SceneViewport? WorldViewport) EnsureWorldShadowMaps(
+        nint command,
+        GPUTexture screenDepth,
+        SimsSDL.Core.SceneViewport screenViewport,
+        Vector2 screenCanvas)
+    {
+        if (Scene is not { } scene || LotFrame(scene) is not { } frame ||
+            scene.LotWidth is not int width || scene.LotHeight is not int height)
+        {
+            var hm = EncodeHeightMap(command, screenDepth, screenViewport, screenCanvas);
+            var fm = EncodeHeightMap(command, screenDepth, screenViewport, screenCanvas, feet: true);
+            return (hm, fm, screenDepth, null);
+        }
+
+        const int shadowW = 2048;
+        const int shadowH = 1280;
+        var shadowCanvas = new Vector2(shadowW, shadowH);
+        bool swapped = (scene.CameraOrientation ?? 0) % 2 != 0;
+        float w = swapped ? height : width;
+        float h = swapped ? width : height;
+        float minX = frame.X - 32f * h - 128f;
+        float spanX = 32f * (w + h) + 256f;
+        float minY = frame.Y - 400f;
+        float spanY = 16f * (w + h) + 528f;
+        float shadowScale = MathF.Min(shadowW / spanX, shadowH / spanY);
+        var shadowViewport = new SimsSDL.Core.SceneViewport(shadowCanvas, shadowScale, new Vector2(-minX * shadowScale, -minY * shadowScale));
+
+        string key = $"{scene.House}:{_sceneRevision}:{scene.CameraOrientation}:{ViewLevel}:{RoofsVisible}:{_worldShadowAnimSeq}:{Ambient.HeightTexels:0.##}";
+        if (_worldShadowDepth is not null
+            && _heightMapTexture is not null
+            && _footMapTexture is not null
+            && ReferenceEquals(_worldShadowScene, scene)
+            && string.Equals(_worldShadowKey, key, StringComparison.Ordinal))
+        {
+            return ((_heightMapTexture, _worldHeightFrame), (_footMapTexture, _worldFootFrame), _worldShadowDepth, _worldShadowViewport);
+        }
+
+        if (_worldShadowColor is null || _worldShadowColor.Width != shadowW || _worldShadowColor.Height != shadowH)
+        {
+            Retire(_worldShadowColor);
+            _worldShadowColor = GPU.MakeTexture(shadowW, shadowH, GPUContext.ColorFormat, SDL_GPU_TEXTUREUSAGE_COLOR_TARGET);
+        }
+        if (_worldShadowDepth is null || _worldShadowDepth.Width != shadowW || _worldShadowDepth.Height != shadowH)
+        {
+            Retire(_worldShadowDepth);
+            _worldShadowDepth = GPU.MakeTexture(shadowW, shadowH, GPUContext.DepthFormat, SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER);
+        }
+
+        var colorTarget = new SDL_GPUColorTargetInfo
+        {
+            texture = _worldShadowColor.Handle,
+            load_op = SDL_GPU_LOADOP_DONT_CARE,
+            store_op = SDL_GPU_STOREOP_DONT_CARE,
+        };
+        var depthTarget = new SDL_GPUDepthStencilTargetInfo
+        {
+            texture = _worldShadowDepth.Handle,
+            clear_depth = 1f,
+            load_op = SDL_GPU_LOADOP_CLEAR,
+            store_op = SDL_GPU_STOREOP_STORE,
+            stencil_load_op = SDL_GPU_LOADOP_DONT_CARE,
+            stencil_store_op = SDL_GPU_STOREOP_DONT_CARE,
+        };
+        nint pass = SDL_BeginGPURenderPass(command, &colorTarget, 1, &depthTarget);
+        if (pass == 0)
+        {
+            throw new SDLError("SDL_BeginGPURenderPass");
+        }
+        try
+        {
+            EncodeLot(pass, command, shadowCanvas, SDL_GPU_SAMPLECOUNT_1, deferTranslucentAvatars: false, viewportOverride: shadowViewport);
+        }
+        finally
+        {
+            SDL_EndGPURenderPass(pass);
+        }
+
+        var hmWorld = EncodeHeightMap(command, _worldShadowDepth, shadowViewport, shadowCanvas);
+        var fmWorld = EncodeHeightMap(command, _worldShadowDepth, shadowViewport, shadowCanvas, feet: true);
+        _worldShadowScene = scene;
+        _worldShadowKey = key;
+        _worldHeightFrame = hmWorld.Frame;
+        _worldFootFrame = fmWorld.Frame;
+        _worldShadowViewport = shadowViewport;
+        return (hmWorld, fmWorld, _worldShadowDepth, shadowViewport);
+    }
+
     private unsafe (GPUTexture Texture, Vector4? Frame) EncodeHeightMap(
         nint command,
         GPUTexture depth,
@@ -2989,14 +3241,14 @@ public sealed class LotRenderer : IDisposable
             foreach (int index in sims)
             {
                 LotScene.Mesh mesh = Scene.Meshes![index];
-                if (_meshSlices[index] is not { } slice)
+                if (_meshSlices[index] is not { } slice || slice.Buffer.Handle == nint.Zero)
                 {
                     continue;
                 }
 
                 var binding = new SDL_GPUTextureSamplerBinding
                 {
-                    texture = _sceneTextures[mesh.TextureFor(Zoom)].Handle,
+                    texture = _sceneTextures[mesh.TextureFor(EffectiveVisualZoom)].Handle,
                     sampler = GPU.Sampler,
                 };
                 SDL_BindGPUFragmentSamplers(pass, 0, &binding, 1);
@@ -3050,7 +3302,7 @@ public sealed class LotRenderer : IDisposable
     /// depth writes during the primary lot pass.</summary>
     private unsafe void EncodeGroundDepth(nint command, GPUTexture depth, SimsSDL.Core.SceneViewport viewport, Vector2 canvas)
     {
-        if (_terrainBuffer is null)
+        if (_terrainBuffer is null || _terrainBuffer.Handle == nint.Zero)
         {
             return;
         }
@@ -3131,7 +3383,9 @@ public sealed class LotRenderer : IDisposable
             float scale = viewport.Scale;
             Vector2 origin = viewport.Origin;
             LotZoom zoom = EffectiveVisualZoom;
-            bool settledIntegerUi = UIScale == MathF.Round(UIScale, MidpointRounding.AwayFromZero) && !IsZoomInterpolating;
+            float artTexelScale = scale / zoom.Factor();
+            bool settledIntegerUi = MathF.Abs(artTexelScale - MathF.Round(artTexelScale, MidpointRounding.AwayFromZero)) <= 1e-4f
+                && !IsZoomInterpolating;
             nint artSampler = settledIntegerUi ? GPU.PixelSampler : GPU.Sampler;
             nint spriteSampler = AntiAliasedSprites ? GPU.Sampler : artSampler;
             bool spriteMinified = scale < zoom.Factor() * MathF.Max(UIScale, 0.01f) - 0.001f;
@@ -3215,6 +3469,8 @@ public sealed class LotRenderer : IDisposable
         GPUTexture ground,
         (GPUTexture Texture, Vector4? Frame) heightMap,
         GPUTexture footMap,
+        GPUTexture worldDepth,
+        SimsSDL.Core.SceneViewport? worldShadowViewport,
         SimsSDL.Core.SceneViewport viewport,
         Vector2 canvas)
     {
@@ -3266,7 +3522,18 @@ public sealed class LotRenderer : IDisposable
             }
         }
 
-        float seconds = Ambient.CloudTime ?? (SDL_GetTicks() % 3_600_000UL) / 1000f;
+        ulong nowTicks = SDL_GetTicks();
+        double dt = _ambientTimeTicks is ulong prevTicks && nowTicks >= prevTicks
+            ? Math.Min((nowTicks - prevTicks) / 1000.0, 0.25)
+            : 0.0;
+        _ambientTimeTicks = nowTicks;
+        double speedScale = AmbientPaused || Speed <= 0 ? 0.0 : Math.Min(Speed, 10);
+        double simElapsed = Ambient.CloudTime is null ? dt * speedScale : 0.0;
+        if (Ambient.CloudTime is null)
+        {
+            _ambientTimeSeconds = (_ambientTimeSeconds + simElapsed) % 3600.0;
+        }
+        float seconds = Ambient.CloudTime ?? (float)_ambientTimeSeconds;
         Vector2 drift = Ambient.Wind * seconds;
         float orientation = ((Scene?.CameraOrientation ?? 0) % 4 + 4) % 4;
         var lotSize = new Vector2(Scene?.LotWidth ?? 0, Scene?.LotHeight ?? 0);
@@ -3285,10 +3552,7 @@ public sealed class LotRenderer : IDisposable
         List<Vector4> prints = [];
         if (displaced)
         {
-            ulong ticks = SDL_GetTicks();
-            float elapsed = Ambient.CloudTime is null ? (ticks - (_trailTicks ?? ticks)) / 1000f : 0f;
-            _trailTicks = ticks;
-            _trailFill += (Environment?.Effect.TrailRecovery ?? 0f) * MathF.Min(elapsed, 1f);
+            _trailFill += (Environment?.Effect.TrailRecovery ?? 0f) * MathF.Min((float)simElapsed, 1f);
             string key = $"{Scene?.House ?? 0}-{lotSize.X}x{lotSize.Y}";
             if (!string.Equals(_trailKey, key, StringComparison.Ordinal))
             {
@@ -3317,7 +3581,7 @@ public sealed class LotRenderer : IDisposable
             _trailFill = 0f;
         }
 
-        const int uniformCount = 15 + MaxLamps + MaxPrints;
+        const int uniformCount = 16 + MaxLamps + MaxPrints;
         Vector4* uniforms = stackalloc Vector4[uniformCount];
         uniforms[0] = new Vector4(viewport.Origin.X, viewport.Origin.Y, viewport.Scale, Ambient.GroundOffset);
         uniforms[1] = new Vector4(Ambient.Radius, Ambient.Occlusion, shadowStrength, Ambient.Thickness);
@@ -3347,6 +3611,9 @@ public sealed class LotRenderer : IDisposable
         offset += MaxPrints;
         uniforms[offset] = new Vector4(Ambient.GrassQuality, Ambient.SpringBloom, Ambient.Snowfall, Ambient.Fireflies);
         uniforms[offset + 1] = new Vector4(Ambient.Hail, Ambient.Frost, Ambient.Thunder, 0f);
+        uniforms[offset + 2] = worldShadowViewport is { } wsv
+            ? new Vector4(wsv.Origin.X, wsv.Origin.Y, wsv.Scale, 1f)
+            : Vector4.Zero;
 
         var defaultScissor = new SDL_Rect { x = 0, y = 0, w = (int)canvas.X, h = (int)canvas.Y };
         GPUTexture term = AmbientDebug > 0 ? color : AmbientTexture(color.Width, color.Height);
@@ -3414,7 +3681,7 @@ public sealed class LotRenderer : IDisposable
             GPUContext.Program.Ambient,
             term,
             AmbientDebug > 0,
-            [depth, ground, heightMap.Texture, _indoorMask ?? EmptyIndoorMask(), footMap, lift, _overheadMap ?? EmptyOverheadMap()]);
+            [depth, ground, heightMap.Texture, _indoorMask ?? EmptyIndoorMask(), footMap, lift, _overheadMap ?? EmptyOverheadMap(), worldDepth]);
 
         if (AmbientDebug != 0)
         {
@@ -3597,7 +3864,7 @@ public sealed class LotRenderer : IDisposable
 
         for (int index = 0; index < preview.Buffers.Count; index++)
         {
-            if (preview.Buffers[index] is not { } buffer)
+            if (preview.Buffers[index] is not { } buffer || buffer.Handle == nint.Zero || preview.Textures[index].Handle == nint.Zero)
             {
                 continue;
             }
@@ -3801,7 +4068,15 @@ public sealed class LotRenderer : IDisposable
                 int index = meshIndices[k];
                 LotScene.Mesh mesh = scene.Meshes[index];
                 MeshSlice slice = _meshSlices[index]!.Value;
+                if (slice.Buffer.Handle == nint.Zero)
+                {
+                    continue;
+                }
                 GPUTexture tex = _sceneTextures[mesh.TextureFor(zoom)];
+                if (tex.Handle == nint.Zero)
+                {
+                    continue;
+                }
                 if (tex.Handle != currentTexHandle)
                 {
                     currentTexHandle = tex.Handle;
@@ -3856,21 +4131,28 @@ public sealed class LotRenderer : IDisposable
         Vector2 canvas,
         int sampleCount = SDL_GPU_SAMPLECOUNT_1,
         SDL_Rect? clipScissor = null,
-        bool deferTranslucentAvatars = false)
+        bool deferTranslucentAvatars = false,
+        Vector2? originOverride = null,
+        float? scaleOverride = null,
+        LotZoom? zoomOverride = null,
+        bool skipTerrainAndRoads = false,
+        SimsSDL.Core.SceneViewport? viewportOverride = null)
     {
-        if (Scene is not { } scene || Viewport(canvas) is not { } viewport)
+        if (Scene is not { } scene || (viewportOverride ?? Viewport(canvas)) is not { } viewport)
         {
             return;
         }
 
-        float scale = viewport.Scale;
-        Vector2 origin = viewport.Origin;
+        float scale = scaleOverride ?? viewport.Scale;
+        Vector2 origin = originOverride ?? viewport.Origin;
 
         // Anisotropic filtering when minified; analytical subpixel filters at 1:1+.
-        bool settledIntegerUi = UIScale == MathF.Round(UIScale, MidpointRounding.AwayFromZero) && !IsZoomInterpolating;
+        LotZoom zoom = zoomOverride ?? EffectiveVisualZoom;
+        float artTexelScale = scale / zoom.Factor();
+        bool settledIntegerUi = MathF.Abs(artTexelScale - MathF.Round(artTexelScale, MidpointRounding.AwayFromZero)) <= 1e-4f
+            && (scaleOverride is not null || !IsZoomInterpolating);
         nint artSampler = settledIntegerUi ? GPU.PixelSampler : GPU.Sampler;
         nint spriteSampler = AntiAliasedSprites ? GPU.Sampler : artSampler;
-        LotZoom zoom = EffectiveVisualZoom;
         bool spriteMinified = scale < zoom.Factor() * MathF.Max(UIScale, 0.01f) - 0.001f;
         nint colorSpriteSampler = AntiAliasedSprites && spriteMinified ? GPU.AnisoSampler : spriteSampler;
         SimsSDL.Core.SceneLighting? lighting = ActiveLighting(scene);
@@ -3920,27 +4202,38 @@ public sealed class LotRenderer : IDisposable
             currentDualSamplers = null;
         }
 
-        void BindTexture(GPUTexture texture, nint sampler)
+        bool BindTexture(GPUTexture texture, nint sampler)
         {
             nint th = texture.Handle;
+            if (th == nint.Zero)
+            {
+                return false;
+            }
+
             if (currentSingleSampler is { } cur && cur.Tex == th && cur.Sampler == sampler)
             {
-                return;
+                return true;
             }
 
             var binding = new SDL_GPUTextureSamplerBinding { texture = th, sampler = sampler };
             SDL_BindGPUFragmentSamplers(pass, 0, &binding, 1);
             currentSingleSampler = (th, sampler);
             currentDualSamplers = null;
+            return true;
         }
 
-        void BindTextures(GPUTexture first, nint firstSampler, GPUTexture second, nint secondSampler)
+        bool BindTextures(GPUTexture first, nint firstSampler, GPUTexture second, nint secondSampler)
         {
             nint t0 = first.Handle;
             nint t1 = second.Handle;
+            if (t0 == nint.Zero || t1 == nint.Zero)
+            {
+                return false;
+            }
+
             if (currentDualSamplers is { } cur && cur.T0 == t0 && cur.S0 == firstSampler && cur.T1 == t1 && cur.S1 == secondSampler)
             {
-                return;
+                return true;
             }
 
             SDL_GPUTextureSamplerBinding* bindings = stackalloc SDL_GPUTextureSamplerBinding[2];
@@ -3949,18 +4242,25 @@ public sealed class LotRenderer : IDisposable
             SDL_BindGPUFragmentSamplers(pass, 0, bindings, 2);
             currentDualSamplers = (t0, firstSampler, t1, secondSampler);
             currentSingleSampler = null;
+            return true;
         }
 
-        void BindVertices(GPUBuffer buffer)
+        bool BindVertices(GPUBuffer buffer)
         {
-            if (currentVertexBuffer == buffer.Handle)
+            nint handle = buffer.Handle;
+            if (handle == nint.Zero)
             {
-                return;
+                return false;
             }
 
-            currentVertexBuffer = buffer.Handle;
-            nint handle = buffer.Handle;
+            if (currentVertexBuffer == handle)
+            {
+                return true;
+            }
+
+            currentVertexBuffer = handle;
             SDL_BindGPUVertexStorageBuffers(pass, 0, &handle, 1);
+            return true;
         }
 
         void Push(in Quad quad)
@@ -3969,17 +4269,19 @@ public sealed class LotRenderer : IDisposable
             SDL_PushGPUVertexUniformData(command, 0, (nint)(&copy), (uint)sizeof(Quad));
         }
 
-        if (_terrainBuffer is not null)
+        if (!skipTerrainAndRoads && _terrainBuffer is not null)
         {
             Bind(GPUContext.Program.Terrain, GPUContext.DepthMode.Flat);
-            BindVertices(_terrainBuffer);
-            var transform = new Quad(new Vector4(origin.X, origin.Y, scale, scale), canvas)
+            if (BindVertices(_terrainBuffer))
             {
-                Tint = lighting?.Outside.Multiplier ?? Vector4.One,
-                UvRect = new Vector4(TerrainDetail, (float)zoom, 0f, 0f),
-            };
-            Push(in transform);
-            SDL_DrawGPUPrimitives(pass, (uint)_terrainBuffer.Count, 1, 0, 0);
+                var transform = new Quad(new Vector4(origin.X, origin.Y, scale, scale), canvas)
+                {
+                    Tint = lighting?.Outside.Multiplier ?? Vector4.One,
+                    UvRect = new Vector4(TerrainDetail, (float)zoom, 0f, 0f),
+                };
+                Push(in transform);
+                SDL_DrawGPUPrimitives(pass, (uint)_terrainBuffer.Count, 1, 0, 0);
+            }
         }
 
         void DrawFloorShadow(LotScene.Sprite sprite)
@@ -4000,7 +4302,10 @@ public sealed class LotRenderer : IDisposable
             }
 
             Bind(GPUContext.Program.Sprite, GPUContext.DepthMode.Flat);
-            BindTexture(_sceneTextures[shadow.Texture], colorSpriteSampler);
+            if (!BindTexture(_sceneTextures[shadow.Texture], colorSpriteSampler))
+            {
+                return;
+            }
             var shadowQuad = new Quad(
                 new Vector4(origin.X + shadowRect.X * scale, origin.Y + shadowRect.Y * scale, shadowRect.Z * scale, shadowRect.W * scale),
                 canvas)
@@ -4078,7 +4383,10 @@ public sealed class LotRenderer : IDisposable
             {
                 Bind(GPUContext.Program.SpriteDepth, passMode == SpritePassMode.EdgeFringe ? GPUContext.DepthMode.MeshEdge : GPUContext.DepthMode.Mesh);
                 GPUTexture depthTex = useWallPaint ? _wallPaintTextures[dt] : _sceneTextures[dt];
-                BindTextures(colorTex, colorSpriteSampler, depthTex, GPU.PixelSampler);
+                if (!BindTextures(colorTex, colorSpriteSampler, depthTex, GPU.PixelSampler))
+                {
+                    return;
+                }
                 float depthNear = sprite.DepthNear ?? 0f;
                 float depthFar = sprite.DepthFar ?? 0f;
                 quad.DepthInterval = passMode switch
@@ -4097,7 +4405,10 @@ public sealed class LotRenderer : IDisposable
             else
             {
                 Bind(GPUContext.Program.Sprite, GPUContext.DepthMode.Flat);
-                BindTexture(colorTex, colorSpriteSampler);
+                if (!BindTexture(colorTex, colorSpriteSampler))
+                {
+                    return;
+                }
                 quad.DepthInterval = new Vector4(0f, 0f, 8.0f / 31.0f, AntiAliasedSprites ? 1f : 0f);
             }
 
@@ -4119,8 +4430,10 @@ public sealed class LotRenderer : IDisposable
 
             drewFloorBrush = true;
             Bind(GPUContext.Program.Surface, GPUContext.DepthMode.Flat);
-            BindTexture(_floorBrushTexture, artSampler);
-            BindVertices(_floorBrushBuffer);
+            if (!BindTexture(_floorBrushTexture, artSampler) || !BindVertices(_floorBrushBuffer))
+            {
+                return;
+            }
             var transform = new Quad(new Vector4(origin.X, origin.Y, scale, scale), canvas)
             {
                 Tint = Vector4.One,
@@ -4189,7 +4502,10 @@ public sealed class LotRenderer : IDisposable
                         }
 
                         Bind(GPUContext.Program.Sprite, GPUContext.DepthMode.Flat);
-                        BindTexture(_sceneTextures[shadow.Texture], colorSpriteSampler);
+                        if (!BindTexture(_sceneTextures[shadow.Texture], colorSpriteSampler))
+                        {
+                            continue;
+                        }
                         var shadowQuad = new Quad(
                             new Vector4(origin.X + shadowRect.X * scale, origin.Y + shadowRect.Y * scale, shadowRect.Z * scale, shadowRect.W * scale),
                             canvas)
@@ -4212,17 +4528,21 @@ public sealed class LotRenderer : IDisposable
 
                 pendingMesh = null;
                 Bind(batch.Program, batch.Depth);
-                BindTexture(batch.Texture, batch.Sampler);
-                BindVertices(batch.Buffer);
+                if (!BindTexture(batch.Texture, batch.Sampler) || !BindVertices(batch.Buffer))
+                {
+                    return;
+                }
                 var transform = new Quad(new Vector4(origin.X, origin.Y, scale, scale), canvas)
                 {
                     Tint = batch.Tint,
                     DepthInterval = new Vector4(BitConverter.UInt32BitsToSingle(batch.FirstVertex), 0f, 0f, 0f),
                 };
-                transform.UvRect = new Vector4(batch.UVRectX, transform.UvRect.Y, transform.UvRect.Z, transform.UvRect.W);
+                transform.UvRect = new Vector4(batch.UVRectX, batch.SunDir.X, batch.SunDir.Y, batch.SunDir.Z);
                 Push(in transform);
                 SDL_DrawGPUPrimitives(pass, batch.VertexCount, 1, 0, 0);
             }
+
+            Vector3 roofSunDir = ResolveRoofSunDirection(AmbientEnabled && Environment is not null, Ambient.Sun);
 
             bool hasDepthSprites = false;
             for (int i = sliceStart; i < sliceEnd; i++)
@@ -4264,6 +4584,10 @@ public sealed class LotRenderer : IDisposable
                     }
 
                     LotScene.Mesh mesh = scene.Meshes[index];
+                    if (skipTerrainAndRoads && mesh.Floor is { Pattern: 9 or 10 or 11 or 12 } && (mesh.Level ?? 1) == 1)
+                    {
+                        continue;
+                    }
                     if (IsTranslucentAvatarMesh(mesh))
                     {
                         continue;
@@ -4285,7 +4609,10 @@ public sealed class LotRenderer : IDisposable
                     {
                         tint *= new Vector4(meshTint[0], meshTint[1], meshTint[2], meshTint[3]);
                     }
-                    float uvX = (!unlit && mesh.Roof is null && CharacterDetail == 0) ? 1f : 0f;
+                    float uvX = !unlit && mesh.Roof is not null
+                        ? 2f
+                        : (!unlit && mesh.Roof is null && CharacterDetail == 0) ? 1f : 0f;
+                    Vector3 sunDir = !unlit && mesh.Roof is not null ? roofSunDir : Vector3.Zero;
 
                     if (pendingMesh is { } existing &&
                         existing.Program == prog &&
@@ -4295,6 +4622,7 @@ public sealed class LotRenderer : IDisposable
                         existing.Buffer.Handle == slice.Buffer.Handle &&
                         existing.Tint == tint &&
                         existing.UVRectX == uvX &&
+                        existing.SunDir == sunDir &&
                         existing.FirstVertex + existing.VertexCount == slice.FirstVertex)
                     {
                         existing.VertexCount += slice.VertexCount;
@@ -4316,6 +4644,7 @@ public sealed class LotRenderer : IDisposable
                             Buffer = slice.Buffer,
                             Tint = tint,
                             UVRectX = uvX,
+                            SunDir = sunDir,
                             FirstVertex = slice.FirstVertex,
                             VertexCount = slice.VertexCount,
                         };
@@ -4357,9 +4686,11 @@ public sealed class LotRenderer : IDisposable
         if (ShowsPlacement && _placementBuffer is not null)
         {
             Bind(GPUContext.Program.Placement, GPUContext.DepthMode.Flat);
-            BindVertices(_placementBuffer);
-            Push(new Quad(new Vector4(origin.X, origin.Y, scale, scale), canvas));
-            SDL_DrawGPUPrimitives(pass, (uint)_placementBuffer.Count, 1, 0, 0);
+            if (BindVertices(_placementBuffer))
+            {
+                Push(new Quad(new Vector4(origin.X, origin.Y, scale, scale), canvas));
+                SDL_DrawGPUPrimitives(pass, (uint)_placementBuffer.Count, 1, 0, 0);
+            }
         }
 
         void DrawGhost(PlacementPreview.GhostData ghost, IReadOnlyList<GPUTexture> textures, float opacity)
@@ -4374,7 +4705,10 @@ public sealed class LotRenderer : IDisposable
                     rect = new Vector4(sprite.X + image.X, sprite.Y + image.Y, image.Width, image.Height);
                 }
 
-                BindTexture(textures[texture], artSampler);
+                if (!BindTexture(textures[texture], artSampler))
+                {
+                    continue;
+                }
                 var quad = new Quad(
                     new Vector4(origin.X + (ghost.X + rect.X) * scale, origin.Y + (ghost.Y + rect.Y) * scale, rect.Z * scale, rect.W * scale),
                     canvas,

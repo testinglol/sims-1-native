@@ -7,11 +7,34 @@ public sealed class NeighborhoodLotFilter
     public static IReadOnlyList<int> Masks { get; } = [16, 32, 8, 4, 2, 64, 1];
     public static IReadOnlyList<int> Positions { get; } = [225, 275, 325, 375, 425, 475, 525];
 
+    public static IReadOnlyList<int> MasksForMode(int mode) => mode switch
+    {
+        5 => [0x20, 0x08, 0x04, 0x02, 0x40, 0x80, 0x100, 0x200, 0x400],
+        7 => [0x1000, 0x20, 0x08, 0x04, 0x02, 0x40, 0x800],
+        _ => Masks,
+    };
+
+    public static IReadOnlyList<int> PositionsForMode(int mode) => mode switch
+    {
+        5 => [175, 225, 275, 325, 375, 425, 475, 525, 575],
+        _ => Positions,
+    };
+
+    public IReadOnlyList<int> ModeMasks { get; }
+    public IReadOnlyList<int> ModePositions { get; }
     public int AvailableMask { get; }
     public int SelectedMask { get; private set; }
 
     public NeighborhoodLotFilter(IReadOnlyList<int> communityFlags, int savedMask = 2)
+        : this(communityFlags, mode: 4, savedMask)
     {
+    }
+
+    public NeighborhoodLotFilter(IReadOnlyList<int> communityFlags, int mode, int savedMask = 2)
+    {
+        ModeMasks = MasksForMode(mode);
+        ModePositions = PositionsForMode(mode);
+
         int available = 0;
         for (int i = 0; i < communityFlags.Count; i++)
         {
@@ -19,11 +42,27 @@ public sealed class NeighborhoodLotFilter
         }
 
         AvailableMask = available;
-        SelectedMask = Masks.Contains(savedMask) ? savedMask : 16;
+        if (ModeMasks.Contains(savedMask) && (available == 0 || (available & savedMask) != 0))
+        {
+            SelectedMask = savedMask;
+        }
+        else
+        {
+            int firstEnabled = ModeMasks[0];
+            for (int i = 0; i < ModeMasks.Count; i++)
+            {
+                if ((available & ModeMasks[i]) != 0)
+                {
+                    firstEnabled = ModeMasks[i];
+                    break;
+                }
+            }
+            SelectedMask = firstEnabled;
+        }
     }
 
     public bool IsEnabled(int index) =>
-        index >= 0 && index < Masks.Count && (AvailableMask & Masks[index]) != 0;
+        index >= 0 && index < ModeMasks.Count && (AvailableMask & ModeMasks[index]) != 0;
 
     public void Select(int index)
     {
@@ -32,7 +71,7 @@ public sealed class NeighborhoodLotFilter
             return;
         }
 
-        SelectedMask = Masks[index];
+        SelectedMask = ModeMasks[index];
     }
 
     public bool Marks(bool community, int flags) => community && (flags & SelectedMask) != 0;

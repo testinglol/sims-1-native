@@ -1,6 +1,7 @@
 using SimsEngine.Formats;
 using SimsEngine.Simulation;
 using SimsEngine.World;
+using SimsSimulation;
 
 namespace SimsEngine.Tests;
 
@@ -93,5 +94,45 @@ public sealed class WallpaperToolTests
         Assert.Equal(2, filled);
         Assert.Equal(1, walls[10, 10][4]);
         Assert.Equal(1, walls[9, 10][7]);
+    }
+
+    [Theory]
+    [InlineData(0x10, 0, 7, 4)]
+    [InlineData(0x10, 1, 6, 2)]
+    [InlineData(0x10, 2, 6, 2)]
+    [InlineData(0x10, 3, 7, 4)]
+    [InlineData(0x20, 0, 7, 3)]
+    [InlineData(0x20, 1, 7, 3)]
+    [InlineData(0x20, 2, 6, 1)]
+    [InlineData(0x20, 3, 6, 1)]
+    public void DiagonalFacingSlotAndSideMatchesCameraFacingHalfAndWallpaperToolSlot(
+        int sourceDiag, int orientation, int expectedSlot, int expectedSide)
+    {
+        var (slot, side) = SceneExporter.DiagonalFacingSlotAndSide(sourceDiag, orientation);
+        Assert.Equal(expectedSlot, slot);
+        Assert.Equal(expectedSide, side);
+
+        // Verify WallpaperTool.Dot writes to the exact same slot for that (edge, side) pair.
+        var (lot, catalog) = Setup(1);
+        var walls = LotWalls.Read(lot, 1);
+        walls[10, 10][0] = (byte)sourceDiag;
+        var tool = new WallpaperTool(walls, catalog, new Budget(1000));
+        Assert.True(tool.Dot(10, 10, sourceDiag, side, 1, erase: false));
+        Assert.Equal(1, walls[10, 10][slot]);
+        Assert.Equal(0, walls[10, 10][slot == 6 ? 7 : 6]);
+
+        // For orientations where this diagonal is broadside to the camera (cameraDiag == 0x10),
+        // confirm the selected half-tile has the larger camera depth (u + v), i.e. faces the camera.
+        var cameraDiag = orientation % 2 == 0 ? sourceDiag : sourceDiag ^ 0x30;
+        if (cameraDiag == 0x10)
+        {
+            var camera = new LotCamera(orientation, LotWalls.Size, LotWalls.Size);
+            var (slot6X, slot6Y, slot7X, slot7Y) = sourceDiag == 0x10
+                ? (10.25f, 10.25f, 10.75f, 10.75f)
+                : (10.25f, 10.75f, 10.75f, 10.25f);
+            var depth6 = camera.DepthOrder(slot6X, slot6Y);
+            var depth7 = camera.DepthOrder(slot7X, slot7Y);
+            Assert.Equal(depth6 > depth7 ? 6 : 7, slot);
+        }
     }
 }

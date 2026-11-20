@@ -1,0 +1,62 @@
+#pragma clang diagnostic ignored "-Wmissing-prototypes"
+
+#include <metal_stdlib>
+#include <simd/simd.h>
+
+using namespace metal;
+
+struct Quad
+{
+    float4 rect;
+    float4 canvasPadding;
+    float4 uvRect;
+    float4 depthInterval;
+    float4 tint;
+};
+
+struct TerrainVertex
+{
+    float2 position;
+    float2 grass;
+    float4 color;
+    float4 dark;
+};
+
+struct TerrainVertex_1
+{
+    float2 position;
+    float2 grass;
+    float4 color;
+    float4 dark;
+};
+
+struct Vertices
+{
+    TerrainVertex_1 vertices[1];
+};
+
+struct main0_out
+{
+    float4 gl_Position [[position]];
+};
+
+static inline __attribute__((always_inline))
+float4 canvasPosition(thread const float2& pixel, thread const float& z, constant Quad& quad)
+{
+    float2 canvas = quad.canvasPadding.xy;
+    return float4(((pixel.x / canvas.x) * 2.0) - 1.0, 1.0 - ((pixel.y / canvas.y) * 2.0), z, 1.0);
+}
+
+vertex main0_out main0(constant Quad& quad [[buffer(0)]], const device Vertices& _56 [[buffer(1)]], uint gl_VertexIndex [[vertex_id]])
+{
+    main0_out out = {};
+    TerrainVertex vertex0;
+    vertex0.position = _56.vertices[int(gl_VertexIndex)].position;
+    vertex0.grass = _56.vertices[int(gl_VertexIndex)].grass;
+    vertex0.color = _56.vertices[int(gl_VertexIndex)].color;
+    vertex0.dark = _56.vertices[int(gl_VertexIndex)].dark;
+    float2 param = quad.rect.xy + (vertex0.position * quad.rect.zw);
+    float param_1 = vertex0.grass.y;
+    out.gl_Position = canvasPosition(param, param_1, quad);
+    return out;
+}
