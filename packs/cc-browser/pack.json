@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "local.cc-browser",
+  "name": "CC Folder Browser",
+  "version": "1.0.0",
+  "baseGameVersion": "1.90",
+  "defaultEnabled": false,
+  "description": "Adds a Buy Mode Folders tab (F) that groups Custom Content from Downloads/ and UserObjects/ by subfolder.",
+  "dependencies": [],
+  "overrides": [],
+  "plugin": {
+    "assembly": "plugin/LocalCcBrowser.dll",
+    "entryType": "Local.CcBrowser.CcBrowserPlugin",
+    "apiVersion": 5,
+    "stateVersion": 1
+  }
+}

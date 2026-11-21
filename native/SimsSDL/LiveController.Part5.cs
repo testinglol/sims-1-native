@@ -481,6 +481,15 @@ internal sealed partial class LiveController
         }
     }
 
+    public void FileDropped(string path)
+    {
+        if (Ui.ModsOverlay is not null)
+        {
+            Ui.ModsOverlay.HandleDroppedFile(path);
+            PlayUISound("ui_click");
+        }
+    }
+
     private void HandleModsOverlay(OriginalModsOverlay.Action action)
     {
         PlayUISound("ui_click");
@@ -791,6 +800,7 @@ internal sealed partial class LiveController
             _highestReceivedSceneRevision = 0;
             _minimumSceneRevisionToFinishLoading = 1;
             _latestQueuedSceneRevision = 0;
+            Renderer.ResetSceneRevisionTracking();
             ClearPendingViewState();
         }
 
@@ -923,6 +933,7 @@ internal sealed partial class LiveController
         _liveModePaused = Options.Speed == 0;
         _highestReceivedSceneRevision = 0;
         _minimumSceneRevisionToFinishLoading = 1;
+        Renderer.ResetSceneRevisionTracking();
         _awaitingLotSwitchChange = false;
         _switchingLot = false;
         _pendingTravelSelection = null;
@@ -1063,6 +1074,7 @@ internal sealed partial class LiveController
     {
         _lastAudioSceneRevision = -1;
         _lastAudioAnimationSequence = -1;
+        Renderer.ResetSceneRevisionTracking();
         if (_daemonMode)
         {
             if ((_currentHouse ?? 0) > 0)
@@ -3068,6 +3080,7 @@ internal sealed partial class LiveController
     [
         ("rosebud", "Adds 1000 Simoleons to household funds"),
         ("klapaucius", "Adds 1000 Simoleons to household funds"),
+        ("motherlode", "Adds 100000 Simoleons to household funds"),
         ("move_objects on|off", "Allows moving/deleting normally locked objects"),
         ("autonomy <0-100>", "Sets Sim autonomy level"),
         ("set_hour <0-23>", "Sets current hour of day"),
@@ -3075,6 +3088,8 @@ internal sealed partial class LiveController
         ("map_edit on|off", "Allows editing lot perimeter tiles"),
         ("nessie", "Summons Nessie in neighborhood view"),
         ("cars [speed] [count]", "Spawns neighborhood road cars"),
+        ("weather <clear|cloud|rain|thunder|snow|auto>", "Overrides current weather"),
+        ("season <spring|summer|fall|winter> [day]", "Switches the current season"),
         ("help [filter]", "Lists available cheat commands"),
     ];
 

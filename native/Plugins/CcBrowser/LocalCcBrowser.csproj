@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>LocalCcBrowser</AssemblyName>
+    <RootNamespace>Local.CcBrowser</RootNamespace>
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\SimsPluginApi\SimsPluginApi.csproj" Private="false" ExcludeAssets="runtime" />
+  </ItemGroup>
+</Project>

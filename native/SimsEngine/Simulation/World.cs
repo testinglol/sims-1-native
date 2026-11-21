@@ -1392,7 +1392,7 @@ public sealed class StackFrame(short stackObject, short[] parameters, short[] lo
     public object? Tree { get; init; }
     public short TreeId { get; init; } = -1;
     /// <summary>Indicates a debugger breakpoint on the entire tree, stored in bit 15 of the tree ID.</summary>
-    public bool TreeBreakpoint { get; init; }
+    public bool TreeBreakpoint { get; set; }
     /// <summary>The current instruction node index, where 254 and 255 represent terminal false and true
     /// return branches.</summary>
     public int Instruction { get; set; }

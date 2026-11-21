@@ -90,8 +90,15 @@ public static class OriginalUIScalingLayout
     public static double CatalogPopupOriginX(
         double canvasWidth,
         double popupWidth = 559,
-        double catalogLeft = 220)
+        double catalogLeft = 220,
+        double? anchorMidX = null,
+        double rightMargin = 8)
     {
+        if (anchorMidX is { } midX)
+        {
+            return LivePopupOriginX(midX, canvasWidth, popupWidth, catalogLeft, rightMargin);
+        }
+
         double catalogWidth = Math.Max(popupWidth, canvasWidth - catalogLeft);
         double centered = catalogLeft + Math.Floor((catalogWidth - popupWidth) / 2.0);
         return Math.Min(Math.Max(8, centered), Math.Max(8, canvasWidth - popupWidth));
@@ -318,7 +325,7 @@ public static class OriginalBuyLayout
 
     public static readonly IReadOnlyList<CGPoint> Positions =
     [
-        new(242, 58), new(279, 66), new(322, 51), new(369, 54),
+        new(242, 58), new(279, 66), new(322, 58), new(369, 54),
         new(241, 111), new(285, 109), new(322, 105), new(364, 114),
     ];
 
@@ -326,24 +333,44 @@ public static class OriginalBuyLayout
     /// logarithm of each category flag.</summary>
     public static readonly IReadOnlyList<int> EngineCategories = [0, 1, 5, 3, 2, 4, 7, 6];
 
-    public static int Columns(CGSize canvas)
+    public const double PluginCategoryColumnWidth = 42.0;
+    public const double PluginCategoryIconWidth = 34.0;
+    public const double PluginCategoryIconHeight = 32.0;
+
+    public static int ExtraPluginColumns(int pluginViewCount) =>
+        pluginViewCount <= 0 ? 0 : (pluginViewCount + 1) / 2;
+
+    public static double ExtraLeftWidth(int pluginViewCount) =>
+        ExtraPluginColumns(pluginViewCount) * PluginCategoryColumnWidth;
+
+    public static CGPoint PluginCategoryPosition(int index)
+    {
+        int col = Math.Max(0, index) / 2;
+        int row = Math.Max(0, index) % 2;
+        return new CGPoint(403.0 + col * PluginCategoryColumnWidth, row == 0 ? 58.0 : 109.0);
+    }
+
+    public static int Columns(CGSize canvas, int pluginViewCount = 0)
     {
         if (!double.IsFinite(canvas.Width))
             return 1;
-        return Math.Max(1, (int)Math.Min(32.0, Math.Max(0.0, canvas.Width - 427.0) / 45.0));
+        double reserved = 427.0 + ExtraLeftWidth(pluginViewCount);
+        return Math.Max(1, (int)Math.Min(32.0, Math.Max(0.0, canvas.Width - reserved) / 45.0));
     }
 
-    public static int Capacity(CGSize canvas) => Columns(canvas) * 2;
+    public static int Capacity(CGSize canvas, int pluginViewCount = 0) => Columns(canvas, pluginViewCount) * 2;
 
-    public static CGRect Thumbnail(int index, CGSize canvas)
+    public static CGRect Thumbnail(int index, CGSize canvas, int pluginViewCount = 0)
     {
-        int cols = Columns(canvas);
-        return new CGRect(415 + (index % cols) * 45, canvas.Height - 95 + (index / cols) * 45, 45, 45);
+        int cols = Columns(canvas, pluginViewCount);
+        double startX = 415.0 + ExtraLeftWidth(pluginViewCount);
+        return new CGRect(startX + (index % cols) * 45, canvas.Height - 95 + (index / cols) * 45, 45, 45);
     }
 
-    public static CGRect Arrow(bool forward, CGSize size, CGSize canvas)
+    public static CGRect Arrow(bool forward, CGSize size, CGSize canvas, int pluginViewCount = 0)
     {
-        double x = forward ? canvas.Width - 12 + (12 - size.Width) / 2.0 : 395 + (20 - size.Width) / 2.0;
+        double prevBaseX = 395.0 + ExtraLeftWidth(pluginViewCount);
+        double x = forward ? canvas.Width - 12 + (12 - size.Width) / 2.0 : prevBaseX + (20 - size.Width) / 2.0;
         return new CGRect(x, canvas.Height - 50 - size.Height / 2.0, size.Width, size.Height);
     }
 }

@@ -446,6 +446,10 @@ public sealed class PackManifest
     [JsonPropertyName("preview")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Preview { get; set; }
+
+    [JsonPropertyName("defaultEnabled")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? DefaultEnabled { get; set; }
 }
 
 public sealed partial class ContentPack

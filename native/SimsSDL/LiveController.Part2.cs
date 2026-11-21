@@ -257,7 +257,8 @@ internal sealed partial class LiveController
             int budget = Ui.Gameplay.State?.Budget ?? 0;
             if (Ui.BuyMode && Ui.Buy.Page is { } buyPage)
             {
-                int buyCapacity = OriginalBuyLayout.Capacity(LogicalCanvas);
+                int pluginCount = Ui.Buy.PluginViews.Count;
+                int buyCapacity = OriginalBuyLayout.Capacity(LogicalCanvas, pluginCount);
                 int buyCount = Math.Min(buyPage.Items.Count, Math.Max(0, buyCapacity));
                 var buyItems = new List<(string Name, CGRect Rect, string Key, bool Affordable)>(buyCount);
                 for (int i = 0; i < buyCount; i++)
@@ -265,7 +266,7 @@ internal sealed partial class LiveController
                     BuyCatalogPage.Item item = buyPage.Items[i];
                     buyItems.Add((
                         item.Name,
-                        ScriptScreenRect(OriginalBuyLayout.Thumbnail(i, LogicalCanvas)),
+                        ScriptScreenRect(OriginalBuyLayout.Thumbnail(i, LogicalCanvas, pluginCount)),
                         $"g{item.Guid}",
                         item.Price <= budget));
                 }
@@ -1003,14 +1004,6 @@ internal sealed partial class LiveController
             return;
         }
 
-        CGRect seasonReelRect = CycleIndicator.ReelRect.OffsetBy(0, LogicalCanvas.Height - 150);
-        if (!HasBlockingDialog && Ui.ShowsLot && !Ui.BuyMode && !Ui.BuildMode && !Ui.OptionsMode && !Ui.Camera.Visible
-            && Ui.Gameplay.Environment?.Effect.Indicator is not null && seasonReelRect.Contains(Local(point))
-            && TryTogglePluginPanelById("almanac"))
-        {
-            return;
-        }
-
         if (Ui.PieMenu is null && Ui.GameDialog is { Submitting: false, Dialog.Blocking: false } nonBlockingDialog
             && (nonBlockingDialog.Dialog.Buttons.Count > 0 || nonBlockingDialog.Dialog.Kind == 10 || nonBlockingDialog.TutorialCloseBox is not null)
             && nonBlockingDialog.Contains(point, OverlayScale))
@@ -1661,11 +1654,41 @@ internal sealed partial class LiveController
                             break;
                         case OriginalBuyOverlay.Action.Page page:
                             PlayUISound("ui_click");
-                            RequestCatalog(
-                                Ui.Buy.Category,
-                                room: Ui.Buy.RoomMode ? Ui.Buy.Room : null,
-                                subsort: Ui.Buy.FunctionSubSorting ? Ui.Buy.FunctionSubsort : null,
-                                offset: page.Offset);
+                            if (Ui.Buy.PluginViewMode
+                                && Ui.Buy.ActivePluginView is { } activePv
+                                && Ui.Buy.ActivePluginCollectionId is { } activeColId)
+                            {
+                                RequestPluginCatalog(activePv.PackId, activePv.TabId, activeColId, offset: page.Offset);
+                            }
+                            else
+                            {
+                                RequestCatalog(
+                                    Ui.Buy.Category,
+                                    room: Ui.Buy.RoomMode ? Ui.Buy.Room : null,
+                                    subsort: Ui.Buy.FunctionSubSorting ? Ui.Buy.FunctionSubsort : null,
+                                    offset: page.Offset);
+                            }
+                            break;
+                        case OriginalBuyOverlay.Action.PluginTab pluginTab:
+                            PlayUISound("ui_click");
+                            if (Ui.Buy.EnterPluginView(pluginTab.PackId, pluginTab.TabId)
+                                && Ui.Buy.ActivePluginCollectionId is { } firstColId)
+                            {
+                                RequestPluginCatalog(pluginTab.PackId, pluginTab.TabId, firstColId, offset: 0);
+                            }
+                            break;
+                        case OriginalBuyOverlay.Action.PluginCollection pluginCol:
+                            PlayUISound("ui_click");
+                            if (Ui.Buy.SelectPluginCollection(pluginCol.PackId, pluginCol.TabId, pluginCol.CollectionId))
+                            {
+                                RequestPluginCatalog(pluginCol.PackId, pluginCol.TabId, pluginCol.CollectionId, offset: 0);
+                            }
+                            break;
+                        case OriginalBuyOverlay.Action.ExitPluginView:
+                            PlayUISound("ui_click");
+                            Ui.Buy.ExitPluginView();
+                            Ui.Buy.ClearCategory(0);
+                            RequestCatalog(category: 0, offset: 0);
                             break;
                         case OriginalBuyOverlay.Action.Select sel:
                             if (!Ui.Buy.Choose(sel.Guid, Ui.Gameplay.State?.Budget))
@@ -2200,7 +2223,7 @@ internal sealed partial class LiveController
                 Ui.Gameplay.HoverInventory(local, LogicalCanvas);
             }
 
-            (OriginalCatalogPopup.Item Item, OriginalGameplayOverlay.Part Icon)? popup = suppressHover || overDispose
+            (OriginalCatalogPopup.Item Item, OriginalGameplayOverlay.Part Icon, double AnchorMidX)? popup = suppressHover || overDispose
                 ? null
                 : Ui.BuyMode
                     ? Ui.Buy.PopupAt(local, LogicalCanvas)
@@ -2215,12 +2238,12 @@ internal sealed partial class LiveController
         }
     }
 
-    private void ShowCatalogPopup((OriginalCatalogPopup.Item Item, OriginalGameplayOverlay.Part Icon)? item)
+    private void ShowCatalogPopup((OriginalCatalogPopup.Item Item, OriginalGameplayOverlay.Part Icon, double AnchorMidX)? item)
     {
         bool wasVisible = Ui.CatalogPopup.IsVisible;
         if (item is { } popup)
         {
-            Ui.CatalogPopup.Hover(popup.Item, thumbnail: popup.Icon);
+            Ui.CatalogPopup.Hover(popup.Item, thumbnail: popup.Icon, anchorMidX: popup.AnchorMidX);
         }
         else
         {

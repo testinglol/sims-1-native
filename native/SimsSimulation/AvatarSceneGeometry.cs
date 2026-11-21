@@ -603,10 +603,11 @@ internal sealed class AvatarSceneGeometry
                     var blendMatrix = boneMatrices[meshBoneToSkeleton[blendBone]];
                     var blendSource = mesh.Vertices[blendVertexForVertex[vertexIndex]];
                     var blendPosition = Vector3.Transform(blendSource.Position, blendMatrix);
-                    var blendNormal = Vector3.TransformNormal(blendSource.Normal, blendMatrix);
                     var blendWeight = blendWeightForVertex[vertexIndex];
                     position = Vector3.Lerp(position, blendPosition, blendWeight);
-                    normal = Vector3.Lerp(normal, blendNormal, blendWeight);
+                    // Blend vertex normals in original SKN/BMF assets are exported from the wrong
+                    // vertex index and frequently point inward; only blend positions, keeping the
+                    // primary bone's transformed normal.
                 }
                 normal = Vector3.TransformNormal(normal, facingMatrix);
                 var cameraNormal = camera.CameraNormal(new Microsoft.Xna.Framework.Vector3(normal.Z, normal.Y, normal.X));

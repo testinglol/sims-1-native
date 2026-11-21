@@ -25,6 +25,12 @@ public sealed class OriginalBuyOverlay
         }
         public sealed record Page(int Offset) : Action;
         public sealed record Select(uint Guid) : Action;
+        public sealed record PluginTab(string PackId, string TabId) : Action;
+        public sealed record PluginCollection(string PackId, string TabId, string CollectionId) : Action;
+        public sealed record ExitPluginView : Action
+        {
+            public static readonly ExitPluginView Instance = new();
+        }
     }
 
     private readonly SimsBitmapFont _clockFont;
@@ -46,12 +52,26 @@ public sealed class OriginalBuyOverlay
     private readonly OriginalGameplayOverlay.Image _unknown;
     private readonly OriginalGameplayOverlay.Image _previous;
     private readonly OriginalGameplayOverlay.Image _next;
+    private readonly OriginalGameplayOverlay.Image? _pluginCategoryIcon;
 
     private List<OriginalGameplayOverlay.Image?> _icons = [];
     private List<OriginalGameplayOverlay.Image?> _previews = [];
     private readonly Dictionary<string, OriginalGameplayOverlay.Image> _priceTips = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, OriginalGameplayOverlay.Image> _pluginTextCache = new(StringComparer.Ordinal);
+    private readonly Dictionary<uint, OriginalGameplayOverlay.Image> _solidColorCache = new();
     private List<OriginalGameplayOverlay.Part> _footer = [];
     private string _statusKey = string.Empty;
+
+    private IReadOnlyList<BuyCatalogPluginView> _pluginViews = [];
+    private int _pluginScrollOffset;
+    private const int PluginVisibleRows = 4;
+    private const int MaxDisplayedPluginViews = 6;
+    private int DisplayedPluginViewCount => Math.Min(_pluginViews.Count, MaxDisplayedPluginViews);
+
+    public IReadOnlyList<BuyCatalogPluginView> PluginViews => _pluginViews;
+    public BuyCatalogPluginView? ActivePluginView { get; private set; }
+    public string? ActivePluginCollectionId { get; private set; }
+    public bool PluginViewMode => ActivePluginView is not null;
 
     public UIDevice Device { get; }
     public SimsBitmapFont Font { get; }
@@ -172,6 +192,21 @@ public sealed class OriginalBuyOverlay
         _unknown = LoadBitmap("CatalogUnknown.bmp");
         _previous = LoadBitmap("Buttons/ScrollLeftBuy.bmp");
         _next = LoadBitmap("Buttons/ScrollRight.bmp");
+        try
+        {
+            if (SimsVectorUiKit.TryRenderBuyCategoryStrip(
+                "BuyFFolders",
+                (int)OriginalBuyLayout.PluginCategoryIconWidth,
+                (int)OriginalBuyLayout.PluginCategoryIconHeight,
+                scale: 4) is { } folderStrip)
+            {
+                _pluginCategoryIcon = SimsVectorUiKit.ToOverlayImage(folderStrip);
+            }
+        }
+        catch
+        {
+            _pluginCategoryIcon = null;
+        }
     }
 
     private static SimsBitmapFont? TryLoadFont(GameContent content, string path)
@@ -290,12 +325,87 @@ public sealed class OriginalBuyOverlay
         Selection.Cancel();
     }
 
-    public void Update(BuyCatalogPage page, string root, bool buildObjects = false)
+    public void SetPluginViews(IReadOnlyList<BuyCatalogPluginView> views)
+    {
+        _pluginViews = views ?? [];
+        if (ActivePluginView is not null)
+        {
+            var refreshed = _pluginViews.FirstOrDefault(v =>
+                string.Equals(v.PackId, ActivePluginView.PackId, StringComparison.Ordinal)
+                && string.Equals(v.TabId, ActivePluginView.TabId, StringComparison.Ordinal));
+            if (refreshed is null)
+            {
+                ExitPluginView();
+            }
+            else
+            {
+                ActivePluginView = refreshed;
+                if (ActivePluginCollectionId is null
+                    || !refreshed.Collections.Any(c => string.Equals(c.Id, ActivePluginCollectionId, StringComparison.Ordinal)))
+                {
+                    ActivePluginCollectionId = refreshed.Collections.FirstOrDefault()?.Id;
+                }
+                int maxScroll = Math.Max(0, refreshed.Collections.Count - PluginVisibleRows);
+                _pluginScrollOffset = Math.Clamp(_pluginScrollOffset, 0, maxScroll);
+            }
+        }
+    }
+
+    public bool EnterPluginView(string packId, string tabId)
+    {
+        var view = _pluginViews.FirstOrDefault(v =>
+            string.Equals(v.PackId, packId, StringComparison.Ordinal)
+            && string.Equals(v.TabId, tabId, StringComparison.Ordinal));
+        if (view is null)
+            return false;
+
+        ActivePluginView = view;
+        ActivePluginCollectionId = view.Collections.FirstOrDefault()?.Id;
+        _pluginScrollOffset = 0;
+        RoomMode = false;
+        SubSorting = false;
+        FunctionSubSorting = false;
+        Page = null;
+        _icons = [];
+        _previews = [];
+        Selection.Cancel();
+        return true;
+    }
+
+    public bool SelectPluginCollection(string packId, string tabId, string collectionId)
+    {
+        var view = _pluginViews.FirstOrDefault(v =>
+            string.Equals(v.PackId, packId, StringComparison.Ordinal)
+            && string.Equals(v.TabId, tabId, StringComparison.Ordinal));
+        if (view is null || !view.Collections.Any(c => string.Equals(c.Id, collectionId, StringComparison.Ordinal)))
+            return false;
+
+        ActivePluginView = view;
+        ActivePluginCollectionId = collectionId;
+        Page = null;
+        _icons = [];
+        _previews = [];
+        Selection.Cancel();
+        return true;
+    }
+
+    public void ExitPluginView()
+    {
+        ActivePluginView = null;
+        ActivePluginCollectionId = null;
+        _pluginScrollOffset = 0;
+        Page = null;
+        _icons = [];
+        _previews = [];
+        Selection.Cancel();
+    }
+
+    public void Update(BuyCatalogPage page, string root, bool buildObjects = false, bool pluginCollection = false)
     {
         ArgumentNullException.ThrowIfNull(page);
         ArgumentNullException.ThrowIfNull(root);
 
-        page.Validate(buildObjects);
+        page.Validate(buildObjects, pluginCollection);
         string resolvedRoot = PackContentPaths.ResolveSymlinksInPath(Path.GetFullPath(root));
         var icons = new List<OriginalGameplayOverlay.Image?>(page.Items.Count);
         var previews = new List<OriginalGameplayOverlay.Image?>(page.Items.Count);
@@ -418,8 +528,73 @@ public sealed class OriginalBuyOverlay
     public void ClearTextCaches()
     {
         _priceTips.Clear();
+        _pluginTextCache.Clear();
         _statusKey = string.Empty;
         _footer.Clear();
+    }
+
+    private CGRect PluginCategoryRect(int index, CGSize canvas)
+    {
+        var pos = OriginalBuyLayout.PluginCategoryPosition(index);
+        return new CGRect(
+            pos.X,
+            pos.Y + (canvas.Height - 150),
+            OriginalBuyLayout.PluginCategoryIconWidth,
+            OriginalBuyLayout.PluginCategoryIconHeight);
+    }
+
+    private CGRect PluginBackRect(CGSize canvas)
+    {
+        double top = canvas.Height - 150;
+        return new CGRect(222, top + 52, 22, 92);
+    }
+
+    private CGRect PluginListRect(CGSize canvas)
+    {
+        double top = canvas.Height - 150;
+        double rightEdge = 392.0 + OriginalBuyLayout.ExtraLeftWidth(DisplayedPluginViewCount);
+        double leftEdge = 247.0;
+        return new CGRect(leftEdge, top + 52, Math.Max(120.0, rightEdge - leftEdge), 92);
+    }
+
+    private CGRect PluginRowRect(int visibleIndex, CGSize canvas, bool hasScrollbar)
+    {
+        var list = PluginListRect(canvas);
+        double rowW = hasScrollbar ? list.Width - 18 : list.Width - 4;
+        return new CGRect(list.X + 2, list.Y + 2 + visibleIndex * 22.5, rowW, 21.5);
+    }
+
+    private CGRect PluginScrollButtonRect(bool up, CGSize canvas)
+    {
+        var list = PluginListRect(canvas);
+        return new CGRect(list.MaxX - 16, up ? list.Y + 2 : list.MaxY - 18, 14, 16);
+    }
+
+    private OriginalGameplayOverlay.Image SolidImage(byte r, byte g, byte b, byte a = 255)
+    {
+        uint key = ((uint)r << 24) | ((uint)g << 16) | ((uint)b << 8) | a;
+        if (_solidColorCache.TryGetValue(key, out var cached))
+            return cached;
+        var img = OriginalGameplayOverlay.CreateImage(Device, 1, 1, [r, g, b, a]);
+        _solidColorCache[key] = img;
+        return img;
+    }
+
+    private OriginalGameplayOverlay.Image? PluginLabelImage(string text, byte r, byte g, byte b)
+    {
+        string key = $"{r}:{g}:{b}:{text}";
+        if (_pluginTextCache.TryGetValue(key, out var cached))
+            return cached;
+        try
+        {
+            var img = OriginalGameplayOverlay.Text(text, _tooltipFont, Device, r, g, b);
+            _pluginTextCache[key] = img;
+            return img;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     public List<OriginalGameplayOverlay.Part> StatusParts(CGSize canvas)
@@ -478,11 +653,54 @@ public sealed class OriginalBuyOverlay
     private CGRect ArrowRect(bool forward, CGSize canvas)
     {
         var image = forward ? _next : _previous;
-        return OriginalBuyLayout.Arrow(forward, new CGSize(image.Size.Width / 4.0, image.Size.Height), canvas);
+        return OriginalBuyLayout.Arrow(forward, new CGSize(image.Size.Width / 4.0, image.Size.Height), canvas, DisplayedPluginViewCount);
     }
 
     public (string Text, CGRect Rect)? ToolTipAt(CGPoint point, CGSize canvas)
     {
+        int pluginCount = DisplayedPluginViewCount;
+        if (ActivePluginView is { } activeView)
+        {
+            var backRect = PluginBackRect(canvas);
+            if (Contains(backRect, point))
+                return (_strings.CatalogBackTip("Back"), backRect);
+
+            bool hasScroll = activeView.Collections.Count > PluginVisibleRows;
+            int visibleCount = Math.Min(PluginVisibleRows, Math.Max(0, activeView.Collections.Count - _pluginScrollOffset));
+            for (int r = 0; r < visibleCount; r++)
+            {
+                var rowRect = PluginRowRect(r, canvas, hasScroll);
+                if (Contains(rowRect, point))
+                {
+                    var col = activeView.Collections[_pluginScrollOffset + r];
+                    return (col.Tooltip ?? $"{col.Label} ({col.Count})", rowRect);
+                }
+            }
+            if (Page is { } pluginPage)
+            {
+                var prevRect = ArrowRect(false, canvas);
+                if (pluginPage.Offset > 0 && Contains(prevRect, point))
+                    return (_strings.PeoplePageTip(0, "Previous catalog page"), prevRect);
+                var nextRect = ArrowRect(true, canvas);
+                if (pluginPage.NextOffset(OriginalBuyLayout.Capacity(canvas, pluginCount)) is not null && Contains(nextRect, point))
+                    return (_strings.PeoplePageTip(1, "Next catalog page"), nextRect);
+            }
+            return null;
+        }
+
+        for (int vi = 0; vi < pluginCount; vi++)
+        {
+            var catRect = PluginCategoryRect(vi, canvas);
+            if (Contains(catRect, point))
+            {
+                var v = _pluginViews[vi];
+                string tip = string.IsNullOrWhiteSpace(v.Hotkey)
+                    ? v.TabLabel
+                    : $"{v.TabLabel} ({v.Hotkey.ToUpperInvariant()})";
+                return (tip, catRect);
+            }
+        }
+
         if (SubSorting || FunctionSubSorting)
         {
             var backRect = BackRect(canvas);
@@ -526,7 +744,7 @@ public sealed class OriginalBuyOverlay
                 return (_strings.PeoplePageTip(0, "Previous catalog page"), prevRect);
 
             var nextRect = ArrowRect(true, canvas);
-            if (currentPage.NextOffset(OriginalBuyLayout.Capacity(canvas)) is not null && Contains(nextRect, point))
+            if (currentPage.NextOffset(OriginalBuyLayout.Capacity(canvas, pluginCount)) is not null && Contains(nextRect, point))
                 return (_strings.PeoplePageTip(1, "Next catalog page"), nextRect);
         }
 
@@ -535,6 +753,7 @@ public sealed class OriginalBuyOverlay
 
     public List<(string Label, CGRect Rect)> Controls(CGSize canvas)
     {
+        int pluginCount = DisplayedPluginViewCount;
         var names = FunctionSubSorting
             ? OriginalBuyLayout.FunctionSubsortNames
             : SubSorting
@@ -544,25 +763,40 @@ public sealed class OriginalBuyOverlay
                     : OriginalBuyLayout.Categories;
 
         var controls = new List<(string Label, CGRect Rect)>();
-        for (int index = 0; index < 8; index++)
+        if (ActivePluginView is not null)
         {
-            if (FunctionSubSorting && !FunctionSubsortVisible(index))
-                continue;
+            controls.Add(("Back", PluginBackRect(canvas)));
+        }
+        else
+        {
+            for (int index = 0; index < 8; index++)
+            {
+                if (FunctionSubSorting && !FunctionSubsortVisible(index))
+                    continue;
 
-            var rect = CategoryRect(index, canvas);
-            string fallback = names[index];
-            string tip = FunctionSubSorting
-                ? _strings.CatalogFunctionSubsortTip(FunctionCategory, index, fallback)
-                : _strings.CatalogCategoryTip(index, RoomMode && !SubSorting, fallback);
-            string prefixed = "Buy: " + fallback;
+                var rect = CategoryRect(index, canvas);
+                string fallback = names[index];
+                string tip = FunctionSubSorting
+                    ? _strings.CatalogFunctionSubsortTip(FunctionCategory, index, fallback)
+                    : _strings.CatalogCategoryTip(index, RoomMode && !SubSorting, fallback);
+                string prefixed = "Buy: " + fallback;
 
-            controls.Add((fallback, rect));
-            if (!string.Equals(tip, fallback, StringComparison.Ordinal))
-                controls.Add((tip, rect));
-            controls.Add((prefixed, rect));
+                controls.Add((fallback, rect));
+                if (!string.Equals(tip, fallback, StringComparison.Ordinal))
+                    controls.Add((tip, rect));
+                controls.Add((prefixed, rect));
+            }
+
+            for (int vi = 0; vi < pluginCount; vi++)
+            {
+                var v = _pluginViews[vi];
+                var rect = PluginCategoryRect(vi, canvas);
+                controls.Add((v.TabLabel, rect));
+                controls.Add(("Buy: " + v.TabLabel, rect));
+            }
         }
 
-        if (SubSorting || FunctionSubSorting)
+        if (ActivePluginView is null && (SubSorting || FunctionSubSorting))
         {
             string backFallback = FunctionSubSorting ? "Back to function categories" : "Back to rooms";
             string backTip = _strings.CatalogBackTip(backFallback);
@@ -574,12 +808,12 @@ public sealed class OriginalBuyOverlay
 
         if (Page is { } currentPage)
         {
-            int capacity = OriginalBuyLayout.Capacity(canvas);
+            int capacity = OriginalBuyLayout.Capacity(canvas, pluginCount);
             int count = Math.Min(currentPage.Items.Count, capacity);
             for (int index = 0; index < count; index++)
             {
                 var item = currentPage.Items[index];
-                controls.Add((item.Name + " — §" + item.Price, OriginalBuyLayout.Thumbnail(index, canvas)));
+                controls.Add((item.Name + " — §" + item.Price, OriginalBuyLayout.Thumbnail(index, canvas, pluginCount)));
             }
 
             if (currentPage.Offset > 0)
@@ -593,6 +827,65 @@ public sealed class OriginalBuyOverlay
 
     public Action? ActionAt(CGPoint point, CGSize canvas)
     {
+        int pluginCount = DisplayedPluginViewCount;
+        if (ActivePluginView is { } activeView)
+        {
+            if (Contains(PluginBackRect(canvas), point))
+                return Action.ExitPluginView.Instance;
+
+            bool hasScroll = activeView.Collections.Count > PluginVisibleRows;
+            if (hasScroll)
+            {
+                if (Contains(PluginScrollButtonRect(up: true, canvas), point))
+                {
+                    _pluginScrollOffset = Math.Max(0, _pluginScrollOffset - 1);
+                    return null;
+                }
+                if (Contains(PluginScrollButtonRect(up: false, canvas), point))
+                {
+                    int maxScroll = Math.Max(0, activeView.Collections.Count - PluginVisibleRows);
+                    _pluginScrollOffset = Math.Min(maxScroll, _pluginScrollOffset + 1);
+                    return null;
+                }
+            }
+
+            int visibleCount = Math.Min(PluginVisibleRows, Math.Max(0, activeView.Collections.Count - _pluginScrollOffset));
+            for (int r = 0; r < visibleCount; r++)
+            {
+                if (Contains(PluginRowRect(r, canvas, hasScroll), point))
+                {
+                    var col = activeView.Collections[_pluginScrollOffset + r];
+                    return new Action.PluginCollection(activeView.PackId, activeView.TabId, col.Id);
+                }
+            }
+
+            if (Page is not { } pluginPage)
+                return null;
+
+            int pluginCap = OriginalBuyLayout.Capacity(canvas, pluginCount);
+            if (pluginPage.Offset > 0 && Contains(ArrowRect(false, canvas), point))
+                return new Action.Page(Math.Max(0, pluginPage.Offset - pluginCap));
+            if (pluginPage.NextOffset(pluginCap) is { } pluginNext && Contains(ArrowRect(true, canvas), point))
+                return new Action.Page(pluginNext);
+
+            int pluginItemCount = Math.Min(pluginPage.Items.Count, pluginCap);
+            for (int index = 0; index < pluginItemCount; index++)
+            {
+                if (Contains(OriginalBuyLayout.Thumbnail(index, canvas, pluginCount), point))
+                    return new Action.Select(pluginPage.Items[index].Guid);
+            }
+            return null;
+        }
+
+        for (int vi = 0; vi < pluginCount; vi++)
+        {
+            if (Contains(PluginCategoryRect(vi, canvas), point))
+            {
+                var v = _pluginViews[vi];
+                return new Action.PluginTab(v.PackId, v.TabId);
+            }
+        }
+
         if ((SubSorting || FunctionSubSorting) && Contains(BackRect(canvas), point))
             return FunctionSubSorting ? Action.FunctionBack.Instance : Action.Back.Instance;
 
@@ -611,7 +904,7 @@ public sealed class OriginalBuyOverlay
         if (Page is not { } currentPage)
             return null;
 
-        int capacity = OriginalBuyLayout.Capacity(canvas);
+        int capacity = OriginalBuyLayout.Capacity(canvas, pluginCount);
         if (currentPage.Offset > 0 && Contains(ArrowRect(false, canvas), point))
             return new Action.Page(Math.Max(0, currentPage.Offset - capacity));
         if (currentPage.NextOffset(capacity) is { } nextOffset && Contains(ArrowRect(true, canvas), point))
@@ -620,7 +913,7 @@ public sealed class OriginalBuyOverlay
         int count = Math.Min(currentPage.Items.Count, capacity);
         for (int index = 0; index < count; index++)
         {
-            if (Contains(OriginalBuyLayout.Thumbnail(index, canvas), point))
+            if (Contains(OriginalBuyLayout.Thumbnail(index, canvas, pluginCount), point))
                 return new Action.Select(currentPage.Items[index].Guid);
         }
 
@@ -656,16 +949,18 @@ public sealed class OriginalBuyOverlay
         }
     }
 
-    public (OriginalCatalogPopup.Item Item, OriginalGameplayOverlay.Part Icon)? PopupAt(CGPoint point, CGSize canvas)
+    public (OriginalCatalogPopup.Item Item, OriginalGameplayOverlay.Part Icon, double AnchorMidX)? PopupAt(CGPoint point, CGSize canvas)
     {
         if (Page is not { } currentPage)
             return null;
 
-        int capacity = OriginalBuyLayout.Capacity(canvas);
+        int pluginCount = DisplayedPluginViewCount;
+        int capacity = OriginalBuyLayout.Capacity(canvas, pluginCount);
         int count = Math.Min(currentPage.Items.Count, capacity);
         for (int index = 0; index < count; index++)
         {
-            if (!Contains(OriginalBuyLayout.Thumbnail(index, canvas), point))
+            var thumbRect = OriginalBuyLayout.Thumbnail(index, canvas, pluginCount);
+            if (!Contains(thumbRect, point))
                 continue;
 
             var item = currentPage.Items[index];
@@ -673,7 +968,8 @@ public sealed class OriginalBuyOverlay
             var icon = index < _icons.Count ? _icons[index] : null;
             return (
                 new OriginalCatalogPopup.Item(item.Name, item.Price, item.Description, item.Ratings ?? []),
-                OriginalBuildOverlay.Icon(preview ?? icon, preview is null ? item.Icon : item.Preview, _unknown));
+                OriginalBuildOverlay.Icon(preview ?? icon, preview is null ? item.Icon : item.Preview, _unknown),
+                thumbRect.MidX);
         }
 
         return null;
@@ -688,50 +984,154 @@ public sealed class OriginalBuyOverlay
             new(_patch, new CGRect(64, top - 33 + 35, _patch.Size.Width, _patch.Size.Height))
         };
 
-        var displayedButtons = FunctionSubSorting
-            ? _functionSubSortButtons[FunctionCategory]
-            : SubSorting
-                ? _subSortButtons
-                : RoomMode
-                    ? _roomButtons
-                    : _buttons;
-
-        for (int index = 0; index < displayedButtons.Length; index++)
+        int pluginCount = DisplayedPluginViewCount;
+        if (ActivePluginView is { } activePluginView)
         {
-            if (FunctionSubSorting && !FunctionSubsortVisible(index))
-                continue;
+            var backRect = PluginBackRect(canvas);
+            bool backHovered = HoveredPoint is { } bhp && Contains(backRect, bhp);
+            parts.Add(new OriginalGameplayOverlay.Part(
+                backHovered ? SolidImage(115, 215, 255, 245) : SolidImage(72, 118, 198, 242),
+                backRect));
+            parts.Add(new OriginalGameplayOverlay.Part(
+                backHovered ? SolidImage(36, 98, 172, 245) : SolidImage(16, 36, 92, 240),
+                new CGRect(backRect.X + 1, backRect.Y + 1, backRect.Width - 2, backRect.Height - 2)));
+            if (PluginLabelImage("<", backHovered ? (byte)255 : (byte)215, backHovered ? (byte)255 : (byte)235, 255) is { } backImg)
+            {
+                double bx = backRect.X + Math.Max(1, (backRect.Width - backImg.Size.Width) * 0.5);
+                double by = backRect.Y + Math.Max(1, (backRect.Height - backImg.Size.Height) * 0.5);
+                parts.Add(new OriginalGameplayOverlay.Part(backImg, new CGRect(bx, by, backImg.Size.Width, backImg.Size.Height)));
+            }
 
-            var rect = CategoryRect(index, canvas);
-            bool hovered = HoveredPoint is { } hp && Contains(rect, hp);
-            float frame = FunctionSubSorting
-                ? (!FunctionSubsortEnabled(index) ? 0.75f : index == FunctionSubsort ? 0.25f : hovered ? 0.50f : 0f)
-                : SubSorting
-                    ? (!SubSortEnabled(index) ? 0.75f : index == SubSort ? 0.25f : hovered ? 0.50f : 0f)
-                    : (RoomMode ? index == Room && Page is not null : OriginalBuyLayout.EngineCategories[index] == Category)
-                        ? 0.25f
-                        : hovered ? 0.50f : 0f;
+            var listRect = PluginListRect(canvas);
+            parts.Add(new OriginalGameplayOverlay.Part(SolidImage(72, 118, 198, 242), listRect));
+            parts.Add(new OriginalGameplayOverlay.Part(SolidImage(10, 20, 62, 245), new CGRect(listRect.X + 1, listRect.Y + 1, listRect.Width - 2, listRect.Height - 2)));
 
-            parts.Add(new OriginalGameplayOverlay.Part(displayedButtons[index], rect, new Vector4(frame, 0f, 0.25f, 1f)));
+            bool hasScroll = activePluginView.Collections.Count > PluginVisibleRows;
+            if (activePluginView.Collections.Count == 0)
+            {
+                if (PluginLabelImage("No CC folders found", 165, 185, 220) is { } emptyImg)
+                {
+                    parts.Add(new OriginalGameplayOverlay.Part(emptyImg, new CGRect(listRect.X + 8, listRect.Y + 38, emptyImg.Size.Width, emptyImg.Size.Height)));
+                }
+            }
+            else
+            {
+                int visibleCount = Math.Min(PluginVisibleRows, Math.Max(0, activePluginView.Collections.Count - _pluginScrollOffset));
+                for (int r = 0; r < visibleCount; r++)
+                {
+                    var col = activePluginView.Collections[_pluginScrollOffset + r];
+                    var rowRect = PluginRowRect(r, canvas, hasScroll);
+                    bool selected = string.Equals(col.Id, ActivePluginCollectionId, StringComparison.Ordinal);
+                    bool hovered = HoveredPoint is { } hp && Contains(rowRect, hp);
+                    var rowImg = selected
+                        ? SolidImage(36, 118, 184, 242)
+                        : hovered
+                            ? SolidImage(28, 62, 134, 230)
+                            : SolidImage(16, 30, 82, 218);
+                    parts.Add(new OriginalGameplayOverlay.Part(rowImg, rowRect));
+
+                    string label = col.Label.Length > 17 ? col.Label[..16] + "…" : col.Label;
+                    string countText = $"({col.Count})";
+                    if (PluginLabelImage(label, selected ? (byte)255 : (byte)215, selected ? (byte)255 : (byte)230, 255) is { } nameImg)
+                    {
+                        double ny = rowRect.Y + Math.Max(1, (rowRect.Height - nameImg.Size.Height) * 0.5);
+                        parts.Add(new OriginalGameplayOverlay.Part(nameImg, new CGRect(rowRect.X + 5, ny, Math.Min(nameImg.Size.Width, rowRect.Width - 36), nameImg.Size.Height)));
+                    }
+                    if (PluginLabelImage(countText, selected ? (byte)160 : (byte)150, selected ? (byte)245 : (byte)190, 240) is { } cntImg)
+                    {
+                        double cy = rowRect.Y + Math.Max(1, (rowRect.Height - cntImg.Size.Height) * 0.5);
+                        parts.Add(new OriginalGameplayOverlay.Part(cntImg, new CGRect(rowRect.MaxX - cntImg.Size.Width - 4, cy, cntImg.Size.Width, cntImg.Size.Height)));
+                    }
+                }
+
+                if (hasScroll)
+                {
+                    int maxScroll = Math.Max(0, activePluginView.Collections.Count - PluginVisibleRows);
+                    foreach (bool up in new[] { true, false })
+                    {
+                        var btnRect = PluginScrollButtonRect(up, canvas);
+                        bool enabled = up ? _pluginScrollOffset > 0 : _pluginScrollOffset < maxScroll;
+                        bool hovered = enabled && HoveredPoint is { } hp && Contains(btnRect, hp);
+                        var btnImg = !enabled
+                            ? SolidImage(20, 30, 62, 180)
+                            : hovered
+                                ? SolidImage(52, 112, 194, 242)
+                                : SolidImage(28, 62, 128, 235);
+                        parts.Add(new OriginalGameplayOverlay.Part(btnImg, btnRect));
+                        if (PluginLabelImage(up ? "^" : "v", enabled ? (byte)235 : (byte)110, enabled ? (byte)245 : (byte)125, enabled ? (byte)255 : (byte)150) is { } arrImg)
+                        {
+                            double ax = btnRect.X + Math.Max(1, (btnRect.Width - arrImg.Size.Width) * 0.5);
+                            double ay = btnRect.Y + Math.Max(0, (btnRect.Height - arrImg.Size.Height) * 0.5);
+                            parts.Add(new OriginalGameplayOverlay.Part(arrImg, new CGRect(ax, ay, arrImg.Size.Width, arrImg.Size.Height)));
+                        }
+                    }
+                }
+            }
         }
-
-        if (SubSorting || FunctionSubSorting)
+        else
         {
-            var back = FunctionSubSorting ? _functionBackButtons[FunctionCategory] : _backButtons[Room];
-            var rect = BackRect(canvas);
-            bool hovered = HoveredPoint is { } hp && Contains(rect, hp);
-            parts.Add(new OriginalGameplayOverlay.Part(back, rect, new Vector4(hovered ? 0.50f : 0f, 0f, 0.25f, 1f)));
+            var displayedButtons = FunctionSubSorting
+                ? _functionSubSortButtons[FunctionCategory]
+                : SubSorting
+                    ? _subSortButtons
+                    : RoomMode
+                        ? _roomButtons
+                        : _buttons;
+
+            for (int index = 0; index < displayedButtons.Length; index++)
+            {
+                if (FunctionSubSorting && !FunctionSubsortVisible(index))
+                    continue;
+
+                var rect = CategoryRect(index, canvas);
+                bool hovered = HoveredPoint is { } hp && Contains(rect, hp);
+                float frame = FunctionSubSorting
+                    ? (!FunctionSubsortEnabled(index) ? 0.75f : index == FunctionSubsort ? 0.25f : hovered ? 0.50f : 0f)
+                    : SubSorting
+                        ? (!SubSortEnabled(index) ? 0.75f : index == SubSort ? 0.25f : hovered ? 0.50f : 0f)
+                        : (RoomMode ? index == Room && Page is not null : OriginalBuyLayout.EngineCategories[index] == Category)
+                            ? 0.25f
+                            : hovered ? 0.50f : 0f;
+
+                parts.Add(new OriginalGameplayOverlay.Part(displayedButtons[index], rect, new Vector4(frame, 0f, 0.25f, 1f)));
+            }
+
+            for (int vi = 0; vi < pluginCount; vi++)
+            {
+                var rect = PluginCategoryRect(vi, canvas);
+                bool hovered = HoveredPoint is { } hp && Contains(rect, hp);
+                if (_pluginCategoryIcon is { } folderIcon)
+                {
+                    float frame = hovered ? 0.50f : 0f;
+                    parts.Add(new OriginalGameplayOverlay.Part(folderIcon, rect, new Vector4(frame, 0f, 0.25f, 1f)));
+                }
+                else
+                {
+                    parts.Add(new OriginalGameplayOverlay.Part(
+                        hovered ? SolidImage(90, 175, 240, 240) : SolidImage(55, 105, 175, 220),
+                        rect));
+                }
+            }
+
+            if (SubSorting || FunctionSubSorting)
+            {
+                var back = FunctionSubSorting ? _functionBackButtons[FunctionCategory] : _backButtons[Room];
+                var rect = BackRect(canvas);
+                bool hovered = HoveredPoint is { } hp && Contains(rect, hp);
+                parts.Add(new OriginalGameplayOverlay.Part(back, rect, new Vector4(hovered ? 0.50f : 0f, 0f, 0.25f, 1f)));
+            }
         }
 
         if (Page is { } currentPage)
         {
             OriginalGameplayOverlay.Part? hoveredPricePart = null;
-            int capacity = OriginalBuyLayout.Capacity(canvas);
+            int capacity = OriginalBuyLayout.Capacity(canvas, pluginCount);
             int count = Math.Min(currentPage.Items.Count, capacity);
 
             for (int index = 0; index < count; index++)
             {
                 var item = currentPage.Items[index];
-                var rect = OriginalBuyLayout.Thumbnail(index, canvas);
+                var rect = OriginalBuyLayout.Thumbnail(index, canvas, pluginCount);
                 bool chosen = Selected is { } selGuid && item.Guid == selGuid;
                 bool hovered = HoveredPoint is { } hp && Contains(rect, hp);
                 float state = chosen ? 1f : hovered ? 2f : 0f;

@@ -22,12 +22,9 @@ public static class ExpressionPrimitive
 
     public static bool Execute(in TreeContext context, DataOwner lhsOwner, short lhsData, ExpressionOperator op, DataOwner rhsOwner, short rhsData)
     {
-        // Flags the evaluation context as an Expression instruction so variable resolution can transfer
-        // nonnegative object wait values to parameter 0.
-        var expressionContext = context with { ExpressionInstruction = true };
         var writes = (int)op < Writes.Length && Writes[(int)op];
-        var rhs = Variables.Get(expressionContext, rhsOwner, rhsData);
-        var lhs = writes ? Variables.Reference(expressionContext, lhsOwner, lhsData) : Variable.ReadOnly(Variables.Get(expressionContext, lhsOwner, lhsData));
+        var rhs = Variables.Get(context, rhsOwner, rhsData);
+        var lhs = writes ? Variables.Reference(context, lhsOwner, lhsData) : Variable.ReadOnly(Variables.Get(context, lhsOwner, lhsData));
         var left = lhs.Value;
         bool result;
         switch (op)

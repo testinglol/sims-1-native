@@ -88,11 +88,13 @@ public sealed record BuyCatalogPage
         return previous.Guid < item.Guid;
     }
 
-    public void Validate(bool buildObjects = false)
+    public void Validate(bool buildObjects = false, bool pluginCollection = false)
     {
         bool validCategory = buildObjects
             ? Category is >= 8 and <= 12
-            : Room is null ? Category is >= 0 and <= 7 : Category is >= -1 and <= 7;
+            : pluginCollection
+                ? Category is >= -1 and <= 7
+                : Room is null ? Category is >= 0 and <= 7 : Category is >= -1 and <= 7;
 
         if (SchemaVersion != 1 || !validCategory
             || (Room is int roomVal && roomVal is < 0 or > 7)
@@ -1121,3 +1123,20 @@ public sealed record PanelDescription
         return true;
     }
 }
+
+public sealed record BuyCatalogPluginCollection(
+    [property: JsonPropertyName("id")] string Id,
+    [property: JsonPropertyName("label")] string Label,
+    [property: JsonPropertyName("tooltip")] string? Tooltip,
+    [property: JsonPropertyName("count")] int Count);
+
+public sealed record BuyCatalogPluginView(
+    [property: JsonPropertyName("packId")] string PackId,
+    [property: JsonPropertyName("tabId")] string TabId,
+    [property: JsonPropertyName("tabLabel")] string TabLabel,
+    [property: JsonPropertyName("hotkey")] string? Hotkey,
+    [property: JsonPropertyName("hideMatchedFromStandardCatalog")] bool HideMatchedFromStandardCatalog,
+    [property: JsonPropertyName("collections")] IReadOnlyList<BuyCatalogPluginCollection> Collections);
+
+public sealed record BuyCatalogPluginViewsResponse(
+    [property: JsonPropertyName("views")] IReadOnlyList<BuyCatalogPluginView> Views);

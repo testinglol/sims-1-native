@@ -575,7 +575,7 @@ public sealed class SimulationBridge : IDisposable
         string? createdCacheDirectory = null;
         lock (SharedMountsLock)
         {
-            if (SharedMounts.TryGetValue(key, out var cached) && Directory.Exists(cached))
+            if (SharedMounts.TryGetValue(key, out var cached) && Directory.Exists(cached) && content.ReusableMount(cached, identity))
             {
                 return cached;
             }

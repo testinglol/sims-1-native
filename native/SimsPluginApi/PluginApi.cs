@@ -4,14 +4,15 @@ namespace SimsNative.Plugins;
 public static class PluginApi
 {
     /// <summary>The contract version implemented by this assembly.</summary>
-    public const int Version = 4;
+    public const int Version = 5;
 
     /// <summary>
     /// Contract versions the host can load. A plugin declares exactly one in its pack manifest. Version 2 added lot
     /// objects, pie menus, queued interactions and motive changes; version 4 adds reciprocal social roles, recipient
-    /// response and per-role lifecycle status. Older plugins keep the version-specific throwing defaults.
+    /// response and per-role lifecycle status; version 5 adds Buy Mode catalog browser and filtering hooks. Older
+    /// plugins keep the version-specific throwing defaults.
     /// </summary>
-    public static readonly IReadOnlyList<int> SupportedVersions = [1, 2, 3, 4];
+    public static readonly IReadOnlyList<int> SupportedVersions = [1, 2, 3, 4, 5];
 }
 
 /// <summary>
@@ -29,6 +30,12 @@ public interface ISimsPlugin
 
     /// <summary>Called when the player activates a button declared in one of this pack's panel descriptions.</summary>
     void OnPanelAction(string panelId, string action) { }
+
+    /// <summary>
+    /// Handles a console cheat command. Return a non-null message if handled (empty string is valid for silent success),
+    /// or null if this plugin does not handle the command. Throw <see cref="ArgumentException"/> for invalid usage.
+    /// </summary>
+    string? OnCheat(string command, string[] args) => null;
 
     /// <summary>
     /// API version 2: rescores one candidate of a Sim's autonomous choice. The host calls it only on plugins that
@@ -376,4 +383,37 @@ public sealed record PluginEnvironment
     public Dictionary<string, float> Parameters { get; init; } = [];
     /// <summary>Looping lot-wide environmental ambient sound beds managed by the pack.</summary>
     public PluginAmbientSound[] AmbientSounds { get; init; } = [];
+}
+
+/// <summary>API version 5: read-only catalog object descriptor supplied to <see cref="IPluginBuyCatalogProvider"/>.</summary>
+public sealed record PluginCatalogObject(
+    uint Guid,
+    string Name,
+    string SourcePath,
+    int Price,
+    int CategoryMask,
+    int RoomMask,
+    bool IsCustomContent);
+
+/// <summary>API version 5: one named folder/collection of catalog object GUIDs exposed inside a plugin Buy Mode view.</summary>
+public sealed record PluginBuyCollection(
+    string Id,
+    string Label,
+    string? Tooltip,
+    uint[] Guids);
+
+/// <summary>API version 5: custom Buy Mode browser tab and optional standard-catalog declutter filter returned by a plugin.</summary>
+public sealed record PluginBuyCatalogView(
+    string TabId,
+    string TabLabel,
+    string? Hotkey,
+    bool HideMatchedFromStandardCatalog,
+    PluginBuyCollection[] Collections);
+
+/// <summary>API version 5: optional plugin hook providing custom Buy Mode catalog collections (such as a CC folder browser)
+/// and optional filtering of matched items out of standard Buy Mode categories.</summary>
+public interface IPluginBuyCatalogProvider
+{
+    /// <summary>Returns a custom Buy Mode view over the currently loaded catalog objects, or null to provide none.</summary>
+    PluginBuyCatalogView? GetBuyCatalogView(IReadOnlyList<PluginCatalogObject> objects);
 }

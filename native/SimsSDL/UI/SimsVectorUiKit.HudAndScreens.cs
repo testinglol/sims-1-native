@@ -160,11 +160,12 @@ public static partial class SimsVectorUiKit
     /// <summary>
     /// Recreates PanelBack.bmp (3.47/255 MAE against original) at ANY widescreen width (zero stretched 1px columns).
     /// </summary>
-    public static VectorBannerRenderer.RasterImage RenderLivePanelBack(int w1x, int h1x = 100, int scale = 4)
+    public static VectorBannerRenderer.RasterImage RenderLivePanelBack(int w1x, int h1x = 100, int scale = 4, float gradientSpan = 248f)
     {
         w1x = Math.Max(64, w1x);
         scale = Math.Clamp(scale, 1, 4);
-        string key = $"panelback:{w1x}:{h1x}:{scale}";
+        int spanKey = Math.Max(64, (int)MathF.Round(gradientSpan));
+        string key = $"panelback:{w1x}:{h1x}:{scale}:{spanKey}";
         if (Cache.TryGetValue(key, out var cached))
             return cached;
 
@@ -174,6 +175,7 @@ public static partial class SimsVectorUiKit
         float inv = 1f / scale;
         float hw = w1x * 0.5f;
         float hh = h1x * 0.5f;
+        float span = MathF.Max(64f, spanKey);
 
         Parallel.For(0, ph, py =>
         {
@@ -191,7 +193,7 @@ public static partial class SimsVectorUiKit
                 if (cov <= 0.001f)
                     continue;
 
-                float tx = MathF.Pow(Math.Clamp((x - 6f) / 248f, 0f, 1f), 0.92f);
+                float tx = MathF.Pow(Math.Clamp((x - 6f) / span, 0f, 1f), 0.92f);
                 float r = 126f * (1f - tx);
                 float g = 126f * (1f - tx);
                 float b = 166f * (1f - tx) + 82f * tx;
@@ -553,6 +555,7 @@ public static partial class SimsVectorUiKit
             "buyfplumbing" => SvgIconRenderer.RenderStateStrip("CPanel.Buy.buyf_plumbing", SvgIconRenderer.IconTheme.OptionsButton, w1x, h1x, scale: scale),
             "buyflighting" => SvgIconRenderer.RenderStateStrip("CPanel.Buy.buyf_lighting", SvgIconRenderer.IconTheme.OptionsButton, w1x, h1x, scale: scale),
             "buyfmisc" => SvgIconRenderer.RenderStateStrip("CPanel.Buy.buyf_misc", SvgIconRenderer.IconTheme.OptionsButton, w1x, h1x, scale: scale),
+            "buyffolders" => SvgIconRenderer.RenderStateStrip("CPanel.Buy.buyf_folders", SvgIconRenderer.IconTheme.OptionsButton, w1x, h1x, scale: scale),
             "buyrliving" => SvgIconRenderer.RenderStateStrip("CPanel.Buy.buyr_living", SvgIconRenderer.IconTheme.OptionsButton, w1x, h1x, scale: scale),
             "buyrdining" => SvgIconRenderer.RenderStateStrip("CPanel.Buy.buyr_dining", SvgIconRenderer.IconTheme.OptionsButton, w1x, h1x, scale: scale),
             "buyrbedroom" => SvgIconRenderer.RenderStateStrip("CPanel.Buy.buyr_bedroom", SvgIconRenderer.IconTheme.OptionsButton, w1x, h1x, scale: scale),

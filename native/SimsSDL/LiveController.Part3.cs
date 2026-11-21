@@ -444,9 +444,6 @@ internal sealed partial class LiveController
                     Ui.PluginPanel = null;
                     PlayUISound("ui_click");
                     break;
-                case Key.Character { Value: "e" }:
-                    OpenNextPluginPanel();
-                    break;
             }
 
             return true;
@@ -536,18 +533,25 @@ internal sealed partial class LiveController
                 bool next = string.Equals(ch.Value, "x", StringComparison.Ordinal);
                 if (Ui.BuyMode && Ui.Buy.Page is { } buyPage)
                 {
-                    int capacity = OriginalBuyLayout.Capacity(LogicalCanvas);
+                    int capacity = OriginalBuyLayout.Capacity(LogicalCanvas, Ui.Buy.PluginViews.Count);
                     int? offset = next
                         ? buyPage.NextOffset(capacity)
                         : (buyPage.Offset > 0 ? Math.Max(0, buyPage.Offset - capacity) : (int?)null);
                     if (offset is { } nextBuyOffset)
                     {
                         PlayUISound("ui_click");
-                        RequestCatalog(
-                            category: Ui.Buy.Category,
-                            room: Ui.Buy.RoomMode ? Ui.Buy.Room : (int?)null,
-                            subsort: Ui.Buy.FunctionSubSorting ? Ui.Buy.FunctionSubsort : (int?)null,
-                            offset: nextBuyOffset);
+                        if (Ui.Buy.ActivePluginView is { } activePv && Ui.Buy.ActivePluginCollectionId is { } activeColId)
+                        {
+                            RequestPluginCatalog(activePv.PackId, activePv.TabId, activeColId, nextBuyOffset);
+                        }
+                        else
+                        {
+                            RequestCatalog(
+                                category: Ui.Buy.Category,
+                                room: Ui.Buy.RoomMode ? Ui.Buy.Room : (int?)null,
+                                subsort: Ui.Buy.FunctionSubSorting ? Ui.Buy.FunctionSubsort : (int?)null,
+                                offset: nextBuyOffset);
+                        }
                     }
                 }
                 else if (Ui.BuildMode && Ui.Build.TerrainMode is null)
@@ -726,13 +730,36 @@ internal sealed partial class LiveController
                 LoadGame();
                 break;
 
-            case Key.Character { Value: "e" }:
-                OpenNextPluginPanel();
-                break;
-
             case Key.Delete or Key.Backspace:
                 SellHeldObject();
                 break;
+
+            case Key.Character pluginKey when Ui.BuyMode && !HasBlockingDialog && Ui.Buy.PluginViews.Count > 0:
+            {
+                var matchedView = Ui.Buy.PluginViews.FirstOrDefault(v =>
+                    !string.IsNullOrWhiteSpace(v.Hotkey)
+                    && string.Equals(v.Hotkey, pluginKey.Value, StringComparison.OrdinalIgnoreCase));
+                if (matchedView is null)
+                {
+                    return false;
+                }
+
+                PlayUISound("ui_click");
+                if (Ui.Buy.ActivePluginView is { } cur
+                    && string.Equals(cur.PackId, matchedView.PackId, StringComparison.Ordinal)
+                    && string.Equals(cur.TabId, matchedView.TabId, StringComparison.Ordinal))
+                {
+                    Ui.Buy.ExitPluginView();
+                    Ui.Buy.ClearCategory(0);
+                    RequestCatalog(category: 0, offset: 0);
+                }
+                else if (Ui.Buy.EnterPluginView(matchedView.PackId, matchedView.TabId)
+                    && Ui.Buy.ActivePluginCollectionId is { } firstColId)
+                {
+                    RequestPluginCatalog(matchedView.PackId, matchedView.TabId, firstColId, offset: 0);
+                }
+                break;
+            }
 
             default:
                 return false;
@@ -1109,78 +1136,6 @@ internal sealed partial class LiveController
                 .OrderBy(static panel => panel.Key, StringComparer.Ordinal)
                 .Select(panel => (pack.Key, panel.Value)))
             .ToList();
-
-    public void OpenNextPluginPanel()
-    {
-        if (!HasActiveLot || !Ui.ShowsLot || HasBlockingDialog || Ui.OutfitPicker is not null)
-        {
-            return;
-        }
-
-        List<(string PackID, PanelDescription Description)> panels = PluginPanels;
-        if (panels.Count == 0)
-        {
-            Log("no pack declares a plugin panel");
-            return;
-        }
-
-        int? current = Ui.PluginPanel is { } open
-            ? FindPanelIndex(panels, open.PackId, open.Description.Id)
-            : null;
-        int next = current is { } currentIndex ? currentIndex + 1 : 0;
-        DismissMenu();
-        Ui.SoundOptions.Dismiss();
-        PlayUISound("ui_click");
-        if (next >= panels.Count)
-        {
-            Ui.PluginPanel = null;
-            return;
-        }
-
-        OpenPluginPanel(panels[next].PackID, panels[next].Description);
-    }
-
-    private bool TryTogglePluginPanelById(string panelId)
-    {
-        if (Ui.PluginPanel is { } open && string.Equals(open.Description.Id, panelId, StringComparison.OrdinalIgnoreCase))
-        {
-            PlayUISound("ui_click");
-            Ui.PluginPanel = null;
-            return true;
-        }
-
-        List<(string PackID, PanelDescription Description)> panels = PluginPanels;
-        foreach (var (packId, description) in panels)
-        {
-            if (string.Equals(description.Id, panelId, StringComparison.OrdinalIgnoreCase))
-            {
-                DismissMenu();
-                Ui.SoundOptions.Dismiss();
-                PlayUISound("ui_click");
-                OpenPluginPanel(packId, description);
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private static int? FindPanelIndex(
-        List<(string PackID, PanelDescription Description)> panels,
-        string packID,
-        string descriptionID)
-    {
-        for (int i = 0; i < panels.Count; i++)
-        {
-            if (string.Equals(panels[i].PackID, packID, StringComparison.Ordinal)
-                && string.Equals(panels[i].Description.Id, descriptionID, StringComparison.Ordinal))
-            {
-                return i;
-            }
-        }
-
-        return null;
-    }
 
     private void OpenPluginPanel(string packID, PanelDescription description, int? anchorID = null)
     {

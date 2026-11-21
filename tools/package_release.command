@@ -5,7 +5,7 @@
 #   tools/package_release.command [VERSION]
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
-version="${1:-0.5.3}"
+version="${1:-0.6.0}"
 build="$(date +%Y%m%d%H%M)"
 dist="$root/dist"
 target_app="$dist/Plumbob Engine.app"
@@ -39,7 +39,7 @@ if [[ ! -d "$publish_dir/Shaders" ]]; then
 fi
 cp -R "$publish_dir/Shaders" "$app/Contents/Resources/Shaders"
 mkdir -p "$app/Contents/Resources/Packs"
-for pack_name in lighting seasons; do
+for pack_name in lighting seasons cc-browser; do
   pack_src="$root/packs/$pack_name"
   if [[ ! -f "$pack_src/pack.json" ]]; then
     echo "error: missing bundled pack at $pack_src" >&2

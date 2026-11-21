@@ -170,6 +170,42 @@ public sealed class Wave17UserFeedbackRegressionTests
     }
 
     [Fact]
+    public void LiveOverlayMount_InvalidatesCacheWhenNewDownloadSubfolderIsAdded()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"sims-live-overlay-cache-{Guid.NewGuid():N}");
+        try
+        {
+            var gameRoot = Path.Combine(tempRoot, "game");
+            Directory.CreateDirectory(Path.Combine(gameRoot, "UIGraphics"));
+            File.WriteAllBytes(Path.Combine(gameRoot, "UIGraphics", "UIGraphics.far"),
+                [.. Encoding.ASCII.GetBytes("FAR!byAZ"), 1, 0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0]);
+            Directory.CreateDirectory(Path.Combine(gameRoot, "Downloads", "ExistingMod"));
+            File.WriteAllBytes(Path.Combine(gameRoot, "Downloads", "ExistingMod", "existing.iff"), [1, 2, 3]);
+
+            var packDir = Path.Combine(tempRoot, "pack");
+            Directory.CreateDirectory(Path.Combine(packDir, "files", "Downloads", "PackItem"));
+            File.WriteAllText(Path.Combine(packDir, "pack.json"), """{"schemaVersion":1,"id":"test.pack","name":"Test Pack","version":"1.0.0","baseGameVersion":"1.90","dependencies":[],"overrides":[]}""");
+            File.WriteAllBytes(Path.Combine(packDir, "files", "Downloads", "PackItem", "pack.txt"), [4, 5, 6]);
+
+            var content = new GameContent(gameRoot, [packDir]);
+            var mount = Path.Combine(tempRoot, "mount", "content");
+            content.Materialize(mount, cacheIdentity: "test-id", nativeOverlay: true);
+
+            Assert.True(content.ReusableMount(mount, "test-id"));
+            Assert.True(Directory.Exists(Path.Combine(mount, "Downloads", "ExistingMod")));
+
+            Directory.CreateDirectory(Path.Combine(gameRoot, "Downloads", "7dsgenerallee"));
+            File.WriteAllBytes(Path.Combine(gameRoot, "Downloads", "7dsgenerallee", "7dsgenerallee.iff"), [7, 8, 9]);
+
+            Assert.False(content.ReusableMount(mount, "test-id"));
+        }
+        finally
+        {
+            DeleteTempTree(tempRoot);
+        }
+    }
+
+    [Fact]
     public void CutawayAndDownWallModes_EmitLoweredWallCrossSectionCapsExcludingDoorways()
     {
         var gameDir = LocateGameDirectory();
@@ -1008,10 +1044,49 @@ public sealed class Wave17UserFeedbackRegressionTests
                         var house5 = overlay.Controls(vp, uiScale: 2f).Single(static c => c.Label.EndsWith(" 5", StringComparison.Ordinal));
                         Assert.Equal(5, overlay.HouseAt(new CGPoint(house5.Rect.MidX, house5.Rect.MidY), vp, uiScale: 2f));
                     }
+                    else if (mode == 2)
+                    {
+                        var controls = overlay.Controls(vp, uiScale: 2f);
+                        Assert.NotEmpty(controls);
+
+                        // House 26 (497, 221) is closer to the camera than House 27 (649, 145) and must be drawn AFTER House 27.
+                        var house26 = controls.Single(static c => c.Label.EndsWith(" 26", StringComparison.Ordinal));
+                        var house27 = controls.Single(static c => c.Label.EndsWith(" 27", StringComparison.Ordinal));
+                        int idx26 = -1, idx27 = -1;
+                        for (int k = 0; k < items.Count; k++)
+                        {
+                            if (Math.Abs(items[k].Rect.MidX - house26.Rect.MidX) < 48 && Math.Abs(items[k].Rect.MaxY - house26.Rect.MaxY) < 48)
+                                idx26 = k;
+                            if (Math.Abs(items[k].Rect.MidX - house27.Rect.MidX) < 48 && Math.Abs(items[k].Rect.MaxY - house27.Rect.MaxY) < 48)
+                                idx27 = k;
+                        }
+                        Assert.True(idx27 >= 0 && idx26 > idx27, $"Expected House 26 (idx={idx26}) drawn after House 27 (idx={idx27})");
+                    }
                     else
                     {
                         Assert.NotEmpty(overlay.Controls(vp, uiScale: 2f));
                     }
+                }
+
+                // Extended coastal/water maps emit a unified 2x HiDPI (2816x1584 on active wave frames) sea/river animation
+                // overlay matching the full 1408x792 extended rect; Studio Town has no sea.
+                var itemsT0 = overlay.DrawItems(viewports[0], uiScale: 2f, time: 0.0);
+                var itemsT1 = overlay.DrawItems(viewports[0], uiScale: 2f, time: 0.55);
+                if (mode is 1 or 2 or 3 or 7)
+                {
+                    Assert.True(itemsT0.Count >= 2 && itemsT1.Count >= 2);
+                    Assert.Equal(itemsT0[0].Rect, itemsT0[1].Rect);
+                    Assert.Equal(itemsT1[0].Rect, itemsT1[1].Rect);
+                    Assert.Equal(2816, itemsT1[1].Image.Texture.Width);
+                    Assert.Equal(1584, itemsT1[1].Image.Texture.Height);
+                    Assert.NotSame(itemsT0[1].Image.Texture, itemsT1[1].Image.Texture);
+                    // Must NOT emit a second overlapping 800x600 multi-frame wave layer before lot overlays
+                    if (itemsT1.Count > 2)
+                        Assert.NotEqual(800, itemsT1[2].Image.Texture.Width);
+                }
+                else if (mode == 5)
+                {
+                    Assert.DoesNotContain(itemsT1, static i => i.Image.Texture.Width == 2816 && i.Image.Texture.Height == 1584);
                 }
             }
         }

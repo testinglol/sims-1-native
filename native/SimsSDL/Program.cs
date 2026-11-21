@@ -1353,6 +1353,16 @@ internal static unsafe partial class Program
                             case SDL_EVENT_WINDOW_FOCUS_GAINED:
                                 live?.SetWindowActive(true);
                                 break;
+
+                            case SDL_EVENT_DROP_FILE:
+                            {
+                                string? droppedPath = Marshal.PtrToStringUTF8(ev.drop_data);
+                                if (!string.IsNullOrWhiteSpace(droppedPath))
+                                {
+                                    live?.FileDropped(droppedPath);
+                                }
+                                break;
+                            }
                         }
                     }
 

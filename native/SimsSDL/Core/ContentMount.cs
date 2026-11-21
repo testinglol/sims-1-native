@@ -38,9 +38,22 @@ public sealed partial class GameContent
             return false;
         }
 
+        if (cache.SourceFingerprint.StartsWith("live-base:", StringComparison.Ordinal))
+        {
+            try
+            {
+                var baseRoot = PackContentPaths.ResolveSymlinksInPath(Root);
+                return string.Equals(cache.SourceFingerprint, ComputeLiveOverlayFingerprint(baseRoot), StringComparison.Ordinal);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         if (string.Equals(cache.SourceFingerprint, "live-base", StringComparison.Ordinal))
         {
-            return true;
+            return false;
         }
 
         return string.Equals(cache.SourceFingerprint, ComputeSourceFingerprint(), StringComparison.Ordinal);
@@ -150,7 +163,7 @@ public sealed partial class GameContent
 
             if (cacheIdentity is not null)
             {
-                var fingerprint = usesLiveBase ? "live-base" : ComputeFingerprint(sourceEntries);
+                var fingerprint = usesLiveBase ? ComputeLiveOverlayFingerprint(baseRoot) : ComputeFingerprint(sourceEntries);
                 var cacheObj = new JsonObject
                 {
                     ["identity"] = cacheIdentity,
@@ -175,6 +188,65 @@ public sealed partial class GameContent
                 }
             }
         }
+    }
+
+    private string ComputeLiveOverlayFingerprint(string baseRoot)
+    {
+        var paths = new List<OverlayPath>(Packs.Assets.Count);
+        foreach (var key in Packs.Assets.Keys)
+        {
+            var authoredStr = Packs.AuthoredPaths.TryGetValue(key, out var raw) ? raw : key;
+            var names = authoredStr.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            var keys = PackContentPaths.ResourceKey(key).Split('/', StringSplitOptions.RemoveEmptyEntries);
+            paths.Add(new OverlayPath(keys, names));
+        }
+
+        var grouped = paths
+            .GroupBy(static p => p.Keys[0], StringComparer.Ordinal)
+            .ToDictionary(static g => g.Key, static g => g.ToList(), StringComparer.Ordinal);
+
+        var entries = new List<string>();
+        void Visit(string sourceDir, string relPrefix, Dictionary<string, List<OverlayPath>> groups)
+        {
+            if (!Directory.Exists(sourceDir))
+            {
+                return;
+            }
+
+            foreach (var child in Directory.EnumerateFileSystemEntries(sourceDir).OrderBy(static p => p, StringComparer.Ordinal))
+            {
+                var name = Path.GetFileName(child);
+                if (relPrefix.Length == 0 &&
+                    (name == "plugin" ||
+                     name == ".plugins" ||
+                     name == ".pack-stack.json" ||
+                     name == ".content-cache.json" ||
+                     IsNeighborhoodRoot(name)))
+                {
+                    continue;
+                }
+
+                var rel = relPrefix.Length == 0 ? name : relPrefix + "/" + name;
+                entries.Add(rel);
+
+                var key = PackContentPaths.ResourceKey(name);
+                if (groups.TryGetValue(key, out var nested) &&
+                    nested.Any(static p => p.Keys.Length > 1) &&
+                    Directory.Exists(child) &&
+                    !PackContentPaths.IsSymbolicLink(child))
+                {
+                    var subGroups = nested
+                        .Where(static p => p.Keys.Length > 1)
+                        .Select(static p => new OverlayPath(p.Keys[1..], p.Names[1..]))
+                        .GroupBy(static p => p.Keys[0], StringComparer.Ordinal)
+                        .ToDictionary(static g => g.Key, static g => g.ToList(), StringComparer.Ordinal);
+                    Visit(child, rel, subGroups);
+                }
+            }
+        }
+
+        Visit(baseRoot, string.Empty, grouped);
+        return "live-base:" + ComputeFingerprint(entries);
     }
 
     private void MaterializeLiveOverlay(string baseRoot, string staging)

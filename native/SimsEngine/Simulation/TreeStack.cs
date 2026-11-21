@@ -63,6 +63,18 @@ public abstract class TreeStack
 
     public StackFrame? Top => Frames.Count == 0 ? null : Frames[^1];
 
+    /// <summary>Returns the top frame of the base execution stack (below any nested-run sentinel frame),
+    /// matching <c>TreeSim::PrimitiveFrame</c>.</summary>
+    public StackFrame? PrimitiveFrame()
+    {
+        var start = 0;
+        while (start < Frames.Count && Frames[start].TreeId == -1) start++;
+        if (start >= Frames.Count) return null;
+        for (var i = start; i < Frames.Count; i++)
+            if (Frames[i].TreeId == -1) return Frames[i - 1];
+        return Frames[^1];
+    }
+
     /// <summary>Returns the logical stack depth, ensuring synchronous nested trees evaluate at depths above
     /// the object's active stack rather than resetting to zero.</summary>
     public virtual int EffectiveDepth => Frames.Count;
@@ -77,8 +89,13 @@ public abstract class TreeStack
 
     protected virtual void EndRunToReturn(object? state) { }
 
-    protected virtual StepResult Breakpoint(StackFrame frame, BhavInstruction? instruction) =>
-        throw new SimulationException(SimulationError.TreeBreakEncountered);
+    /// <summary>Handles an Edith debugger breakpoint bit (0x8000) on a frame or instruction. Matches retail
+    /// <c>TreeSim::Vfn03</c> by clearing the frame breakpoint flag and continuing execution.</summary>
+    protected virtual StepResult Breakpoint(StackFrame frame, BhavInstruction? instruction)
+    {
+        frame.TreeBreakpoint = false;
+        return StepCore(checkBreakpoints: false);
+    }
 
     public bool Push(ITreeTable? table, ReadOnlySpan<short> parameters, bool useDefault, short treeId, short codeOwner = 0)
     {
@@ -147,7 +164,9 @@ public abstract class TreeStack
         return values;
     }
 
-    public StepResult Step()
+    public StepResult Step() => StepCore(checkBreakpoints: true);
+
+    private StepResult StepCore(bool checkBreakpoints)
     {
         var frame = Top ?? throw new TreeRunException(TreeRunError.ReturnFromLastFrame);
         if (frame.Table is null)
@@ -155,7 +174,7 @@ public abstract class TreeStack
             Pop();
             return StepResult.Continue;
         }
-        if (frame.TreeBreakpoint) return Breakpoint(frame, null);
+        if (checkBreakpoints && frame.TreeBreakpoint) return Breakpoint(frame, null);
         var index = frame.Instruction;
         if (index is < 0 or > 0xFA)
         {
@@ -167,7 +186,7 @@ public abstract class TreeStack
         var tree = frame.Tree as Bhav;
         if (tree is null || index >= tree.Instructions.Count) throw new TreeRunException(TreeRunError.TreeOrInstructionMissing);
         var instruction = tree.Instructions[index];
-        if (instruction.Breakpoint) return Breakpoint(frame, instruction);
+        if (checkBreakpoints && instruction.Breakpoint) return Breakpoint(frame, instruction);
         if (++Steps >= StepLimit) throw new TreeRunException(TreeRunError.StepLimit, $"tree {frame.TreeId}, instruction {index}, stack {frame.StackObject}");
         if (instruction.Opcode < 0x100)
         {

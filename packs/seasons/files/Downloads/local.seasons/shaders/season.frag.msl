@@ -1338,4 +1338,3 @@ fragment main0_out main0(constant Ambient& ambient [[buffer(0)]], texture2d<floa
     out.color = float4(result, 1.0);
     return out;
 }
-

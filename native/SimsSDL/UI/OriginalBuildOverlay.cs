@@ -741,13 +741,14 @@ public sealed class OriginalBuildOverlay
         }
     }
 
-    public (OriginalCatalogPopup.Item Item, OriginalGameplayOverlay.Part Icon)? PopupAt(CGPoint point, CGSize canvas)
+    public (OriginalCatalogPopup.Item Item, OriginalGameplayOverlay.Part Icon, double AnchorMidX)? PopupAt(CGPoint point, CGSize canvas)
     {
         if (TerrainMode is not null)
         {
             for (int i = 0; i < TerrainModes.Length; i++)
             {
-                if (!Contains(OriginalBuildLayout.Thumbnail(i, canvas), point))
+                var thumbRect = OriginalBuildLayout.Thumbnail(i, canvas);
+                if (!Contains(thumbRect, point))
                     continue;
 
                 var mode = TerrainModes[i].Mode;
@@ -755,7 +756,8 @@ public sealed class OriginalBuildOverlay
                 var preview = _terrainModePreviews[i];
                 return (
                     new OriginalCatalogPopup.Item(info.Name, info.Price, info.Description, []),
-                    new OriginalGameplayOverlay.Part(preview, new CGRect(CGPoint.Zero, preview.Size)));
+                    new OriginalGameplayOverlay.Part(preview, new CGRect(CGPoint.Zero, preview.Size)),
+                    thumbRect.MidX);
             }
             return null;
         }
@@ -766,7 +768,8 @@ public sealed class OriginalBuildOverlay
             int count = Math.Min(objPage.Items.Count, capacity);
             for (int i = 0; i < count; i++)
             {
-                if (!Contains(OriginalBuildLayout.Thumbnail(i, canvas), point))
+                var thumbRect = OriginalBuildLayout.Thumbnail(i, canvas);
+                if (!Contains(thumbRect, point))
                     continue;
 
                 var item = objPage.Items[i];
@@ -774,7 +777,8 @@ public sealed class OriginalBuildOverlay
                 var icon = i < _icons.Count ? _icons[i] : null;
                 return (
                     new OriginalCatalogPopup.Item(item.Name, item.Price, item.Description, item.Ratings ?? []),
-                    Icon(preview ?? icon, preview is null ? item.Icon : item.Preview, _unknown));
+                    Icon(preview ?? icon, preview is null ? item.Icon : item.Preview, _unknown),
+                    thumbRect.MidX);
             }
             return null;
         }
@@ -783,13 +787,15 @@ public sealed class OriginalBuildOverlay
         {
             for (int i = 0; i < 4; i++)
             {
-                if (Contains(RoofPitchControl(i, canvas), point))
+                var pitchRect = RoofPitchControl(i, canvas);
+                if (Contains(pitchRect, point))
                 {
                     string title = _strings.RoofString(14, "Roof Pitch");
                     string desc = _strings.RoofString(15, string.Empty);
                     return (
                         new OriginalCatalogPopup.Item(title, 0, desc, []),
-                        new OriginalGameplayOverlay.Part(_roofPitchPreview, new CGRect(CGPoint.Zero, _roofPitchPreview.Size)));
+                        new OriginalGameplayOverlay.Part(_roofPitchPreview, new CGRect(CGPoint.Zero, _roofPitchPreview.Size)),
+                        pitchRect.MidX);
                 }
             }
 
@@ -799,7 +805,8 @@ public sealed class OriginalBuildOverlay
             int roofCount = Math.Min(roofPage.Items.Count, capacity);
             for (int i = 0; i < roofCount; i++)
             {
-                if (!Contains(RoofThumbnail(i, canvas), point))
+                var roofThumbRect = RoofThumbnail(i, canvas);
+                if (!Contains(roofThumbRect, point))
                     continue;
 
                 string title = _strings.RoofString(16, "Roof Patterns");
@@ -807,7 +814,8 @@ public sealed class OriginalBuildOverlay
                 var previewImage = (i < _previews.Count ? _previews[i] : null) ?? _roofPatternFallbackPreview;
                 return (
                     new OriginalCatalogPopup.Item(title, 0, desc, []),
-                    new OriginalGameplayOverlay.Part(previewImage, new CGRect(CGPoint.Zero, previewImage.Size)));
+                    new OriginalGameplayOverlay.Part(previewImage, new CGRect(CGPoint.Zero, previewImage.Size)),
+                    roofThumbRect.MidX);
             }
             return null;
         }
@@ -818,7 +826,8 @@ public sealed class OriginalBuildOverlay
         int pageCount = Math.Min(currentPage.Items.Count, capacity);
         for (int i = 0; i < pageCount; i++)
         {
-            if (!Contains(OriginalBuildLayout.Thumbnail(i, canvas), point))
+            var thumbRect = OriginalBuildLayout.Thumbnail(i, canvas);
+            if (!Contains(thumbRect, point))
                 continue;
 
             var item = currentPage.Items[i];
@@ -827,7 +836,8 @@ public sealed class OriginalBuildOverlay
                 var preview = item.Id == 65535 ? _poolPopupPreview : _waterPopupPreview;
                 return (
                     new OriginalCatalogPopup.Item(item.Name, item.Price, item.Description, []),
-                    new OriginalGameplayOverlay.Part(preview, new CGRect(CGPoint.Zero, preview.Size)));
+                    new OriginalGameplayOverlay.Part(preview, new CGRect(CGPoint.Zero, preview.Size)),
+                    thumbRect.MidX);
             }
 
             var previewImg = i < _previews.Count ? _previews[i] : null;
@@ -839,7 +849,8 @@ public sealed class OriginalBuildOverlay
                     item.Description,
                     [],
                     Kind == BuildCatalogPage.CatalogKind.Floor && item.Guid is null),
-                Icon(previewImg ?? iconImg, previewImg is null ? item.Icon : item.Preview, _unknown));
+                Icon(previewImg ?? iconImg, previewImg is null ? item.Icon : item.Preview, _unknown),
+                thumbRect.MidX);
         }
 
         return null;

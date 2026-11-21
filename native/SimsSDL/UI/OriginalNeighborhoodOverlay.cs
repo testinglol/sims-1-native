@@ -652,6 +652,7 @@ public sealed class OriginalNeighborhoodOverlay
     public string? Music { get; }
     public string? AmbientSound { get; }
     private readonly House[] _houses;
+    private readonly House[] _housesBackToFront;
     private readonly IReadOnlyList<Manifest.Entry> _entries;
 
     public IReadOnlyList<OriginalFamilyPickerOverlay.Family> Families { get; }
@@ -975,7 +976,11 @@ public sealed class OriginalNeighborhoodOverlay
 
         byte[] backgroundPixels = (byte[])backgroundBitmap.Rgba.Clone();
         bool supportsExtendedBackdrop = ExtendedNeighborhoodBackdrop.Supports(content, manifest.BackgroundResource);
-        var animations = new Animation[manifest.AnimationLayers.Count];
+        SimsBitmap? rawBaseForWaves = supportsExtendedBackdrop || manifest.BackgroundImagePath is not null
+            ? new SimsBitmap(content.Read(manifest.BackgroundResource))
+            : null;
+        var rawLayerBitmaps = new SimsBitmap[manifest.AnimationLayers.Count][];
+        var layerOffsets = new (int Ox, int Oy)[manifest.AnimationLayers.Count];
         for (int layerIdx = 0; layerIdx < manifest.AnimationLayers.Count; layerIdx++)
         {
             var layer = manifest.AnimationLayers[layerIdx];
@@ -987,55 +992,55 @@ public sealed class OriginalNeighborhoodOverlay
 
             int ox = (int)Math.Round(layer.PositionX, MidpointRounding.AwayFromZero);
             int oy = (int)Math.Round(layer.PositionY, MidpointRounding.AwayFromZero);
-            bool firstFrameComposited = false;
-            bool featherEdges = supportsExtendedBackdrop;
-            var frames = new OriginalGameplayOverlay.Image[layer.FrameResources.Count];
+            var rawBitmaps = new SimsBitmap[layer.FrameResources.Count];
             for (int frameIdx = 0; frameIdx < layer.FrameResources.Count; frameIdx++)
             {
                 var bitmap = new SimsBitmap(content.Read(layer.FrameResources[frameIdx]));
                 if (bitmap.Width > 4096 || bitmap.Height > 4096)
                     throw new ContentError("Neighborhood animation frame exceeds 4096 pixels");
-
-                if (!firstFrameComposited)
-                {
-                    firstFrameComposited = true;
-                    for (int y = 0; y < bitmap.Height; y++)
-                    {
-                        int dy = oy + y;
-                        if (dy < 0 || dy >= backgroundBitmap.Height)
-                            continue;
-                        for (int x = 0; x < bitmap.Width; x++)
-                        {
-                            int dx = ox + x;
-                            if (dx < 0 || dx >= backgroundBitmap.Width)
-                                continue;
-                            int src = (y * bitmap.Width + x) * 4;
-                            byte r = bitmap.Rgba[src], g = bitmap.Rgba[src + 1], b = bitmap.Rgba[src + 2];
-                            if (r >= 180 && g <= 70 && b >= 180)
-                                continue;
-                            int dst = (dy * backgroundBitmap.Width + dx) * 4;
-                            backgroundPixels[dst] = r;
-                            backgroundPixels[dst + 1] = g;
-                            backgroundPixels[dst + 2] = b;
-                            backgroundPixels[dst + 3] = 255;
-                        }
-                    }
-                }
-
-                frames[frameIdx] = featherEdges
-                    ? ExtendedNeighborhoodBackdrop.CreateFeatheredAnimationFrame(
-                        device,
-                        bitmap,
-                        ox,
-                        oy,
-                        backgroundBitmap.Width,
-                        backgroundBitmap.Height)
-                    : OriginalGameplayOverlay.CreateImage(device, bitmap.Width, bitmap.Height, bitmap.Rgba, magenta: true);
+                rawBitmaps[frameIdx] = bitmap;
             }
+            rawLayerBitmaps[layerIdx] = rawBitmaps;
+            layerOffsets[layerIdx] = (ox, oy);
 
-            animations[layerIdx] = new Animation(new CGPoint(layer.PositionX, layer.PositionY), frames);
+            // Composite frame[0] onto backgroundPixels, preserving plugin seasonal tint when BackgroundImagePath is set.
+            var firstBmp = rawBitmaps[0];
+            bool hasPluginBg = manifest.BackgroundImagePath is not null
+                && rawBaseForWaves is not null
+                && rawBaseForWaves.Width == backgroundBitmap.Width
+                && rawBaseForWaves.Height == backgroundBitmap.Height;
+            for (int y = 0; y < firstBmp.Height; y++)
+            {
+                int dy = oy + y;
+                if (dy < 0 || dy >= backgroundBitmap.Height)
+                    continue;
+                for (int x = 0; x < firstBmp.Width; x++)
+                {
+                    int dx = ox + x;
+                    if (dx < 0 || dx >= backgroundBitmap.Width)
+                        continue;
+                    int src = (y * firstBmp.Width + x) * 4;
+                    byte r = firstBmp.Rgba[src], g = firstBmp.Rgba[src + 1], b = firstBmp.Rgba[src + 2];
+                    if (r >= 180 && g <= 70 && b >= 180)
+                        continue;
+                    int dst = (dy * backgroundBitmap.Width + dx) * 4;
+                    if (hasPluginBg && rawBaseForWaves is not null)
+                    {
+                        backgroundPixels[dst] = (byte)Math.Clamp(backgroundPixels[dst] + (r - rawBaseForWaves.Rgba[dst]), 0, 255);
+                        backgroundPixels[dst + 1] = (byte)Math.Clamp(backgroundPixels[dst + 1] + (g - rawBaseForWaves.Rgba[dst + 1]), 0, 255);
+                        backgroundPixels[dst + 2] = (byte)Math.Clamp(backgroundPixels[dst + 2] + (b - rawBaseForWaves.Rgba[dst + 2]), 0, 255);
+                    }
+                    else
+                    {
+                        backgroundPixels[dst] = r;
+                        backgroundPixels[dst + 1] = g;
+                        backgroundPixels[dst + 2] = b;
+                    }
+                    backgroundPixels[dst + 3] = 255;
+                }
+            }
         }
-        _animations = animations;
+
         _extendedBackground = supportsExtendedBackdrop
             ? ExtendedNeighborhoodBackdrop.TryCreate(
                 content,
@@ -1047,6 +1052,41 @@ public sealed class OriginalNeighborhoodOverlay
                 backgroundBitmap.Height,
                 manifest.AnimationLayers)
             : null;
+
+        var animations = new Animation[manifest.AnimationLayers.Count];
+        for (int layerIdx = 0; layerIdx < manifest.AnimationLayers.Count; layerIdx++)
+        {
+            var layer = manifest.AnimationLayers[layerIdx];
+            var rawBitmaps = rawLayerBitmaps[layerIdx];
+            var (ox, oy) = layerOffsets[layerIdx];
+
+            if (_extendedBackground is { } extBg
+                && rawBitmaps.Length > 1
+                && rawBaseForWaves is not null
+                && ExtendedNeighborhoodBackdrop.TryCreateExtendedWaterFrames(
+                    device,
+                    extBg,
+                    rawBaseForWaves,
+                    rawBitmaps,
+                    ox,
+                    oy) is { } extendedFrames)
+            {
+                animations[layerIdx] = new Animation(
+                    new CGPoint(ExtendedNeighborhoodBackdrop.LogicalOffsetX, ExtendedNeighborhoodBackdrop.LogicalOffsetY),
+                    extendedFrames);
+            }
+            else
+            {
+                var frames = new OriginalGameplayOverlay.Image[rawBitmaps.Length];
+                for (int frameIdx = 0; frameIdx < rawBitmaps.Length; frameIdx++)
+                {
+                    var bitmap = rawBitmaps[frameIdx];
+                    frames[frameIdx] = OriginalGameplayOverlay.CreateImage(device, bitmap.Width, bitmap.Height, bitmap.Rgba, magenta: true);
+                }
+                animations[layerIdx] = new Animation(new CGPoint(layer.PositionX, layer.PositionY), frames);
+            }
+        }
+        _animations = animations;
 
         _outerFill = OriginalGameplayOverlay.CreateImage(device, 1, 1, [0, 50, 0, 255]);
         // Loads a wide background backdrop behind the centered 800x600 neighborhood map when the display
@@ -1202,6 +1242,11 @@ public sealed class OriginalNeighborhoodOverlay
             houses[entryIdx] = new House(entry, closed, open, hitRect, memberPortraits);
         }
         _houses = houses;
+        _housesBackToFront = houses
+            .OrderBy(static h => h.Entry.Y)
+            .ThenBy(static h => h.Entry.X)
+            .ThenBy(static h => h.Entry.House)
+            .ToArray();
     }
 
     public static int? NeighborhoodAfter(int current, IReadOnlyList<int> installed, bool forward)
@@ -1295,14 +1340,14 @@ public sealed class OriginalNeighborhoodOverlay
 
         int? bestHouse = null;
         double bestDistSq = double.PositiveInfinity;
-        foreach (var house in _houses)
+        foreach (var house in _housesBackToFront)
         {
             if (!house.HitRect.Contains(logical))
                 continue;
             double dx = logical.X - house.HitRect.MidX;
             double dy = logical.Y - house.HitRect.MidY;
             double distSq = dx * dx + dy * dy;
-            if (distSq < bestDistSq)
+            if (distSq <= bestDistSq)
             {
                 bestDistSq = distSq;
                 bestHouse = house.Entry.House;
@@ -2111,13 +2156,12 @@ public sealed class OriginalNeighborhoodOverlay
 
         if (_extendedBackground is { } extendedBackground)
         {
-            items.Add(new DrawItem(
-                extendedBackground.Image,
-                new CGRect(
-                    left + extendedBackground.OffsetX * factor,
-                    top + extendedBackground.OffsetY * factor,
-                    extendedBackground.Width * factor,
-                    extendedBackground.Height * factor)));
+            var extendedRect = new CGRect(
+                left + extendedBackground.OffsetX * factor,
+                top + extendedBackground.OffsetY * factor,
+                extendedBackground.Width * factor,
+                extendedBackground.Height * factor);
+            items.Add(new DrawItem(extendedBackground.Image, extendedRect));
         }
         else
         {
@@ -2147,6 +2191,9 @@ public sealed class OriginalNeighborhoodOverlay
 
         void AppendAnimations(bool multiFrame)
         {
+            double animElapsed = time.HasValue && time.Value < _startedAt * 0.5
+                ? Math.Max(0.0, time.Value)
+                : Math.Max(0.0, now - _startedAt);
             foreach (var animation in _animations)
             {
                 int count = animation.Frames.Count;
@@ -2154,7 +2201,7 @@ public sealed class OriginalNeighborhoodOverlay
                     continue;
                 int totalFrames = _pulsate ? count * 2 - 2 : count;
                 int cycleFrames = Math.Max(1, totalFrames);
-                double phase = Math.Max(0.0, now - _startedAt) / _frameDuration;
+                double phase = animElapsed / _frameDuration;
                 int frame = (int)phase % cycleFrames;
                 int current = frame < count ? frame : Math.Max(0, totalFrames - frame);
                 var currentImage = animation.Frames[current];
@@ -2171,7 +2218,10 @@ public sealed class OriginalNeighborhoodOverlay
         // Composites multi-frame water wave animations onto the map background before drawing lot overlays.
         AppendAnimations(multiFrame: true);
 
-        foreach (var house in _houses)
+        // Draw lots in isometric back-to-front painter's order (ascending Y, then X) so foreground multi-story
+        // roofs (e.g. Downtown House 26 at y=221) properly occlude rear lawns (e.g. House 27 at y=145).
+        DrawItem? hoveredVacationBadge = null;
+        foreach (var house in _housesBackToFront)
         {
             var entry = house.Entry;
             double scale = factor / _houseScale;
@@ -2194,12 +2244,15 @@ public sealed class OriginalNeighborhoodOverlay
                 {
                     double markW = mark.Size.Width * scale;
                     double markH = mark.Size.Height * scale;
-                    items.Add(new DrawItem(
+                    hoveredVacationBadge = new DrawItem(
                         mark,
-                        new CGRect(openRect.MidX - markW / 2.0, openRect.MidY - markH / 2.0, markW, markH)));
+                        new CGRect(openRect.MidX - markW / 2.0, openRect.MidY - markH / 2.0, markW, markH));
                 }
             }
         }
+
+        if (hoveredVacationBadge is { } vacationBadge)
+            items.Add(vacationBadge);
 
         // Renders single-frame scenery overlay animations above house graphics.
         AppendAnimations(multiFrame: false);

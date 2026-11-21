@@ -1141,7 +1141,8 @@ public sealed class LiveUI
             {
                 double totalCols = panelSlices.LeftBodyWidth + panelSlices.StretchBodyWidth + panelSlices.RightCapWidth;
                 int vecPanelW = Math.Max(64, (int)Math.Round(totalCols));
-                var vecPanelTex = SimsVectorUiKit.ToTexture(SimsVectorUiKit.RenderLivePanelBack(vecPanelW, 100, scale: 3));
+                float buyGradientSpan = BuyMode ? 248f + (float)OriginalBuyLayout.ExtraLeftWidth(Buy.PluginViews.Count) : 248f;
+                var vecPanelTex = SimsVectorUiKit.ToTexture(SimsVectorUiKit.RenderLivePanelBack(vecPanelW, 100, scale: 3, gradientSpan: buyGradientSpan));
                 draws.Add(new UIDraw(
                     vecPanelTex,
                     new Vector4(panelOriginX, panelTopY, (float)totalCols * scale, panelHeight)));

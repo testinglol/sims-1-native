@@ -209,12 +209,12 @@ public class TreeRunnerTests
     }
 
     [Fact]
-    public void BreakpointBitCallsTheBreakpointHandler()
+    public void BreakpointBitClearsAndContinuesInRetailMode()
     {
         var context = World(out var me);
         var tree = Tree(0, (0x8002, 0xFE, 0xFF, Expr(3, 7, 5)));
-        Assert.Equal(SimulationError.TreeBreakEncountered, Fails(() => { TreeRunner.Run(context, tree); }));
-        Assert.Equal(0, me.Temporaries[3]);
+        Assert.True(TreeRunner.Run(context, tree));
+        Assert.Equal(7, me.Temporaries[3]);
     }
 
     [Fact]

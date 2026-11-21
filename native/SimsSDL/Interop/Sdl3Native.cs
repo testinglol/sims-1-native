@@ -124,6 +124,7 @@ public static unsafe partial class Sdl3Native
     public const uint SDL_EVENT_MOUSE_BUTTON_DOWN = 0x401u;
     public const uint SDL_EVENT_MOUSE_BUTTON_UP = 0x402u;
     public const uint SDL_EVENT_MOUSE_WHEEL = 0x403u;
+    public const uint SDL_EVENT_DROP_FILE = 0x1000u;
 
     public const uint SDL_MESSAGEBOX_ERROR = 0x10u;
     public const uint SDL_MESSAGEBOX_WARNING = 0x20u;
@@ -270,6 +271,8 @@ public static unsafe partial class Sdl3Native
         [FieldOffset(28)] public float wheel_y;
 
         [FieldOffset(24)] public nint text_text;
+
+        [FieldOffset(40)] public nint drop_data;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -747,6 +750,12 @@ public static unsafe partial class Sdl3Native
         out SDL_AudioSpec spec,
         out byte* audio_buf,
         out uint audio_len);
+
+    public const string SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES = "SDL_AUDIO_DEVICE_SAMPLE_FRAMES";
+
+    [LibraryImport(LibraryName, StringMarshalling = StringMarshalling.Utf8)]
+    [return: MarshalAs(UnmanagedType.U1)]
+    public static partial bool SDL_SetHint(string name, string value);
 
     [LibraryImport(LibraryName)]
     public static partial nint SDL_OpenAudioDeviceStream(

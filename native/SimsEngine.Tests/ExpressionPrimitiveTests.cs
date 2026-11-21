@@ -336,7 +336,30 @@ public sealed class ExpressionPrimitiveTests
     }
 
     [Fact]
-    public void ExpressionLockoutReadCopiesNonnegativeWaitCellToCurrentFrameParameterZero()
+    public void LockoutReadFlushesNonnegativeWaitCellToSleepingTargetParameterZero()
+    {
+        var (context, me, chair) = World();
+        chair[ObjectData.LockoutCount] = 4;
+        context.World.ClockManager.SetWaitTicksAt(chair.ClockManagerIndex, 8);
+        var iff = new IffFile(ChunkBuilder.File(("BHAV", 4096,
+            new ChunkBuilder().U16(0x8002).S16(1).U8(0).U8(1).U8(0).U8(0).U32(0)
+                .U16(0).U8(0xFE).U8(0xFF).Raw(new byte[8]).ToArray())), "Sleep.iff");
+        var sleepTree = Bhav.Read(iff, iff.Chunks[0]);
+        var chairStack = TreeRunner.CreateTransientStack(context.World, chair);
+        var chairFrame = new StackFrame(0, [99], []) { Tree = sleepTree, TreeId = 4096, Instruction = 0 };
+        chairStack.RestoreFrame(chairFrame);
+        context.World.SavedExecutionStacks[chair.Id] = chairStack;
+
+        Assert.True(Run(context, DataOwner.StackObject, (short)ObjectData.LockoutCount,
+            ExpressionOperator.EqualTo, DataOwner.Literal, 4));
+
+        Assert.Equal((short)5, context.Frame.Parameters[0]);
+        Assert.Equal((short)8, chairFrame.Parameters[0]);
+        Assert.Equal((short)-2, context.World.ClockManager.WaitTicksAt(chair.ClockManagerIndex));
+    }
+
+    [Fact]
+    public void LockoutReadDoesNotCopyWaitCellWhenTargetIsNotSleeping()
     {
         var (context, me, _) = World();
         me[ObjectData.LockoutCount] = 4;
@@ -344,19 +367,6 @@ public sealed class ExpressionPrimitiveTests
 
         Assert.True(Run(context, DataOwner.My, (short)ObjectData.LockoutCount,
             ExpressionOperator.EqualTo, DataOwner.Literal, 4));
-
-        Assert.Equal((short)8, context.Frame.Parameters[0]);
-        Assert.Equal((short)-2, context.World.ClockManager.WaitTicksAt(me.ClockManagerIndex));
-    }
-
-    [Fact]
-    public void NonExpressionLockoutReadDoesNotCopyWaitCellToFrameParameter()
-    {
-        var (context, me, _) = World();
-        me[ObjectData.LockoutCount] = 4;
-        context.World.ClockManager.SetWaitTicksAt(me.ClockManagerIndex, 8);
-
-        Assert.Equal((short)4, Variables.Get(context, DataOwner.My, (short)ObjectData.LockoutCount));
 
         Assert.Equal((short)5, context.Frame.Parameters[0]);
         Assert.Equal((short)-2, context.World.ClockManager.WaitTicksAt(me.ClockManagerIndex));
@@ -544,12 +554,12 @@ public sealed class ExpressionPrimitiveTests
     }
 
     [Fact]
-    public void StackObjectFunctionReturnsTheNativeActionFunctionId()
+    public void StackObjectFunctionReturnsBooleanPresenceOfActionFunction()
     {
         var (context, _, stackObject) = World();
         stackObject.TypeRecord = new TypeRecord(0x1234) { FunctionTable = [0, 0x2345, 0x4567] };
 
-        Assert.Equal((short)0x4567, Variables.Get(context, DataOwner.StackObjectFunction, 2));
+        Assert.Equal((short)1, Variables.Get(context, DataOwner.StackObjectFunction, 2));
         Assert.Equal((short)0, Variables.Get(context, DataOwner.StackObjectFunction, 3));
     }
 

@@ -38,6 +38,8 @@ __pycache__/
 /packs/*
 !/packs/lighting/
 !/packs/seasons/
+!/packs/cc-browser/
+/ChunkStore/
 /.agents/
 /.claude/
 /AGENTS.md

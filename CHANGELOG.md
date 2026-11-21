@@ -2,6 +2,27 @@
 
 All notable changes to **Plumbob Engine** are documented in this file.
 
+## [0.6.0] - 2026-11-21
+
+### Plugin API v5 & CC Folder Browser
+- **Plugin API v5 (`IPluginBuyCatalogProvider`)**: Added Buy Mode plugin catalog view support (`PluginBuyCatalogView`, `PluginBuyCollection`, `PluginCatalogObject`), allowing plugins to register custom Buy Mode tabs, hotkeys, and collection views alongside the standard catalog.
+- **Bundled CC Folder Browser Pack (`local.cc-browser`, Disabled by Default)**: Ships preinstalled inside standalone releases (`Packs/cc-browser`) with `"defaultEnabled": false` so it stays off until toggled on in the in-game **Mods** menu. When enabled, adds a Buy Mode **Folders** tab (`F`) grouping custom content from `Downloads/` and `GameData/UserObjects/` by subfolder.
+- **Per-Pack `defaultEnabled` Manifest Support**: Added optional `defaultEnabled` flag to `pack.json` manifests so bundled packs can ship ready to toggle in the Mods menu without activating on first launch.
+
+### Mod Manager & Chunk Store Ingestion
+- **Drag-and-Drop Custom Content Import (`ChunkCasStore` & `IffChunkValidator`)**: Added validated `.iff` and `.hod` drag-and-drop import into the Mods menu with content-addressed chunk deduplication, clean IFF reconstruction, and GUID collision warnings.
+
+### Extended Neighborhood Backdrops & UI
+- **Enhanced 4K Extended Neighborhood Backdrops**: Improved seasonal tint preservation, water/wave animation layer compositing, back-to-front house sorting, and Buy/Build/Mods overlay layouts.
+
+### Windows Audio, SimAntics VM & Avatar Rendering
+- **Fixed Windows Audio Underruns / Crackling**: Added a 2048-frame WASAPI buffer hint, initial pre-buffering, and a 1024-frame minimum mix chunk on Windows in `SDLAudioPlayer` for smooth shared-mode WASAPI (and Wine/CrossOver) playback.
+- **Fixed Edith Debugger Breakpoint Bit (`0x8000`) Handling**: Updated `TreeStack` to match retail `TreeSim::Vfn03` by clearing frame breakpoint flags and continuing execution instead of throwing `TreeBreakEncountered`, plus added `PrimitiveFrame()` and variable/expression resolution fixes.
+- **Fixed Dark/Inverted Avatar Blend Normals**: Updated `AvatarSceneGeometry` to blend only vertex positions (preserving primary bone normals) so original SKN/BMF blend vertices no longer produce inverted lighting seams.
+- **Seasons Pack Cleanup**: Removed legacy `almanac.json` and `settings.json` panel files and updated `LocalSeasons.dll` and resource hashes.
+
+---
+
 ## [0.5.3] - 2026-11-20
 
 ### Save & Neighborhood Compatibility

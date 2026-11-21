@@ -4,7 +4,7 @@
 #   tools/package_linux.sh [VERSION]
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
-version="${1:-0.5.3}"
+version="${1:-0.6.0}"
 dist="$root/dist"
 stage_root="$root/.package-staging/linux-x64"
 stage="$stage_root/Plumbob Engine"
@@ -68,7 +68,7 @@ if [[ -f "$root/dist/sims1-icon.png" ]]; then
   cp "$root/dist/sims1-icon.png" "$stage/sims1-icon.png"
 fi
 mkdir -p "$stage/Packs"
-for pack_name in lighting seasons; do
+for pack_name in lighting seasons cc-browser; do
   pack_src="$root/packs/$pack_name"
   if [[ ! -f "$pack_src/pack.json" ]]; then
     echo "error: missing bundled pack at $pack_src" >&2

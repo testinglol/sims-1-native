@@ -18,6 +18,7 @@ internal sealed class PluginHost : IDisposable
     private sealed record TrustEntry(string PackId, string Version, string Sha256);
     private sealed record TrustFile(int SchemaVersion, TrustEntry[] Plugins);
     internal sealed record EnvironmentState(string PackId, string AssetRoot, string Scope, PluginEnvironment Effect);
+    internal sealed record BuyCatalogViewEntry(string PackId, PluginBuyCatalogView View);
     private sealed record NeighborhoodRecord(string PackVersion, int StateVersion, Dictionary<string, string> Values);
 
     public interface IPluginWorld
@@ -425,6 +426,36 @@ internal sealed class PluginHost : IDisposable
         return new { accepted = !plugin.Failed };
     }
 
+    public bool TryHandleCheat(string command, string[] args, out string? message)
+    {
+        foreach (var plugin in loaded)
+        {
+            if (plugin.Failed) continue;
+            string? handled = null;
+            ArgumentException? usageError = null;
+            Guard(plugin, "OnCheat", () =>
+            {
+                try
+                {
+                    handled = plugin.Instance.OnCheat(command, args);
+                }
+                catch (ArgumentException ex)
+                {
+                    usageError = ex;
+                }
+            });
+            if (usageError is not null) throw usageError;
+            if (handled is not null)
+            {
+                FlushPanels();
+                message = handled;
+                return true;
+            }
+        }
+        message = null;
+        return false;
+    }
+
     public void PlayAnimationSound(string packId, string resource, short ownerObjectId, string cue, bool loop, bool stop)
     {
         if (stop)
@@ -464,6 +495,28 @@ internal sealed class PluginHost : IDisposable
             ? environmentContributors[0].Plugin.Descriptor.PackId
             : string.Join("+", environmentContributors.Select(c => c.Plugin.Descriptor.PackId));
         return new EnvironmentState(packId, mountRoot, $"{Neighborhoods.Current}:{house}:{mapMode}", merged);
+    }
+
+    public IReadOnlyList<BuyCatalogViewEntry> BuyCatalogViews(IReadOnlyList<PluginCatalogObject> objects)
+    {
+        var views = new List<BuyCatalogViewEntry>();
+        foreach (var plugin in loaded.Where(plugin => !plugin.Failed && plugin.Descriptor.ApiVersion >= 5 && plugin.Instance is IPluginBuyCatalogProvider))
+        {
+            Guard(plugin, "GetBuyCatalogView", () =>
+            {
+                var view = ((IPluginBuyCatalogProvider)plugin.Instance).GetBuyCatalogView(objects);
+                if (view is null) return;
+                if (string.IsNullOrWhiteSpace(view.TabId) || string.IsNullOrWhiteSpace(view.TabLabel))
+                    throw new InvalidDataException("Buy catalog view requires a non-empty tabId and tabLabel");
+                var collections = (view.Collections ?? [])
+                    .Where(c => c is not null && !string.IsNullOrWhiteSpace(c.Id) && !string.IsNullOrWhiteSpace(c.Label))
+                    .Take(512)
+                    .Select(c => c with { Guids = (c.Guids ?? []).Distinct().ToArray() })
+                    .ToArray();
+                views.Add(new BuyCatalogViewEntry(plugin.Descriptor.PackId, view with { Collections = collections }));
+            });
+        }
+        return views;
     }
 
     private static bool IsLightingOnlyEnvironment(PluginEnvironment effect) =>

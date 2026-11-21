@@ -102,6 +102,9 @@ public sealed class OriginalModsOverlay
     private int? _dragDropTargetPackIdx;
     private bool _draggingScrollbar;
     private double _scrollbarGrabOffsetY;
+    private string? _dropNotice;
+    private bool _dropNoticeIsError;
+    private bool _importedFilesChanged;
 
     public string? SafeModeNotice { get; }
 
@@ -140,10 +143,32 @@ public sealed class OriginalModsOverlay
     }
 
     public bool HasStagedChanges =>
-        !_enabledKeys.SetEquals(_initialEnabledKeys)
+        _importedFilesChanged
+        || !_enabledKeys.SetEquals(_initialEnabledKeys)
         || !_orderedMods.Select(static m => m.Key).SequenceEqual(_initialOrderKeys, StringComparer.OrdinalIgnoreCase);
 
     public ModManager.EvaluationReport Report => _report;
+
+    public string? DropNotice => _dropNotice;
+
+    public void HandleDroppedFile(string filePath)
+    {
+        var result = ModManager.ImportDroppedFile(_gameRoot, _dataRoot, filePath);
+        _dropNotice = result.Summary;
+        _dropNoticeIsError = !result.Succeeded || result.HasGuidCollision;
+
+        if (!result.Succeeded)
+            return;
+
+        _importedFilesChanged = true;
+        ReloadDiscovery(preserveStagedChanges: true);
+        if (!string.IsNullOrWhiteSpace(result.InstalledModKey))
+        {
+            _selectedKey = result.InstalledModKey;
+            _enabledKeys.Add(result.InstalledModKey);
+            _report = ModManager.Evaluate(_gameRoot, _dataRoot, _orderedMods, _enabledKeys);
+        }
+    }
 
     private void RebuildVectorChrome()
     {
@@ -605,9 +630,9 @@ public sealed class OriginalModsOverlay
         if (visible.Count == 0)
         {
             string emptyMsg = _orderedMods.Count == 0
-                ? "No mods installed yet.\n\nClick 'Open Mods Folder' below to add packs or custom content."
+                ? "No mods installed yet.\n\nDrag & drop .iff or .hod files here, or click 'Open Mods Folder'."
                 : _activeTab == FilterTab.Downloads
-                    ? "No custom downloads installed."
+                    ? "No custom downloads installed.\n\nDrag & drop .iff or .hod files here to import."
                     : "No packs installed.";
             DrawWrappedText(
                 items,
@@ -747,6 +772,11 @@ public sealed class OriginalModsOverlay
             {
                 DrawWrappedText(items, string.Join("\n", _report.GlobalHardErrors), descRect, SimsVectorUiKit.TextErrorRed, tier: 0, left, top, scale);
             }
+            else if (_dropNotice is not null)
+            {
+                var dropCol = _dropNoticeIsError ? SimsVectorUiKit.TextErrorRed : SimsVectorUiKit.TextSelected;
+                DrawWrappedText(items, _dropNotice, descRect, dropCol, tier: 0, left, top, scale);
+            }
             else if (SafeModeNotice is not null)
             {
                 DrawWrappedText(items, SafeModeNotice, descRect, SimsVectorUiKit.TextWarnAmber, tier: 0, left, top, scale);
@@ -763,6 +793,12 @@ public sealed class OriginalModsOverlay
                     : SimsVectorUiKit.TextNormal;
                 DrawWrappedText(items, summary, descRect, summaryCol, tier: 0, left, top, scale);
             }
+        }
+        else if (_dropNotice is not null)
+        {
+            var dropRect = new CGRect(DetailX + 14, DetailY + 18, DetailW - 28, DetailH - 36);
+            var dropCol = _dropNoticeIsError ? SimsVectorUiKit.TextErrorRed : SimsVectorUiKit.TextSelected;
+            DrawWrappedText(items, _dropNotice, dropRect, dropCol, tier: 0, left, top, scale);
         }
 
         foreach (var (id, label, localRect, enabled, highlighted) in InteractiveButtons())

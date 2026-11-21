@@ -1131,6 +1131,37 @@ internal sealed partial class LiveController
             {
             }
 
+            if (type == "response" && id is not null && id == _pendingBuyCatalogViews)
+            {
+                _pendingBuyCatalogViews = null;
+                if (ok
+                    && evt.TryGetValue("result", out JsonElement viewsEl)
+                    && viewsEl.ValueKind == JsonValueKind.Object)
+                {
+                    var resp = JsonSerializer.Deserialize<BuyCatalogPluginViewsResponse>(
+                        viewsEl.GetRawText(),
+                        PackContentPaths.JsonReadOptions);
+                    int prevCapacity = OriginalBuyLayout.Capacity(LogicalCanvas, Ui.Buy.PluginViews.Count);
+                    Ui.Buy.SetPluginViews(resp?.Views ?? []);
+                    int newCapacity = OriginalBuyLayout.Capacity(LogicalCanvas, Ui.Buy.PluginViews.Count);
+                    if (Ui.BuyMode && newCapacity != prevCapacity && _pendingCatalog is null)
+                    {
+                        if (Ui.Buy.ActivePluginView is { } activePv && Ui.Buy.ActivePluginCollectionId is { } activeColId)
+                        {
+                            RequestPluginCatalog(activePv.PackId, activePv.TabId, activeColId, Ui.Buy.Page?.Offset ?? 0);
+                        }
+                        else
+                        {
+                            RequestCatalog(
+                                category: Ui.Buy.Category,
+                                room: Ui.Buy.RoomMode ? Ui.Buy.Room : (int?)null,
+                                subsort: Ui.Buy.FunctionSubSorting ? Ui.Buy.FunctionSubsort : (int?)null,
+                                offset: Ui.Buy.Page?.Offset ?? 0);
+                        }
+                    }
+                }
+            }
+
             if (type == "response" && id is not null && id == _pendingCatalog)
             {
                 _pendingCatalog = null;
@@ -1144,7 +1175,7 @@ internal sealed partial class LiveController
                         buyCatEl.GetRawText(),
                         PackContentPaths.JsonReadOptions)
                         ?? throw new ContentError("Buy catalog page decoded to null");
-                    Ui.Buy.Update(page, buyRoot);
+                    Ui.Buy.Update(page, buyRoot, pluginCollection: Ui.Buy.PluginViewMode);
                     if (Pointer is { } pointer)
                     {
                         Hover(pointer, _canvas);
@@ -2341,6 +2372,7 @@ internal sealed partial class LiveController
             Ui.PanelMinimized = false;
             _lastAudioSceneRevision = -1;
             _lastAudioAnimationSequence = -1;
+            Renderer.ResetSceneRevisionTracking();
             if (_daemonMode)
             {
                 if ((_currentHouse ?? 0) > 0)

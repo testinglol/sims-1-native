@@ -3,6 +3,7 @@ using System.Numerics;
 using System.Security.Cryptography;
 using SimsEngine.Content;
 using SimsEngine.Formats;
+using SimsNative.Plugins;
 
 namespace SimsSimulation;
 
@@ -133,8 +134,46 @@ internal static class ObjectCatalog
     // represents All (including items with no subsort).
     private static readonly int[] FunctionSubsortMasks = [0x01, 0x02, 0x04, 0x08, 0x20, 0x40, 0x90, 0xff];
 
+    public static IReadOnlyList<PluginCatalogObject> BuildPluginCatalogObjects(
+        ObjectRegistry registry,
+        byte language,
+        CatalogLotType lotType = CatalogLotType.Residential,
+        string? gameRoot = null)
+    {
+        var normalizedRoot = string.IsNullOrEmpty(gameRoot)
+            ? null
+            : Path.GetFullPath(gameRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        var pathComparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        var results = new List<PluginCatalogObject>();
+        foreach (var entry in registry.ByGuid.Values)
+        {
+            if (!TryGetEntry(entry, language, lotType, out var item) || item is null)
+                continue;
+            // Only Buy Mode objects (categories 0..7) participate in Buy Mode plugin views.
+            if ((item.Categories & 0xff) == 0)
+                continue;
+            var source = entry.Source ?? string.Empty;
+            var relative = normalizedRoot is not null && source.StartsWith(normalizedRoot, pathComparison)
+                ? source[normalizedRoot.Length..]
+                : source;
+            relative = relative.Replace('\\', '/');
+            var isCustom = entry.Scan is ObjectScan.Downloads or ObjectScan.UserObjects
+                && !relative.Contains(".far#", StringComparison.OrdinalIgnoreCase);
+            results.Add(new PluginCatalogObject(
+                item.Guid,
+                item.Name,
+                relative,
+                item.Price,
+                item.Categories,
+                item.RoomSort,
+                isCustom));
+        }
+        return results;
+    }
+
     public static object Page(ObjectRegistry registry, byte language, int category, int offset, int count, string session,
-        int? room = null, int? subsort = null, string? game = null, CatalogLotType lotType = CatalogLotType.Residential)
+        int? room = null, int? subsort = null, string? game = null, CatalogLotType lotType = CatalogLotType.Residential,
+        IReadOnlySet<uint>? hiddenGuids = null)
     {
         var isResidential = lotType == CatalogLotType.Residential;
         if (category is < -1 or > 12 ||
@@ -152,10 +191,12 @@ internal static class ObjectCatalog
             var value = item.FunctionSubsort;
             return (value & mask) != 0 || mask == 0xff && value == 0;
         }
+        bool IsVisible(ObjectCatalogEntry item) =>
+            hiddenGuids is null || category > 7 || !hiddenGuids.Contains(item.Guid);
 
         var items = registry.ByGuid.Values
             .Select(entry => TryGetEntry(entry, language, lotType, out var item) ? item : null)
-            .Where(item => item is not null && (room is null
+            .Where(item => item is not null && IsVisible(item) && (room is null
                 ? (category == -1 || (item.Categories & (1 << category)) != 0) &&
                   (subsort is null || MatchesSubsort(item, subsortMask))
                 : (item.RoomSort & roomMask) != 0 && (category == -1 || (item.Categories & (1 << category)) != 0)))
@@ -172,7 +213,7 @@ internal static class ObjectCatalog
         {
             var inRoom = registry.ByGuid.Values
                 .Select(entry => TryGetEntry(entry, language, lotType, out var item) ? item : null)
-                .Where(item => item is not null && (item.RoomSort & roomMask) != 0);
+                .Where(item => item is not null && IsVisible(item) && (item.RoomSort & roomMask) != 0);
             foreach (var item in inRoom)
                 for (var function = 0; function < 8; function++)
                     if ((item!.Categories & (1 << function)) != 0) functionCounts[function]++;
@@ -181,7 +222,7 @@ internal static class ObjectCatalog
         {
             var inFunction = registry.ByGuid.Values
                 .Select(entry => TryGetEntry(entry, language, lotType, out var item) ? item : null)
-                .Where(item => item is not null && (item.Categories & (1 << category)) != 0)
+                .Where(item => item is not null && IsVisible(item) && (item.Categories & (1 << category)) != 0)
                 .Cast<ObjectCatalogEntry>()
                 .ToArray();
             for (var index = 0; index < FunctionSubsortMasks.Length; index++)
@@ -206,6 +247,48 @@ internal static class ObjectCatalog
                 description = item.Description,
                 price = item.Price,
                 category = category == -1 ? BitOperations.TrailingZeroCount((uint)item.Categories) : category,
+                icon = SafeCatalogImage(() => CatalogIcon(item.Source, session)),
+                preview = SafeCatalogImage(() => CatalogPreview(item.Source, session)),
+                ratings = CatalogRatings(item.Source, ratingStrings, language, globals?.ScopeOf(item.Source),
+                    registry.FindAlternativeType(item.Source)),
+            }).ToArray(),
+        };
+    }
+
+    public static object PageByGuids(ObjectRegistry registry, byte language, IReadOnlyList<uint> guids, int offset, int count,
+        string session, string? game = null, CatalogLotType lotType = CatalogLotType.Residential)
+    {
+        if (offset is < 0 or > 1_000_000 || count is < 1 or > 64)
+            throw new ArgumentException("Invalid plugin catalog page bounds");
+        var guidSet = new HashSet<uint>(guids);
+        var items = registry.ByGuid.Values
+            .Where(entry => guidSet.Contains(entry.Guid))
+            .Select(entry => TryGetEntry(entry, language, lotType, out var item) ? item : null)
+            .Where(item => item is not null)
+            .Cast<ObjectCatalogEntry>()
+            .OrderBy(item => item.Price)
+            .ThenBy(item => item.Name, StringComparer.Ordinal)
+            .ThenBy(item => item.Guid)
+            .ToArray();
+        var ratingStrings = LoadCatalogRatingStrings(game, language);
+        var globals = string.IsNullOrEmpty(game) ? null : GlobalLibrary.Open(game);
+        return new
+        {
+            schemaVersion = 1,
+            category = -1,
+            room = (int?)null,
+            functionCounts = (int[]?)null,
+            subsort = (int?)null,
+            functionSubsortCounts = (int[]?)null,
+            offset,
+            total = items.Length,
+            items = items.Skip(offset).Take(count).Select(item => new
+            {
+                guid = item.Guid,
+                name = item.Name,
+                description = item.Description,
+                price = item.Price,
+                category = BitOperations.TrailingZeroCount((uint)item.Categories),
                 icon = SafeCatalogImage(() => CatalogIcon(item.Source, session)),
                 preview = SafeCatalogImage(() => CatalogPreview(item.Source, session)),
                 ratings = CatalogRatings(item.Source, ratingStrings, language, globals?.ScopeOf(item.Source),

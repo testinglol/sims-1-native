@@ -840,7 +840,7 @@ internal sealed partial class SimulationServer
             away = IsVisitingAwayLot,
             simless = world is not null && world[SimulationGlobal.SimlessBuildMode] != 0,
             loadError,
-            commands = new[] { "state", "audio", "audioEvent", "audioStopOwner", "audioEnded", "audioVolume", "audioState", "modeMusic", "speed", "blockSimulator", "tutorialInfo", "uiButton", "relationshipPopup", "tutorialPanelCheck", "step", "scene", "stream", "sceneAck", "selectSim", "setMotive", "menu", "groundMenu", "groundInteract", "interact", "catalog", "catalogPage", "buildCatalogPage", "previewObject", "buildCursor", "pieHeadPreview", "buyObject", "sellObject", "moveObject", "architecture", "architectureBatch", "roof", "undo", "redo", "cancelAction", "dialogResponse", "genericSimsCallPersonPicker", "appearanceCatalog", "appearancePreview", "createHousehold", "moveInFamily", "neighborhood", "saveBackups", "restoreBackup", "outfitChoices", "outfitPreview", "freeWill", "cheat", "pictureInPicture", "walls", "cutaway", "roofs", "cameraOrientation", "level", "view", "viewScrolling", "cursorObjectCreated", "tutorialResetState", "save", "load", "travelFilter", "plugins", "pluginPanels", "pluginAction", "warmup", "openLot", "closeLot", "quit" }
+            commands = new[] { "state", "audio", "audioEvent", "audioStopOwner", "audioEnded", "audioVolume", "audioState", "modeMusic", "speed", "blockSimulator", "tutorialInfo", "uiButton", "relationshipPopup", "tutorialPanelCheck", "step", "scene", "stream", "sceneAck", "selectSim", "setMotive", "menu", "groundMenu", "groundInteract", "interact", "catalog", "catalogPage", "buyCatalogViews", "buildCatalogPage", "previewObject", "buildCursor", "pieHeadPreview", "buyObject", "sellObject", "moveObject", "architecture", "architectureBatch", "roof", "undo", "redo", "cancelAction", "dialogResponse", "genericSimsCallPersonPicker", "appearanceCatalog", "appearancePreview", "createHousehold", "moveInFamily", "neighborhood", "saveBackups", "restoreBackup", "outfitChoices", "outfitPreview", "freeWill", "cheat", "pictureInPicture", "walls", "cutaway", "roofs", "cameraOrientation", "level", "view", "viewScrolling", "cursorObjectCreated", "tutorialResetState", "save", "load", "travelFilter", "plugins", "pluginPanels", "pluginAction", "warmup", "openLot", "closeLot", "quit" }
                 .Concat(ConnectedNeighborhoodCommandNames)
                 .Concat(testFixtureEnabled ? ["setTestPersonTile", "testTileContents"] : []).ToArray(),
         });
@@ -1710,21 +1710,66 @@ internal sealed partial class SimulationServer
                     objects = ObjectCatalog.All(registry, language),
                 };
                 break;
+            case "buyCatalogViews":
+            {
+                if (registry is null) throw new InvalidOperationException("There is no loaded native object catalog.");
+                var views = ResolveBuyCatalogViews();
+                result = new
+                {
+                    views = views.Select(v => new
+                    {
+                        packId = v.PackId,
+                        tabId = v.View.TabId,
+                        tabLabel = v.View.TabLabel,
+                        hotkey = v.View.Hotkey,
+                        hideMatchedFromStandardCatalog = v.View.HideMatchedFromStandardCatalog,
+                        collections = v.View.Collections.Select(c => new
+                        {
+                            id = c.Id,
+                            label = c.Label,
+                            tooltip = c.Tooltip,
+                            count = c.Guids.Length,
+                        }).ToArray(),
+                    }).ToArray(),
+                };
+                break;
+            }
             case "catalogPage":
             {
                 if (registry is null) throw new InvalidOperationException("There is no loaded native object catalog.");
-                var category = request.TryGetProperty("category", out var categoryValue) && categoryValue.TryGetInt32(out var parsedCategory)
-                    ? parsedCategory : throw new ArgumentException("category must be an integer from 0 through 12");
                 var offset = request.TryGetProperty("offset", out var offsetValue) && offsetValue.TryGetInt32(out var parsedOffset)
                     ? parsedOffset : throw new ArgumentException("offset must be an integer");
                 var count = request.TryGetProperty("count", out var countValue) && countValue.TryGetInt32(out var parsedCount)
                     ? parsedCount : throw new ArgumentException("count must be an integer");
+                var pluginPackId = request.TryGetProperty("pluginPackId", out var ppEl) && ppEl.ValueKind == JsonValueKind.String ? ppEl.GetString() : null;
+                var pluginTabId = request.TryGetProperty("pluginTabId", out var ptEl) && ptEl.ValueKind == JsonValueKind.String ? ptEl.GetString() : null;
+                var pluginCollectionId = request.TryGetProperty("pluginCollectionId", out var pcEl) && pcEl.ValueKind == JsonValueKind.String ? pcEl.GetString() : null;
+                if (!string.IsNullOrEmpty(pluginPackId) && !string.IsNullOrEmpty(pluginTabId) && !string.IsNullOrEmpty(pluginCollectionId))
+                {
+                    var views = ResolveBuyCatalogViews();
+                    var collection = views
+                        .FirstOrDefault(v => string.Equals(v.PackId, pluginPackId, StringComparison.Ordinal)
+                            && string.Equals(v.View.TabId, pluginTabId, StringComparison.Ordinal))
+                        ?.View.Collections
+                        .FirstOrDefault(c => string.Equals(c.Id, pluginCollectionId, StringComparison.Ordinal));
+                    var guids = collection?.Guids ?? [];
+                    result = ObjectCatalog.PageByGuids(registry, language, guids, offset, count, SceneDirectory, game, CurrentCatalogLotType());
+                    if (doorWindowBuildToolActive)
+                    {
+                        doorWindowBuildToolActive = false;
+                        Export();
+                    }
+                    break;
+                }
+                var category = request.TryGetProperty("category", out var categoryValue) && categoryValue.TryGetInt32(out var parsedCategory)
+                    ? parsedCategory : throw new ArgumentException("category must be an integer from 0 through 12");
                 var room = request.TryGetProperty("room", out var roomValue) && roomValue.TryGetInt32(out var parsedRoom) ? parsedRoom : (int?)null;
                 int? subsort = null;
                 if (request.TryGetProperty("subsort", out var subsortValue))
                     subsort = subsortValue.TryGetInt32(out var parsedSubsort)
                         ? parsedSubsort : throw new ArgumentException("subsort must be an integer from 0 through 7");
-                result = ObjectCatalog.Page(registry, language, category, offset, count, SceneDirectory, room, subsort, game, CurrentCatalogLotType());
+                var hiddenGuids = ResolveHiddenCatalogGuids();
+                result = ObjectCatalog.Page(registry, language, category, offset, count, SceneDirectory, room, subsort, game, CurrentCatalogLotType(), hiddenGuids);
                 var requestedDoorWindowTool = editingView && category is 8 or 9;
                 if (doorWindowBuildToolActive != requestedDoorWindowTool)
                 {
@@ -2168,8 +2213,8 @@ internal sealed partial class SimulationServer
 
                 string[] knownCheats =
                 [
-                    "rosebud", "klapaucius", "move_objects", "autonomy", "set_hour",
-                    "water_tool", "map_edit", "magic_tokens", "nessie", "cars", "help"
+                    "rosebud", "klapaucius", "motherlode", "move_objects", "autonomy", "set_hour",
+                    "water_tool", "map_edit", "magic_tokens", "nessie", "cars", "weather", "season", "help"
                 ];
 
                 var rawSegments = rawCode.Split(';')
@@ -2213,6 +2258,15 @@ internal sealed partial class SimulationServer
                             budget.AlterFamilyBudget(0, -1000);
                             Export();
                             lastResult = new { applied = true, code = cmd, amount = 1000, budget = budget.ReadFamilyBudget() };
+                            break;
+                        }
+                        case "motherlode":
+                        {
+                            if (world?.FamilyBudget is not FamilyBudget budget || budget.ActiveFamily is null)
+                                throw new InvalidOperationException("Motherlode requires an active family on a lot.");
+                            budget.AlterFamilyBudget(0, -100000);
+                            Export();
+                            lastResult = new { applied = true, code = cmd, amount = 100000, budget = budget.ReadFamilyBudget() };
                             break;
                         }
                         case "move_objects":
@@ -2315,7 +2369,20 @@ internal sealed partial class SimulationServer
                             break;
                         }
                         default:
+                        {
+                            var cheatArgs = tokens.Length > 1 ? tokens[1..] : [];
+                            if (plugins is not null && plugins.TryHandleCheat(cmd, cheatArgs, out var cheatMessage))
+                            {
+                                if (world is not null)
+                                {
+                                    Write(new { type = "environment", environment = plugins.Environment(house) });
+                                    Export();
+                                }
+                                lastResult = new { applied = true, code = segment, message = cheatMessage };
+                                break;
+                            }
                             throw new ArgumentException("Sorry: No such cheat.");
+                        }
                     }
                     lastCheatCommand = segment;
                 }
@@ -3145,6 +3212,34 @@ internal sealed partial class SimulationServer
             _ when house > 0 && Neighborhoods.IsCommunityLot(userData, house) => CatalogLotType.Community,
             _ => CatalogLotType.Residential,
         };
+    }
+
+    private IReadOnlyList<PluginHost.BuyCatalogViewEntry> ResolveBuyCatalogViews()
+    {
+        if (plugins is null || registry is null)
+            return [];
+        var catalogObjects = ObjectCatalog.BuildPluginCatalogObjects(registry, language, CurrentCatalogLotType(), game);
+        return plugins.BuyCatalogViews(catalogObjects);
+    }
+
+    private HashSet<uint>? ResolveHiddenCatalogGuids()
+    {
+        var views = ResolveBuyCatalogViews();
+        if (views.Count == 0)
+            return null;
+        HashSet<uint>? hidden = null;
+        foreach (var entry in views)
+        {
+            if (!entry.View.HideMatchedFromStandardCatalog)
+                continue;
+            hidden ??= [];
+            foreach (var collection in entry.View.Collections)
+            {
+                foreach (var guid in collection.Guids)
+                    hidden.Add(guid);
+            }
+        }
+        return hidden;
     }
 
     private XObject BuyObject(JsonElement request, out int catalogPrice)

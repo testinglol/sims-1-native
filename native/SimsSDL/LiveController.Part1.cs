@@ -103,6 +103,7 @@ internal sealed partial class LiveController
     private double _lastGenericSimsCallPoll;
     private long? _activeGenericSimsCallRequest;
     private string? _pendingCatalog;
+    private string? _pendingBuyCatalogViews;
     private string? _pendingBuildCatalog;
     private string? _pendingWallMode;
     private bool? _pendingRoofsVisible;
@@ -848,6 +849,7 @@ internal sealed partial class LiveController
         _liveModePaused = Options.Speed == 0;
         _highestReceivedSceneRevision = 0;
         _minimumSceneRevisionToFinishLoading = 1;
+        Renderer.ResetSceneRevisionTracking();
         _awaitingLotSwitchChange = false;
         _switchingLot = false;
         _pendingTravelSelection = null;
@@ -1336,12 +1338,15 @@ internal sealed partial class LiveController
         Ui.BuyMode = !Ui.BuyMode;
         EditingViewChanged();
         _pendingCatalog = null;
+        _pendingBuyCatalogViews = null;
         if (Ui.BuyMode)
         {
             Ui.PanelMinimized = false;
             PlayModeMusic("buy");
             PauseForNonLiveMode();
+            Ui.Buy.ExitPluginView();
             Ui.Buy.ClearCategory(0);
+            RequestBuyCatalogViews();
             RequestCatalog(category: 0, offset: 0);
         }
         else
@@ -1431,7 +1436,7 @@ internal sealed partial class LiveController
         {
             ["category"] = category,
             ["offset"] = offset,
-            ["count"] = OriginalBuyLayout.Capacity(LogicalCanvas),
+            ["count"] = OriginalBuyLayout.Capacity(LogicalCanvas, Ui.Buy.PluginViews.Count),
         };
         if (room is int roomVal)
         {
@@ -1444,6 +1449,23 @@ internal sealed partial class LiveController
         }
 
         _pendingCatalog = Send("catalogPage", request);
+    }
+
+    private void RequestBuyCatalogViews()
+    {
+        _pendingBuyCatalogViews = Send("buyCatalogViews", new Dictionary<string, object?>());
+    }
+
+    private void RequestPluginCatalog(string packId, string tabId, string collectionId, int offset = 0)
+    {
+        _pendingCatalog = Send("catalogPage", new Dictionary<string, object?>
+        {
+            ["pluginPackId"] = packId,
+            ["pluginTabId"] = tabId,
+            ["pluginCollectionId"] = collectionId,
+            ["offset"] = offset,
+            ["count"] = OriginalBuyLayout.Capacity(LogicalCanvas, Ui.Buy.PluginViews.Count),
+        });
     }
 
     public void SelectStory(int level, bool? doorWindowTool = null)

@@ -433,6 +433,11 @@ public sealed class GraphicsUiE2ETests
         var klapResp = server.HandleJson("cheat", new { code = "klapaucius" });
         Assert.True(klapResp.GetProperty("ok").GetBoolean(), klapResp.ToString());
         Assert.Equal(initialBudget + 4000, server.State().GetProperty("budget").GetInt32());
+
+        var motherlodeResp = server.HandleJson("cheat", new { code = "motherlode" });
+        Assert.True(motherlodeResp.GetProperty("ok").GetBoolean(), motherlodeResp.ToString());
+        Assert.Equal(100000, motherlodeResp.GetProperty("result").GetProperty("amount").GetInt32());
+        Assert.Equal(initialBudget + 104000, server.State().GetProperty("budget").GetInt32());
     }
 
     [Fact]
@@ -475,6 +480,7 @@ public sealed class GraphicsUiE2ETests
         Assert.True(helpResp.GetProperty("ok").GetBoolean(), helpResp.ToString());
         var helpText = helpResp.ToString() + server.State().GetProperty("dialogs").ToString();
         Assert.Contains("rosebud", helpText, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("motherlode", helpText, StringComparison.OrdinalIgnoreCase);
 
         var partialResp = server.HandleJson("cheat", new { code = "help move" });
         Assert.True(partialResp.GetProperty("ok").GetBoolean(), partialResp.ToString());

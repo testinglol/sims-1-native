@@ -5,10 +5,6 @@ public readonly record struct TreeContext(SimulationWorld World, XObject Me, Sta
     public XObject? StackObject => World.ObjectByStackObject(Me, Frame.StackObject);
 
     public TreeStack? Stack { get; init; }
-
-    /// <summary>Indicates whether variable resolution occurs within an Expression instruction, which
-    /// enables copying a target object's wait timer into frame parameter 0.</summary>
-    internal bool ExpressionInstruction { get; init; }
 }
 
 /// <summary>Represents a simulation variable or reference, storing standard data as signed 16-bit integers
@@ -207,7 +203,7 @@ public static class Variables
             case DataOwner.StackObjectFunction:
             {
                 var stackObject = StackObject(noStackObject);
-                return Variable.ReadOnly(SimulationWorld.FunctionTreeId(stackObject, data));
+                return Variable.ReadOnly(SimulationWorld.HasFunction(stackObject, data) ? (short)1 : (short)0);
             }
             case DataOwner.MyTypeAttribute:
                 return Element(me.TypeAttributes, data, reference, SimulationError.TypeAttributeNumberOutOfRange);
@@ -234,11 +230,20 @@ public static class Variables
         if (managerIndex <= 0) return;
 
         var waitTicks = world.ClockManager.WaitTicksAt(managerIndex);
-        if (context.ExpressionInstruction && waitTicks >= 0)
+        if (waitTicks >= 0)
         {
-            var currentFrame = context.Stack?.Top ?? context.Frame;
-            if (currentFrame.Parameters.Length > 0)
-                currentFrame.Parameters[0] = waitTicks;
+            var stack = world.SavedExecutionStacks.TryGetValue(item.Id, out var savedStack)
+                ? savedStack
+                : ReferenceEquals(item, context.Me) ? context.Stack : null;
+            var primitiveFrame = stack?.PrimitiveFrame();
+            if (primitiveFrame is { Tree: Formats.Bhav tree } &&
+                primitiveFrame.Instruction >= 0 &&
+                primitiveFrame.Instruction < tree.Instructions.Count &&
+                tree.Instructions[primitiveFrame.Instruction].Opcode == 0 &&
+                primitiveFrame.Parameters.Length > 0)
+            {
+                primitiveFrame.Parameters[0] = waitTicks;
+            }
         }
         if (Environment.GetEnvironmentVariable("SIMS_DBG_LOCKOUT") == item.Id.ToString()) Console.Error.WriteLine($"LOCKOUT read obj={item.Id} wait={waitTicks} by {context.Me.Id} tree {context.Frame.TreeId}.{context.Frame.Instruction}");
         world.ClockManager.SetWaitTicksAt(managerIndex, -2);

@@ -14,9 +14,7 @@
   },
   "panels": [
     "panels/forecast.json",
-    "panels/settings.json",
-    "panels/season-settings.json",
-    "panels/almanac.json"
+    "panels/season-settings.json"
   ],
   "saveMigration": {
     "from": [

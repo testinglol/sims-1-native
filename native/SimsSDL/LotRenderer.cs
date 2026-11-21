@@ -335,6 +335,7 @@ public sealed partial class LotRenderer : IDisposable
 
     private int _sceneLoadsInFlight;
     private long _newestRequestedRevision;
+    private long _sceneLoadEpoch;
 
     private List<SceneAnimation> _pendingFrames = [];
 
@@ -845,8 +846,18 @@ public sealed partial class LotRenderer : IDisposable
         };
     }
 
+    /// <summary>Resets scene revision gating for a new lot session and invalidates any in-flight
+    /// background scene loads from the previous lot so a fresh revision 1 is never dropped.</summary>
+    public void ResetSceneRevisionTracking()
+    {
+        _sceneLoadEpoch++;
+        _newestRequestedRevision = 0;
+        _pendingFrames.Clear();
+    }
+
     public void LoadSceneInBackground(string path, long revision, Action<Exception?> loaded)
     {
+        long epoch = _sceneLoadEpoch;
         _newestRequestedRevision = Math.Max(_newestRequestedRevision, revision);
         _sceneLoadsInFlight += 1;
         var cachedSpecs = SnapshotCachedTextureSpecs();
@@ -867,7 +878,7 @@ public sealed partial class LotRenderer : IDisposable
             MainThreadDispatcher.Post(() =>
             {
                 _sceneLoadsInFlight -= 1;
-                if (revision < _newestRequestedRevision)
+                if (epoch != _sceneLoadEpoch || revision < _newestRequestedRevision)
                 {
                     return;
                 }

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using SimsEngine.Content;
 using SimsSDL.Core;
 
 namespace SimsSDL;
@@ -245,7 +246,7 @@ public static class ModManager
             {
                 if (!seenDirs.Add(canonical))
                     return;
-                var inspected = InspectPackDirectory(canonical, defaultEnabled || cliResolvedDirs.Contains(canonical));
+                var inspected = InspectPackDirectory(canonical, defaultEnabled, forceEnabled: cliResolvedDirs.Contains(canonical));
                 if (inspected.LoadedPack is not null && IsEmptyTemplatePack(inspected.LoadedPack))
                     return;
                 if (inspected.LoadedPack is null || seenPackIds.Add(inspected.LoadedPack.Manifest.Id))
@@ -278,7 +279,7 @@ public static class ModManager
 
                 if (File.Exists(Path.Combine(childCanonical, "pack.json")) && seenDirs.Add(childCanonical))
                 {
-                    var inspected = InspectPackDirectory(childCanonical, defaultEnabled || cliResolvedDirs.Contains(childCanonical));
+                    var inspected = InspectPackDirectory(childCanonical, defaultEnabled, forceEnabled: cliResolvedDirs.Contains(childCanonical));
                     if (inspected.LoadedPack is not null && IsEmptyTemplatePack(inspected.LoadedPack))
                         continue;
                     if (inspected.LoadedPack is null || seenPackIds.Add(inspected.LoadedPack.Manifest.Id))
@@ -676,11 +677,14 @@ public static class ModManager
         }
     }
 
-    private static DiscoveredMod InspectPackDirectory(string canonicalDir, bool defaultEnabled)
+    private static DiscoveredMod InspectPackDirectory(string canonicalDir, bool defaultEnabled, bool forceEnabled = false)
     {
         try
         {
             var pack = new ContentPack(canonicalDir);
+            bool effectiveDefaultEnabled = forceEnabled
+                ? true
+                : (pack.Manifest.DefaultEnabled ?? defaultEnabled);
             var tags = new List<string>();
             if (pack.PluginAssembly is not null || pack.Manifest.Features is { Count: > 0 })
                 tags.Add("Gameplay");
@@ -728,7 +732,7 @@ public static class ModManager
                 Version: pack.Manifest.Version,
                 Kind: ModEntryKind.Pack,
                 DirectoryPath: canonicalDir,
-                DefaultEnabled: defaultEnabled,
+                DefaultEnabled: effectiveDefaultEnabled,
                 FileCount: pack.Assets.Count + (pack.PluginAssembly is not null ? 1 : 0),
                 CategoryTags: tags,
                 LoadedPack: pack,
@@ -972,5 +976,151 @@ public static class ModManager
         }
 
         return false;
+    }
+
+    public sealed record DroppedImportResult(
+        bool Succeeded,
+        string Summary,
+        string? InstalledModKey = null,
+        bool HasGuidCollision = false);
+
+    public static string ChunkStoreDirectory(string dataRoot) =>
+        Path.Combine(dataRoot, "ChunkStore");
+
+    /// <summary>Validates and ingests a dropped .iff object or .hod delta bundle into the local ChunkCasStore,
+    /// rebuilds a verified clean .iff into Downloads/&lt;mod&gt;/, and reports deduplication and GUID collision status.</summary>
+    public static DroppedImportResult ImportDroppedFile(string gameRoot, string dataRoot, string droppedPath)
+    {
+        if (string.IsNullOrWhiteSpace(droppedPath) || (!File.Exists(droppedPath) && !Directory.Exists(droppedPath)))
+            return new DroppedImportResult(false, "Dropped file was not found.");
+
+        if (Directory.Exists(droppedPath))
+        {
+            var files = Directory.EnumerateFiles(droppedPath, "*.*", SearchOption.AllDirectories)
+                .Where(static p => p.EndsWith(".iff", StringComparison.OrdinalIgnoreCase)
+                                || p.EndsWith(".hod", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            if (files.Count == 0)
+                return new DroppedImportResult(false, "Dropped folder contains no .iff or .hod files.");
+
+            int ok = 0;
+            int fail = 0;
+            int totalNew = 0;
+            int totalDedup = 0;
+            string? lastKey = null;
+            bool anyCollision = false;
+            string? firstError = null;
+            string folderStem = SanitizeFolderName(Path.GetFileName(droppedPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)));
+
+            var store = ChunkCasStore.OpenDirectory(ChunkStoreDirectory(dataRoot), compressChunks: true);
+            foreach (string file in files)
+            {
+                var res = ImportSingleFileIntoStore(store, gameRoot, file, folderStemOverride: folderStem);
+                if (res.Succeeded)
+                {
+                    ok++;
+                    totalNew += res.NewChunks;
+                    totalDedup += res.DedupChunks;
+                    lastKey = res.InstalledModKey;
+                    anyCollision |= res.HasGuidCollision;
+                }
+                else
+                {
+                    fail++;
+                    firstError ??= res.Summary;
+                }
+            }
+
+            if (ok == 0)
+                return new DroppedImportResult(false, firstError ?? "Failed to import dropped folder.");
+
+            string msg = fail == 0
+                ? $"Imported {ok} file(s) into {folderStem} ({totalNew} new, {totalDedup} deduped chunks)."
+                : $"Imported {ok} file(s), rejected {fail} ({firstError}).";
+            if (anyCollision)
+                msg += " Warning: GUID collision detected.";
+            return new DroppedImportResult(true, msg, lastKey, anyCollision);
+        }
+
+        try
+        {
+            var store = ChunkCasStore.OpenDirectory(ChunkStoreDirectory(dataRoot), compressChunks: true);
+            var single = ImportSingleFileIntoStore(store, gameRoot, droppedPath, folderStemOverride: null);
+            return new DroppedImportResult(single.Succeeded, single.Summary, single.InstalledModKey, single.HasGuidCollision);
+        }
+        catch (Exception ex)
+        {
+            return new DroppedImportResult(false, $"Import failed: {ex.Message}");
+        }
+    }
+
+    private sealed record SingleFileImportResult(
+        bool Succeeded,
+        string Summary,
+        string? InstalledModKey,
+        int NewChunks,
+        int DedupChunks,
+        bool HasGuidCollision);
+
+    private static SingleFileImportResult ImportSingleFileIntoStore(
+        ChunkCasStore store,
+        string gameRoot,
+        string filePath,
+        string? folderStemOverride)
+    {
+        string ext = Path.GetExtension(filePath);
+        string fileName = Path.GetFileName(filePath);
+        bool isIff = ext.Equals(".iff", StringComparison.OrdinalIgnoreCase);
+        bool isHod = ext.Equals(".hod", StringComparison.OrdinalIgnoreCase);
+
+        if (!isIff && !isHod)
+            return new SingleFileImportResult(false, $"Unsupported file '{fileName}'. Drop a .iff or .hod file.", null, 0, 0, false);
+
+        byte[] bytes = File.ReadAllBytes(filePath);
+        IngestResult ingest = isIff
+            ? store.IngestIff(bytes, fileName, ValidationMode.Compatible)
+            : store.ImportDeltaBundle(bytes, ValidationMode.Compatible);
+
+        if (!ingest.Succeeded || ingest.Manifest is null)
+        {
+            var err = ingest.Validation.Issues.FirstOrDefault(static i => i.Severity == ValidationSeverity.Error);
+            string reason = err is null ? "validation failed" : $"{err.ChunkType} #{err.ChunkId}: {err.Message}";
+            return new SingleFileImportResult(false, $"Rejected {fileName}: {reason}", null, 0, 0, false);
+        }
+
+        // Rebuild a verified clean IFF from the chunk store ("only valid game data out")
+        byte[] rebuilt = store.RebuildIff(ingest.Manifest.ManifestHash);
+        string targetIffName = Path.GetFileName(ingest.Manifest.SourceName);
+        if (!targetIffName.EndsWith(".iff", StringComparison.OrdinalIgnoreCase))
+            targetIffName = Path.GetFileNameWithoutExtension(fileName) + ".iff";
+
+        string folderStem = folderStemOverride ?? SanitizeFolderName(Path.GetFileNameWithoutExtension(targetIffName));
+        string targetDir = Path.Combine(gameRoot, "Downloads", folderStem);
+        Directory.CreateDirectory(targetDir);
+        File.WriteAllBytes(Path.Combine(targetDir, targetIffName), rebuilt);
+
+        var collisions = store.FindGuidCollisions();
+        bool hasCollision = ingest.Manifest.ObjectGuids.Any(g => collisions.ContainsKey(g));
+        int totalChunks = ingest.NewChunksStored + ingest.DeduplicatedChunks;
+        string summary = $"Imported {targetIffName} ({totalChunks} chunks: {ingest.NewChunksStored} new, {ingest.DeduplicatedChunks} deduped).";
+        if (hasCollision)
+            summary += " Warning: GUID collision in chunk store.";
+
+        return new SingleFileImportResult(
+            true,
+            summary,
+            "dl:" + folderStem,
+            ingest.NewChunksStored,
+            ingest.DeduplicatedChunks,
+            hasCollision);
+    }
+
+    private static string SanitizeFolderName(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return "ImportedCC";
+        var invalid = Path.GetInvalidFileNameChars();
+        var cleaned = new string(raw.Select(c => invalid.Contains(c) ? '_' : c).ToArray()).Trim().Trim('.');
+        return string.IsNullOrWhiteSpace(cleaned) ? "ImportedCC" : cleaned;
     }
 }

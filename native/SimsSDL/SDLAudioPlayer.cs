@@ -144,10 +144,10 @@ internal sealed class AudioMixer
         int requiredFloats = checked(frames * 2);
         lock (_lock)
         {
-            if (_scratch.Length != requiredFloats)
+            if (_scratch.Length < requiredFloats)
                 _scratch = new float[requiredFloats];
             else
-                Array.Clear(_scratch);
+                Array.Clear(_scratch, 0, requiredFloats);
 
             _activeKeys.Clear();
             foreach (long id in _voices.Keys)
@@ -297,12 +297,12 @@ internal sealed class AudioMixer
                 }
             }
 
-            for (int i = 0; i < _scratch.Length; i++)
+            for (int i = 0; i < requiredFloats; i++)
                 _scratch[i] = Math.Clamp(_scratch[i], -1f, 1f);
 
             fixed (float* ptr = _scratch)
             {
-                _ = SDL_PutAudioStreamData(stream, (nint)ptr, _scratch.Length * sizeof(float));
+                _ = SDL_PutAudioStreamData(stream, (nint)ptr, requiredFloats * sizeof(float));
             }
         }
     }
@@ -345,6 +345,11 @@ public sealed class SDLAudioPlayer : IDisposable
         _audioSubSystemInitialized = true;
         string audioDriver = SDL_GetCurrentAudioDriver();
 
+        if (OperatingSystem.IsWindows() && string.IsNullOrEmpty(Environment.GetEnvironmentVariable(SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES)))
+        {
+            _ = SDL_SetHint(SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES, "2048");
+        }
+
         var spec = new SDL_AudioSpec
         {
             format = SDL_AUDIO_F32,
@@ -368,6 +373,12 @@ public sealed class SDLAudioPlayer : IDisposable
             throw new SDLError("SDL_OpenAudioDeviceStream");
         }
 
+        if (OperatingSystem.IsWindows())
+        {
+            // Pre-buffer ~46 ms so shared-mode WASAPI (and Wine/CrossOver) starts with jitter headroom.
+            _mixer.MixAndPut(_stream, 2048);
+        }
+
         _ = SDL_ResumeAudioStreamDevice(_stream);
         AppLog.Info(FormattableString.Invariant($"SDL audio playback stream opened (driver: {audioDriver}, {Rate} Hz stereo F32)."));
     }
@@ -382,7 +393,12 @@ public sealed class SDLAudioPlayer : IDisposable
         {
             var handle = GCHandle.FromIntPtr(userdata);
             if (handle.Target is AudioMixer mixer)
-                mixer.MixAndPut(stream, additional / 8);
+            {
+                int frames = (additional + 7) / 8;
+                if (OperatingSystem.IsWindows() && frames < 1024)
+                    frames = 1024;
+                mixer.MixAndPut(stream, frames);
+            }
         }
         catch
         {

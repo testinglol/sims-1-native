@@ -85,6 +85,10 @@ def require_bundled_packs(packs_dir: Path, require_dxil: bool = False) -> None:
         if require_dxil and not any(item.is_file() and item.suffix == ".dxil" for item in shaders.iterdir()):
             raise SystemExit(f"Missing D3D12 .dxil shaders in bundled {pack_name} pack: {shaders}")
 
+    cc_browser_dir = packs_dir / "cc-browser"
+    require_file(cc_browser_dir / "pack.json", "bundled cc-browser pack.json")
+    require_file(cc_browser_dir / "plugin" / "LocalCcBrowser.dll", "bundled cc-browser plugin dll")
+
 
 def check_common(bundle: Path, game_dirs: list[Path]) -> None:
     if not bundle.is_dir():

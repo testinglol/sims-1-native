@@ -29,6 +29,13 @@ public sealed class ClientCoreLayoutAndSceneTests
         var popupOrigin = OriginalUIScalingLayout.LivePopupOriginX(anchorMidX: 300, canvasWidth: 1280);
         Assert.InRange(popupOrigin, 220, 1280 - 559 - 8);
 
+        // Catalog popup anchors over the hovered thumbnail's horizontal center, clamped within [catalogLeft, canvasWidth - popupWidth - rightMargin].
+        Assert.Equal(220, OriginalUIScalingLayout.CatalogPopupOriginX(1600, anchorMidX: 437.5));
+        Assert.Equal(620, OriginalUIScalingLayout.CatalogPopupOriginX(1600, anchorMidX: 900.0));
+        Assert.Equal(1600 - 559 - 8, OriginalUIScalingLayout.CatalogPopupOriginX(1600, anchorMidX: 1550.0));
+        Assert.Equal(220, OriginalUIScalingLayout.CatalogPopupOriginX(800, anchorMidX: 437.5));
+        Assert.Equal(233, OriginalUIScalingLayout.CatalogPopupOriginX(800, anchorMidX: 780.0));
+
         var liveBtn = OriginalUniversalControl.All.First(c => c.Kind == OriginalUniversalControl.Action.Live);
         var center = new CGPoint(
             liveBtn.Position.X + liveBtn.Size.Width / 2,

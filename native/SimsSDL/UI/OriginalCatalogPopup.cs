@@ -72,6 +72,7 @@ public sealed class OriginalCatalogPopup
     private CGPoint _placementErrorPoint = CGPoint.Zero;
     private OriginalGameplayOverlay.Part? _thumbnail;
     private Item? _item;
+    private double? _anchorMidX;
     private double? _hoverStartedAt;
     private double? _popupOpenedAt;
     private bool _quickTips = true;
@@ -146,16 +147,18 @@ public sealed class OriginalCatalogPopup
     private bool DelayElapsed =>
         _hoverStartedAt is { } started && MonotonicNow() - started >= (_quickTips ? 0.0 : 0.750);
 
-    public void Hover(Item? next, OriginalGameplayOverlay.Part? thumbnail = null)
+    public void Hover(Item? next, OriginalGameplayOverlay.Part? thumbnail = null, double? anchorMidX = null)
     {
         if (_item == next && SameThumbnail(_thumbnail, thumbnail))
         {
+            _anchorMidX = next is null ? null : anchorMidX;
             return;
         }
 
         bool wasVisible = _item is not null && DelayElapsed;
         _thumbnail = thumbnail;
         _item = next;
+        _anchorMidX = next is null ? null : anchorMidX;
         if (next is null)
         {
             _hoverStartedAt = null;
@@ -259,7 +262,7 @@ public sealed class OriginalCatalogPopup
             return [];
         }
 
-        double x = OriginalUIScalingLayout.CatalogPopupOriginX(canvas.Width, popupWidth: width);
+        double x = OriginalUIScalingLayout.CatalogPopupOriginX(canvas.Width, popupWidth: width, anchorMidX: _anchorMidX);
         double y = panelBottom - visibleHeight;
         var result = new List<OriginalGameplayOverlay.Part>();
 
